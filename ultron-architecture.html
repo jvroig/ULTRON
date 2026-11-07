@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ULTRON Architecture</title>
+<style>
+  /* Layout: one reading column; a layered hierarchy diagram is the centerpiece */
+  :root{
+    --bg:#f3f5f8; --card:#fff; --ink:#151b26; --muted:#667085; --line:#e3e7ee;
+    --prime:#b4232c; --primebg:#fbeaea; --team:#2b5c9e; --teambg:#e8eff9; --agent:#3d4a5c; --agentbg:#eef1f5;
+    --board:#7a5a00; --boardbg:#faf3e0;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0e131a; --card:#161d27; --ink:#e7ecf3; --muted:#93a0b3; --line:#263140;
+      --prime:#f0737a; --primebg:#3a1a1d; --team:#7fa8e0; --teambg:#172539; --agent:#b8c3d3; --agentbg:#1d2633;
+      --board:#e0b44a; --boardbg:#33290f; color-scheme:dark;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0e131a; --card:#161d27; --ink:#e7ecf3; --muted:#93a0b3; --line:#263140;
+    --prime:#f0737a; --primebg:#3a1a1d; --team:#7fa8e0; --teambg:#172539; --agent:#b8c3d3; --agentbg:#1d2633;
+    --board:#e0b44a; --boardbg:#33290f; color-scheme:dark;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink);
+    line-height:1.5;padding:16px;max-width:820px;margin:0 auto;font-size:15px}
+  h1{font-size:1.6rem;letter-spacing:-.02em}
+  h2{font-size:1.05rem;margin-bottom:6px}
+  h3{font-size:.9rem;margin:12px 0 2px}
+  .sub{color:var(--muted);font-size:.84rem;margin-top:4px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-top:14px}
+  .cardsub{color:var(--muted);font-size:.8rem;margin-bottom:10px}
+  p{margin:6px 0} ul{margin:6px 0 6px 20px} li{margin:4px 0}
+  .names{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;margin-top:6px}
+  .name{border-radius:10px;padding:12px;border:1px solid var(--line)}
+  .name .k{font-size:.68rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
+  .name .t{font-weight:700;margin-top:3px}
+  .n1{background:var(--teambg)} .n1 .k{color:var(--team)}
+  .n2{background:var(--primebg)} .n2 .k{color:var(--prime)}
+  .tablewrap{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:.86rem}
+  th{text-align:left;font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);padding:7px 8px;border-bottom:1px solid var(--line)}
+  td{padding:8px;border-bottom:1px solid var(--line);vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td:first-child{font-weight:800;width:44px;text-align:center}
+  /* hierarchy diagram */
+  .tree{display:flex;flex-direction:column;align-items:center;gap:0;margin-top:8px}
+  .node{border-radius:10px;padding:8px 12px;font-size:.84rem;text-align:center;border:1px solid var(--line)}
+  .user{background:var(--agentbg);font-weight:700}
+  .prime{background:var(--primebg);border-color:var(--prime);color:var(--ink);font-weight:800}
+  .prime small{display:block;font-weight:500;color:var(--muted);font-size:.72rem}
+  .vline{width:2px;height:16px;background:var(--line)}
+  .row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;width:100%}
+  .teambox{background:var(--teambg);border:1px solid var(--line);border-radius:12px;padding:10px;min-width:180px;flex:1;max-width:250px}
+  .teambox b{display:block;font-size:.8rem;color:var(--team);margin-bottom:6px}
+  .lead{background:var(--card);border:1px solid var(--team);border-radius:8px;padding:5px 8px;font-size:.78rem;font-weight:700;margin-bottom:6px;text-align:center}
+  .agents{display:flex;gap:5px;flex-wrap:wrap;justify-content:center}
+  .agent{background:var(--agentbg);border-radius:6px;padding:3px 7px;font-size:.72rem;color:var(--agent)}
+  .sublayer{margin-top:6px;border-top:1px dashed var(--line);padding-top:6px;font-size:.72rem;color:var(--muted);text-align:center}
+  .org{width:100%;margin-top:4px}
+  .org ul{list-style:none;margin:0 0 0 18px;padding:0;border-left:2px solid var(--line)}
+  .org > ul{margin-left:8px}
+  .org li{position:relative;margin:8px 0 0;padding-left:14px}
+  .org li::before{content:"";position:absolute;left:0;top:18px;width:12px;border-top:2px solid var(--line)}
+  .tm{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px;background:var(--teambg);border:1px solid var(--line);border-radius:10px;padding:6px 10px;max-width:100%}
+  .tm b{color:var(--team);font-size:.82rem}
+  .tm .ld{background:var(--card);border:1px solid var(--team);border-radius:6px;padding:1px 6px;font-size:.7rem;font-weight:700}
+  .tm .ag{font-size:.7rem;color:var(--muted)}
+  .lv{font-size:.6rem;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-left:2px}
+  .board{margin-top:12px;width:100%;background:var(--boardbg);border:1px dashed var(--board);border-radius:10px;padding:9px 12px;text-align:center;font-size:.82rem}
+  .board b{color:var(--board)}
+  .tag{display:inline-block;font-size:.62rem;font-weight:800;letter-spacing:.05em;text-transform:uppercase;padding:2px 7px;border-radius:5px;
+    background:var(--boardbg);color:var(--board);margin-left:6px;vertical-align:2px}
+  footer{color:var(--muted);font-size:.74rem;text-align:center;margin:22px 0 8px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>ULTRON Architecture</h1>
+  <div class="sub">Summary of the design for a personal multi-agent framework · for the build team · Nov 7, 2026</div>
+</header>
+
+<div class="card">
+  <h2>Names</h2>
+  <div class="names">
+    <div class="name n1"><div class="k">The network</div><div class="t">ULTRON: Universal Layered Team &amp; Role Orchestration Network</div></div>
+    <div class="name n2"><div class="k">The leader</div><div class="t">ULTRON PRIME: Ultimate Leader of Teams, Roles, and Operational Nodes</div></div>
+  </div>
+  <div class="tablewrap" style="margin-top:10px"><table>
+    <tr><th></th><th>Word</th><th>What it means in the design</th></tr>
+    <tr><td>U</td><td>Universal</td><td>The framework isn't tied to any one use case</td></tr>
+    <tr><td>L</td><td>Layered</td><td>A hierarchy of teams, with reporting and escalation flowing upward</td></tr>
+    <tr><td>T</td><td>Team</td><td>Teams of agents are the core design philosophy</td></tr>
+    <tr><td>R</td><td>Role</td><td>Every agent has a role, organized in tiers</td></tr>
+    <tr><td>O</td><td>Orchestration</td><td>What the system does: coordinating agents and teams toward the user's goals</td></tr>
+    <tr><td>N</td><td>Network</td><td>The whole system is a network of agents inside that hierarchy</td></tr>
+  </table></div>
+</div>
+
+<div class="card">
+  <h2>Architecture at a glance</h2>
+  <div class="cardsub">Illustrative. Like a corporate org chart: teams can sit at higher, the same, or lower layers relative to one another, and branches can be different depths.</div>
+  <div class="tree">
+    <div class="node user">User</div>
+    <div class="vline"></div>
+    <div class="node prime">ULTRON PRIME<small>the single point of contact; manages everything below</small></div>
+    <div class="org"><ul>
+      <li><span class="tm"><b>Team A</b><span class="ld">lead</span><span class="ag">+ 3 agents</span></span><span class="lv">layer 1</span>
+        <ul>
+          <li><span class="tm"><b>Team A1</b><span class="ld">lead</span><span class="ag">+ 2 agents</span></span><span class="lv">layer 2</span>
+            <ul>
+              <li><span class="tm"><b>Team A1a</b><span class="ld">lead</span><span class="ag">+ 2 agents</span></span><span class="lv">layer 3</span></li>
+            </ul>
+          </li>
+          <li><span class="tm"><b>Team A2</b><span class="ld">lead</span><span class="ag">+ 2 agents</span></span><span class="lv">layer 2</span></li>
+        </ul>
+      </li>
+      <li><span class="tm"><b>Team B</b><span class="ld">lead</span><span class="ag">+ 2 agents</span></span><span class="lv">layer 1</span>
+        <ul>
+          <li><span class="tm"><b>Team B1</b><span class="ld">lead</span><span class="ag">+ 3 agents</span></span><span class="lv">layer 2</span></li>
+        </ul>
+      </li>
+      <li><span class="tm"><b>Team C</b><span class="ld">lead</span><span class="ag">+ 1 agent</span></span><span class="lv">layer 1</span></li>
+    </ul></div>
+    <div class="board"><b>Central message board</b>: the shared channel agents and teams communicate through (inspired by the OpenAI / Hugging Face hack)</div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Core concepts</h2>
+  <h3>1. ULTRON PRIME leads</h3>
+  <ul>
+    <li>The User talks only to ULTRON PRIME.</li>
+    <li>ULTRON PRIME manages the entire network beneath it: all agents, teams and the hierarchy.</li>
+    <li>It can spawn and direct agents and teams as needed.</li>
+  </ul>
+  <h3>2. Teams are the unit of work</h3>
+  <ul>
+    <li>Agents work in teams; teams are the core design philosophy, not an add-on.</li>
+    <li>Teams relate to one another through the hierarchy.</li>
+  </ul>
+  <h3>3. Tiered roles</h3>
+  <ul>
+    <li>Each agent has a role, and roles are tiered (e.g., team leads above team members).</li>
+  </ul>
+  <h3>4. Layered hierarchy with escalation</h3>
+  <ul>
+    <li>Teams are arranged like a corporate org chart: a team can be above, beside or below another team, and branches can go to different depths.</li>
+    <li>Each team reports to the team above it. Work and questions escalate up the chain, ultimately to ULTRON PRIME and, when needed, to the User.</li>
+  </ul>
+  <h3>5. Central message board</h3>
+  <ul>
+    <li>Coordination runs through a shared message board, inspired by the OpenAI / Hugging Face hack.</li>
+  </ul>
+  <h3>6. Universal</h3>
+  <ul>
+    <li>Built as a general framework, not for one domain. Use cases plug in as teams.</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h2>Status</h2>
+  <p>First components in progress; maiden voyage planned for Nov 8, 2026.</p>
+</div>
+
+<footer>ULTRON · Universal Layered Team &amp; Role Orchestration Network</footer>
+</body>
+</html>
