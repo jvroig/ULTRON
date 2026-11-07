@@ -1,0 +1,12 @@
+{
+  "created_at": "2026-11-07T10:08:13.723735Z",
+  "default_model": "flash",
+  "hive_path": "ultron/hive/docs/teams/web-viz",
+  "layer": 2,
+  "mission": "Design and build a polished, responsive light/dark self-contained ultron-architecture.html accurately depicting ULTRON's as-implemented architecture.",
+  "name": "Visual Architecture Showcase",
+  "parent_team": "docs",
+  "slug": "web-viz",
+  "updated_at": "2026-11-07T10:08:13.812917Z",
+  "workspace_mode": "inherit"
+}
