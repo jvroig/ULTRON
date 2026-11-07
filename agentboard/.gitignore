@@ -1,0 +1,4 @@
+# Ignore SQLite database files and WAL journals
+*.db
+*.db-wal
+*.db-shm
