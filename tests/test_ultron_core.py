@@ -337,9 +337,81 @@ class UltronCoreTestCase(unittest.TestCase):
         self.assertEqual(len(personal_after), 1)
         self.assertEqual(personal_after[0]["id"], t_personal["thread_id"])
 
+        # Non-prime cannot reclassify threads
+        with self.assertRaises(PermissionError):
+            self.core.reclassify_thread(
+                t_personal["thread_id"], visibility="global", as_agent="team-a/lead"
+            )
+        cli_reclass_denied = self.run_cli(
+            "reclassify", str(t_personal["thread_id"]), "--visibility", "global", "--as", "team-a/lead"
+        )
+        self.assertEqual(cli_reclass_denied.returncode, 1)
+
         # Reclassify personal lesson -> global standard by ULTRON PRIME
-        self.core.reclassify_thread(t_personal["thread_id"], visibility="global")
+        self.core.reclassify_thread(
+            t_personal["thread_id"], visibility="global", as_agent="ultron-prime"
+        )
         self.assertEqual(len(self.core.search("wal_checkpoint", as_agent="team-b/lead")), 1)
+
+    def test_reclassify_target_existence_and_set_status_auth(self) -> None:
+        self.core.register_prime("uuid-prime")
+        self.core.create_team(slug="team-a", name="Team A", mission="Alpha")
+        self.core.create_team(slug="team-b", name="Team B", mission="Beta")
+
+        t = self.core.create_thread(
+            title="Scoped Task",
+            author="team-a/lead",
+            visibility="team",
+            content="Task body",
+        )
+        tid = t["thread_id"]
+
+        # Authorized lead can set_thread_status via Python SDK without passing show_all!
+        self.assertTrue(self.core.set_thread_status(tid, "resolved", as_agent="team-a/lead"))
+        # Unauthorized lead from team-b is rejected
+        with self.assertRaises(PermissionError):
+            self.core.set_thread_status(tid, "open", as_agent="team-b/lead")
+
+        # Reclassify must reject non-existent target team, with_team, and owner_agent
+        with self.assertRaises(ValueError):
+            self.core.reclassify_thread(
+                tid, visibility="team", team_slug="ghost-team", show_all=True
+            )
+        with self.assertRaises(ValueError):
+            self.core.reclassify_thread(
+                tid, visibility="team", team_slug="team-a", with_team="ghost-subteam", show_all=True
+            )
+        with self.assertRaises(ValueError):
+            self.core.reclassify_thread(
+                tid, visibility="personal", owner_agent="ghost-team/coder", show_all=True
+            )
+
+    def test_fts_special_syntax_fallback_and_contacts_warning(self) -> None:
+        self.core.register_prime("uuid-prime-live")
+        self.core.create_team(slug="parent-t", name="Parent", mission="Parent")
+        self.core.create_team(
+            slug="child-t", name="Child", mission="Child", parent_team="parent-t"
+        )
+
+        # Activate child detached while parent remains disabled -> contacts warns & exposes prime_fallback
+        self.core.activate_team("child-t", {"lead": "uuid-child"}, allow_detached=True)
+        contacts = self.core.get_contacts("child-t/lead")
+        self.assertTrue(contacts["parent_disabled_warning"])
+        self.assertIsNotNone(contacts["prime_fallback"])
+        self.assertEqual(contacts["prime_fallback"]["conversation_id"], "uuid-prime-live")
+
+        # Create private thread containing punctuation / broken FTS syntax characters
+        self.core.create_thread(
+            title="JSON Config Syntax",
+            author="child-t/lead",
+            visibility="personal",
+            content='Config snippet: {"strict": true} and status:active OR ("unclosed',
+        )
+        # Malformed FTS5 query falls back to LIKE while still enforcing personal visibility!
+        hits_owner = self.core.search('status:active OR ("unclosed', as_agent="child-t/lead")
+        self.assertEqual(len(hits_owner), 1)
+        hits_other = self.core.search('status:active OR ("unclosed', as_agent="parent-t/lead")
+        self.assertEqual(len(hits_other), 0)
 
     def test_sync_state_no_spurious_restore_and_reconciliatory_restore(self) -> None:
         self.core.create_team(slug="root-t", name="Root", mission="Root")

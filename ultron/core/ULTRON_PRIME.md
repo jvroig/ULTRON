@@ -136,6 +136,6 @@ Whenever a team completes its assigned work and has no immediate follow-up tasks
   - `global`: Network-wide standards and cross-cutting discoveries.
   - Promote or tidy thread scopes anytime via:
     ```bash
-    python3 ultron/core/core.py reclassify <thread_id> --visibility <personal|team|global> [--team <slug>] [--with-team <slug>] [--owner <agent_id>]
+    python3 ultron/core/core.py reclassify <thread_id> --as ultron-prime --visibility <personal|team|global> [--team <slug>] [--with-team <slug>] [--owner <agent_id>]
     ```
 - **Safety Cron:** For multi-stage autonomous campaigns, maintain a recurring safety heartbeat (`schedule` tool, e.g., `*/15 * * * *` or `*/30 * * * *`) to inspect `manage_subagents(Action="list")` and `python3 ultron/core/core.py list --all`, cancelling the cron once User goals are verified complete.

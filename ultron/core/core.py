@@ -2123,7 +2123,7 @@ class UltronCore:
         thread_id: int,
         status: str,
         as_agent: Optional[str] = None,
-        show_all: bool = True,
+        show_all: bool = False,
         auto_backup: bool = True,
     ) -> bool:
         st = status.strip().lower()
@@ -2156,8 +2156,16 @@ class UltronCore:
         team_slug: Optional[str] = None,
         with_team: Optional[str] = None,
         owner_agent: Optional[str] = None,
+        as_agent: Optional[str] = None,
+        show_all: bool = False,
         auto_backup: bool = True,
     ) -> Dict[str, Any]:
+        viewer_id, unrestricted = self._resolve_viewer(as_agent, show_all)
+        if not unrestricted and viewer_id != PRIME_ID:
+            raise PermissionError(
+                f"Agent '{viewer_id}' is not authorized to reclassify threads. Only '{PRIME_ID}' (or --all) can reclassify."
+            )
+
         vis = visibility.strip().lower()
         if vis not in VALID_VISIBILITIES:
             raise ValueError(
@@ -2177,9 +2185,23 @@ class UltronCore:
             if vis == "personal":
                 if with_team:
                     raise ValueError("--with-team cannot be set on a 'personal' thread.")
-                candidate_owner = normalize_agent_id(owner_agent or t_row["owner_agent"] or t_row["author"])
+                candidate_owner = normalize_agent_id(
+                    owner_agent or t_row["owner_agent"] or t_row["author"]
+                )
+                if candidate_owner != PRIME_ID:
+                    owner_row = conn.execute(
+                        "SELECT agent_id, team_slug FROM agents WHERE agent_id = ? COLLATE NOCASE",
+                        (candidate_owner,),
+                    ).fetchone()
+                    if not owner_row:
+                        raise ValueError(
+                            f"Target owner agent '{candidate_owner}' does not exist."
+                        )
+                    new_team = owner_row["team_slug"]
+                else:
+                    new_team = None
                 new_owner = candidate_owner
-                new_team = None if candidate_owner == PRIME_ID else candidate_owner.split("/", 1)[0]
+
             elif vis == "team":
                 candidate_team = team_slug or t_row["team_slug"]
                 if not candidate_team and "/" in t_row["author"]:
@@ -2187,14 +2209,34 @@ class UltronCore:
                 if not candidate_team:
                     raise ValueError("Reclassifying to 'team' requires --team <slug>.")
                 new_team = validate_slug(candidate_team, "team")
+                t_exists = conn.execute(
+                    "SELECT slug FROM teams WHERE slug = ? COLLATE NOCASE", (new_team,)
+                ).fetchone()
+                if not t_exists:
+                    raise ValueError(f"Target team '{new_team}' does not exist.")
+
                 if with_team:
                     new_with = validate_slug(with_team, "with_team")
                     if new_with == new_team:
                         raise ValueError("--with-team cannot equal --team.")
+                    w_exists = conn.execute(
+                        "SELECT slug FROM teams WHERE slug = ? COLLATE NOCASE", (new_with,)
+                    ).fetchone()
+                    if not w_exists:
+                        raise ValueError(f"Target --with-team '{new_with}' does not exist.")
+
             elif vis == "global":
                 if with_team:
                     raise ValueError("--with-team cannot be set on a 'global' thread.")
-                new_team = validate_slug(team_slug, "team") if team_slug else t_row["team_slug"]
+                if team_slug:
+                    new_team = validate_slug(team_slug, "team")
+                    t_exists = conn.execute(
+                        "SELECT slug FROM teams WHERE slug = ? COLLATE NOCASE", (new_team,)
+                    ).fetchone()
+                    if not t_exists:
+                        raise ValueError(f"Target team '{new_team}' does not exist.")
+                else:
+                    new_team = t_row["team_slug"]
 
             conn.execute(
                 """
@@ -2507,6 +2549,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_rc.add_argument("--team", default=None, help="Target owning team slug")
     p_rc.add_argument("--with-team", default=None, help="Target secondary team slug (team visibility)")
     p_rc.add_argument("--owner", default=None, help="Target owner agent_id (personal visibility)")
+    p_rc.add_argument("--as", dest="as_agent", default=None, help="Caller agent ID (must be ultron-prime)")
+    p_rc.add_argument("--all", dest="show_all", action="store_true", help="Authorized ULTRON PRIME override")
 
     # backup / restore / stats
     add_cmd("backup", "Export all teams, agents, and threads to Git-tracked JSON")
@@ -2850,6 +2894,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 team_slug=args.team,
                 with_team=args.with_team,
                 owner_agent=args.owner,
+                as_agent=args.as_agent,
+                show_all=args.show_all,
             )
             if args.json:
                 print(json.dumps(res, indent=2, sort_keys=True))

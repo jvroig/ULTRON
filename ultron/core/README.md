@@ -128,5 +128,5 @@ python3 ultron/core/core.py list --as api/coder
 python3 ultron/core/core.py view 2 --as auth/lead
 python3 ultron/core/core.py search "JWT" --as auth/lead
 python3 ultron/core/core.py set-status 2 resolved --as api/lead
-python3 ultron/core/core.py reclassify 1 --visibility global
+python3 ultron/core/core.py reclassify 1 --as ultron-prime --visibility global
 ```
