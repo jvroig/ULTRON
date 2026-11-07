@@ -166,8 +166,10 @@ class UltronCoreTestCase(unittest.TestCase):
         self.assertIn("--visibility personal", lead_spec["define_subagent"]["SystemPrompt"])
 
         self.assertEqual(auditor_spec["agent_id"], "core-eng/auditor")
+        self.assertTrue(auditor_spec["read_only_mode"])
         self.assertFalse(auditor_spec["define_subagent"]["EnableSubagentTools"])
-        self.assertFalse(auditor_spec["define_subagent"]["EnableWriteTools"])
+        self.assertTrue(auditor_spec["define_subagent"]["EnableWriteTools"])
+        self.assertIn("[READ-ONLY ROLE MODE]", auditor_spec["define_subagent"]["SystemPrompt"])
         self.assertEqual(auditor_spec["invoke_subagent"]["Model"], "flash_lite")
 
     def test_lifecycle_guards_and_whois_contract(self) -> None:

@@ -1332,6 +1332,13 @@ class UltronCore:
                     f"- **Strict Boundary:** Never doorbell external teams or `{PRIME_ID}` directly."
                 )
 
+            is_read_only = not bool(r["write_tools"])
+            if is_read_only:
+                routing_summary += (
+                    "\n- **[READ-ONLY ROLE MODE]:** Do NOT call `write_file` or `edit_file` on repository source code. "
+                    "Use `run_command` strictly for `python3 ultron/core/core.py` board operations and non-mutating inspection/test commands."
+                )
+
             system_prompt = render_template(
                 spawn_tmpl,
                 {
@@ -1368,11 +1375,14 @@ class UltronCore:
                     "agent_id": aid,
                     "team_slug": clean_team,
                     "role": r_slug,
+                    "read_only_mode": is_read_only,
                     "define_subagent": {
                         "Name": subagent_type,
                         "Description": f"ULTRON [{clean_team}] {r['title']} ({aid})",
                         "SystemPrompt": system_prompt,
-                        "EnableWriteTools": bool(r["write_tools"]),
+                        # Antigravity gates `run_command` under EnableWriteTools; keep True so
+                        # every Hive role can execute `python3 ultron/core/core.py` CLI commands.
+                        "EnableWriteTools": True,
                         "EnableSubagentTools": False,  # Hard invariant: only ULTRON PRIME spawns agents
                         "EnableMCPTools": bool(r["mcp_tools"]),
                     },
@@ -2398,8 +2408,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.set_defaults(root=None, db=None, json=False)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    def add_cmd(name: str, help_text: str) -> argparse.ArgumentParser:
-        return sub.add_parser(name, help=help_text, parents=[common])
+    def add_cmd(
+        name: str, help_text: str, aliases: Optional[List[str]] = None
+    ) -> argparse.ArgumentParser:
+        return sub.add_parser(name, aliases=aliases or [], help=help_text, parents=[common])
 
     # register-prime
     p_prime = add_cmd("register-prime", "Register/update ULTRON PRIME session UUID")
@@ -2425,7 +2437,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_ar.add_argument("--title", required=True, help="Human-readable role title")
     p_ar.add_argument("--responsibilities", required=True, help="Role duties and deliverables")
     p_ar.add_argument("--model", default=None, choices=sorted(VALID_MODELS), help="Override model for this role")
-    p_ar.add_argument("--read-only", action="store_true", help="Disable write/command tools (EnableWriteTools=False)")
+    p_ar.add_argument(
+        "--read-only",
+        action="store_true",
+        help="Enforce [READ-ONLY ROLE MODE] prompt guardrails while preserving run_command for core.py",
+    )
     p_ar.add_argument("--no-mcp", action="store_true", help="Disable MCP tools (EnableMCPTools=False)")
 
     # teams
@@ -2436,8 +2452,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_ti = add_cmd("team-info", "Show detailed info and role roster for a team")
     p_ti.add_argument("slug", help="Team slug")
 
-    # render-spawn
-    p_rs = add_cmd("render-spawn", "Generate Antigravity define_subagent + invoke_subagent payloads")
+    # render-spawn (alias: prepare-spawn)
+    p_rs = add_cmd(
+        "render-spawn",
+        "Generate Antigravity define_subagent + invoke_subagent payloads",
+        aliases=["prepare-spawn"],
+    )
     p_rs.add_argument("team", help="Team slug")
     p_rs.add_argument("--role", default=None, help="Optional single role slug to render")
     p_rs.add_argument("--brief", default="", help="Optional initial directive appended to startup prompt")
@@ -2535,8 +2555,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_sr.add_argument("--team", default=None, help="Filter by team involvement")
     p_sr.add_argument("--limit", type=int, default=20, help="Max results")
 
-    # set-status
-    p_st = add_cmd("set-status", "Update thread status")
+    # set-status (alias: status)
+    p_st = add_cmd("set-status", "Update thread status", aliases=["status"])
     p_st.add_argument("thread_id", type=int, help="Thread ID")
     p_st.add_argument("status", choices=sorted(VALID_THREAD_STATUSES), help="New status")
     p_st.add_argument("--as", dest="as_agent", default=None, help="Caller agent ID")
@@ -2643,7 +2663,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 return 1
             print(json.dumps(res, indent=2, sort_keys=True))
 
-        elif cmd == "render-spawn":
+        elif cmd in ("render-spawn", "prepare-spawn"):
             specs = core.render_spawn(team_slug=args.team, role=args.role, mission_brief=args.brief)
             if args.json:
                 print(json.dumps(specs, indent=2, sort_keys=True))
@@ -2870,7 +2890,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     )
                     print(f"  {snippet}\n")
 
-        elif cmd == "set-status":
+        elif cmd in ("set-status", "status"):
             has_identity = bool(args.as_agent or os.environ.get("ULTRON_AGENT_ID") or args.show_all)
             if not has_identity:
                 raise PermissionError(
