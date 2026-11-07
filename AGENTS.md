@@ -1,5 +1,7 @@
 # Agent Working Guidelines
 
+> **Neutral Baseline:** Sessions in this workspace start as standard engineering assistants. Do **not** assume the persona of `ULTRON PRIME` unless the User explicitly instructs you to load [`ultron/core/ULTRON_PRIME.md`](ultron/core/ULTRON_PRIME.md) (or unless your session prompt contains an explicit `[ULTRON_ROLE_ASSIGNMENT]`).
+
 ## Core Principles
 
 ### 1. Frequent Small Commits and Pushes
@@ -23,10 +25,10 @@
 * **Fail Loud & Transparently:** If a required component, credential, or resource is missing or offline, surface the exact operational failure clearly in logs, UI, and telemetry rather than masking it.
 * **Self-Healing Where Applicable:** When a recoverable dependency or service issue is detected, prefer explicit, observable recovery or repair flows over silent degradation.
 
-### 5. Multi-Agent Collaboration via AgentBoard & Reactive Doorbell
-* **Shared Forum & Address Book (`agentboard/`):** Use `python3 agentboard/board.py` (see [`agentboard/README.md`](agentboard/README.md)) as the persistent source of truth for cross-agent specs, architecture decisions, reviews, and sign-offs.
-* **Nickname Discovery (`agents.json`):** Resolve peer agent nicknames (e.g., `Planner`, `Designer`, `Executor`, `Reviewer`) via `python3 agentboard/board.py agents` or `python3 agentboard/board.py whois <Name> --id-only`. When assigned a nickname by the user, register immediately via `python3 agentboard/board.py register --name "<Name>" --id "<conversation-uuid>" --role "<Role>"`.
-* **Reactive Doorbell Pattern:** Because SQLite/JSON files are passive datastores and agents do not poll in loops, **always** follow up any AgentBoard post or reply intended for a peer by calling `send_message(Recipient="<uuid>", Message="Doorbell: Posted on AgentBoard Thread #X ('Title')...")` to wake the target agent immediately.
+### 5. Multi-Agent Collaboration via ULTRON Core & Reactive Doorbell
+* **Shared Registry & Message Board (`ultron/core/`):** Use `python3 ultron/core/core.py` (see [`ultron/core/README.md`](ultron/core/README.md)) as the persistent source of truth for org hierarchy, team/role definitions, specs, reviews, and lessons learned.
+* **Visibility Discipline (`personal` | `team` | `global`):** Scope board threads appropriately (`personal` for role-only lessons, `team` for intra-team or `--with-team` parent/child coordination, `global` for org-wide context) and always pass `--as <team>/<role>` when querying.
+* **Reactive Doorbell Pattern:** Because SQLite/JSON files are passive datastores and agents do not poll in loops, **always** resolve the recipient's live UUID (`python3 ultron/core/core.py whois <agent_id> --id-only`) and call `send_message(Recipient="<uuid>", Message="Doorbell: Posted on Thread #X ('Title')...")` to wake the target agent immediately.
 
 ### 6. Fail-Fast Execution & Process Hygiene
 * **Bounded Subprocess Execution:** Ensure CLI scripts, test runners, and headless tools fail fast on unhandled errors and run under explicit timeouts rather than idling indefinitely.
@@ -39,5 +41,5 @@
 * **Two-Layer Review Structure (When Applicable):**
   - **Tier-1 UX & Design Review:** Focuses on visual hierarchy, layout ergonomics, usability, clarity, and qualitative user experience.
   - **Tier-2 Technical & Architectural Review Gate:** Focuses on deep code auditing, state persistence across cycles, resource/event lifecycles, edge-case failure modes, architectural invariants, and test suite rigor (verifying substantive behavioral invariants rather than superficial checks).
-* **Mandatory Critical Punchlist on Rejection:** If an implementation exhibits logical gaps, unhandled edge cases, or broken invariants, sign-off **MUST** be held. Output a concrete, actionable punchlist on AgentBoard detailing each defect, its impact, and the required fix.
+* **Mandatory Critical Punchlist on Rejection:** If an implementation exhibits logical gaps, unhandled edge cases, or broken invariants, sign-off **MUST** be held. Output a concrete, actionable punchlist detailing each defect, its impact, and the required fix.
 * **Verification Before Advancing:** Trace state transitions and verify end-to-end behavior before certifying a milestone and unlocking subsequent phases.
