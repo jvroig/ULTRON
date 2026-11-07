@@ -1,0 +1,4 @@
+# Ignore SQLite runtime database and WAL files (state is mirrored to Git-tracked JSON)
+*.db
+*.db-wal
+*.db-shm
