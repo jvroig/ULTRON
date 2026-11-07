@@ -105,7 +105,7 @@ Activate parent teams before child teams so chain-of-command links are live:
        --title "<Objective Title>" \
        --content "<Detailed scope, deliverables, and acceptance criteria>"
      ```
-   - Wake `<team-slug>/lead` via `send_message(Recipient="<lead-uuid>", Message="Doorbell: Assigned Thread #X ('<Title>'). Coordinate your team and report back when verified.")`.
+   - Wake `<team-slug>/lead` via `send_message(Recipient="<lead-uuid>", Message="Doorbell: Assigned Thread <thread_id> ('<Title>'). Coordinate your team and report back when verified.")`.
 
 ---
 

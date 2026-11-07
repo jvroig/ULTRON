@@ -1,42 +1,50 @@
 # ULTRON Core & Hive Reference (`ultron/`)
 
-`ultron/` is the self-contained coordination engine (`ultron/core/`) and organization tree (`ultron/hive/`) for **ULTRON** (*Universal Layered Team and Role Orchestration Network*).
+`ultron/` is the self-contained, **pure Git-native** coordination engine (`ultron/core/`) and organization tree (`ultron/hive/`) for **ULTRON** (*Universal Layered Team and Role Orchestration Network*). Zero SQLite or third-party dependencies are required.
 
 ---
 
-## 1. Directory Structure
+## 1. Directory & Storage Architecture
 
 ```text
 ultron/
 ├── core/
 │   ├── ULTRON_PRIME.md          # Boot persona & operational manual for ULTRON PRIME
 │   ├── README.md                # This reference guide
-│   ├── core.py                  # Org registry, N-layer Hive scaffolder & message board CLI
-│   ├── .gitignore               # Ignores local SQLite runtime files (*.db*)
+│   ├── core.py                  # Pure Git-native org registry, Hive scaffolder & JSONL board CLI
+│   ├── .gitignore               # Ignores ephemeral .runtime/ session UUIDs & lockfiles
 │   ├── templates/               # Scaffolding templates for teams, roles & spawn prompts
-│   ├── teams.json               # Git-tracked N-layer org tree & team lifecycle states
-│   ├── agents.json              # Git-tracked role definitions & live session UUIDs
-│   └── threads/                 # Git-tracked message board threads (thread_XXXX.json)
+│   ├── .runtime/                # GITIGNORED ephemeral runtime state (sessions.json, .lock)
+│   └── threads/                 # Git-tracked append-only JSONL threads
+│       ├── .gitattributes       # `*.jsonl merge=union` for conflict-free Git branch merges
+│       └── t-YYYYMMDD-xxxxxxxx.jsonl
 └── hive/
     └── <team-slug>/             # Layer-1 team
-        ├── team.json            # Team metadata & status (active / disabled)
+        ├── team.json            # Git-tracked persistent team definition
         ├── AGENTS.md            # Team charter & shared operating rules
         ├── roles/               # Flat peer roles (always includes lead/)
         │   ├── lead/
+        │   │   ├── role.json    # Git-tracked persistent role definition
         │   │   ├── AGENTS.md
         │   │   └── workspace/   # Private scratch directory for <team>/lead
         │   └── <role-slug>/
+        │       ├── role.json
         │       ├── AGENTS.md
         │       └── workspace/   # Private scratch directory for <team>/<role>
         └── teams/               # Recursive child teams (arbitrary Layer 2..N depth)
             └── <subteam-slug>/
 ```
 
+### Why This Is Natively Git-Friendly
+1. **Single Source of Truth:** On-disk files *are* the database—switching Git branches or copying `ultron/` into any repository reflects the exact state immediately with zero sync/restore ceremony.
+2. **Conflict-Free Branch Merges (`merge=union`):** Every thread (`t-YYYYMMDD-xxxxxxxx.jsonl`, collision-free IDs; CLI accepts full IDs or short suffixes like `xxxxxxxx`) is an **append-only event log** (`thread`, `post`, `status`, `reclassify`). With `*.jsonl merge=union` in `threads/.gitattributes`, concurrent replies or status updates across Git branches merge cleanly with zero conflicts and replay deterministically by timestamp.
+3. **Clean Working Trees on Team Wake/Sleep:** Ephemeral Antigravity `conversation_id` bindings live in gitignored `ultron/core/.runtime/sessions.json`, so `activate-team` and `disable-team` never dirty `git status`.
+
 ---
 
 ## 2. Visibility Model (Preventing Information Overload)
 
-Every thread on the central message board carries an explicit `visibility` scope enforced on `list`, `view`, `search`, and `reply`:
+Every thread carries an explicit `visibility` scope enforced on `list`, `view`, `search`, `reply`, and `set-status`:
 
 | Visibility | Flags | Who Can Read & Reply | Primary Use Case |
 | :--- | :--- | :--- | :--- |
@@ -51,7 +59,7 @@ Every thread on the central message board carries an explicit `visibility` scope
 
 ## 3. Reactive Doorbell Workflow
 
-SQLite (`core.db`) and JSON files are passive datastores—agents never poll in loops. Always follow the 3-step collaboration rule:
+JSONL files are passive datastores—agents never poll in loops. Always follow the 3-step collaboration rule:
 
 1. **Write to Board:** Post or reply via `python3 ultron/core/core.py new-thread ...` or `reply ...`.
 2. **Resolve Live UUID:**
@@ -59,21 +67,22 @@ SQLite (`core.db`) and JSON files are passive datastores—agents never poll in 
    python3 ultron/core/core.py whois <target-team>/<role> --id-only
    ```
    *(Exits non-zero to `stderr` with empty `stdout` if the target agent is currently `disabled`.)*
-3. **Doorbell:** Wake the recipient immediately via Antigravity's `send_message(Recipient="<uuid>", Message="Doorbell: Posted on Thread #X ('Title')...")`.
+3. **Doorbell:** Wake the recipient immediately via Antigravity's `send_message(Recipient="<uuid>", Message="Doorbell: Posted on Thread <thread_id> ('Title')...")`.
 
 ---
 
 ## 4. CLI Quick Reference (`python3 ultron/core/core.py`)
 
-Add `--json` to any command (before or after the subcommand) for structured JSON output.
+Add `--json` to any command (before or after the subcommand) for structured JSON output. Thread commands accept either the full `t-YYYYMMDD-xxxxxxxx` ID or its unique short hex suffix (`xxxxxxxx`).
 
 ### Organization & Lifecycle Commands (ULTRON PRIME)
 ```bash
 # Register ULTRON PRIME session
 python3 ultron/core/core.py register-prime --id "<uuid>"
 
-# Inspect full N-layer Hive org tree & stats
+# Inspect full N-layer Hive org tree, integrity & stats
 python3 ultron/core/core.py org-tree
+python3 ultron/core/core.py verify
 python3 ultron/core/core.py stats
 
 # Create teams (Layer 1 or nested Layer 2..N via --parent) & specialist roles
@@ -84,7 +93,7 @@ python3 ultron/core/core.py create-team --slug auth --parent api --name "Auth Su
 # Generate Antigravity define_subagent + invoke_subagent payloads
 python3 ultron/core/core.py render-spawn api --json
 
-# Bind spawned session UUIDs & mark team active
+# Bind spawned session UUIDs & mark team active (writes only to gitignored .runtime/sessions.json)
 python3 ultron/core/core.py activate-team api --uuids '{"lead":"<uuid-1>","coder":"<uuid-2>"}'
 
 # Prepare & execute team disable (kills sessions via manage_subagents first, preserves files/threads)
@@ -106,13 +115,13 @@ python3 ultron/core/core.py agents --team api
 
 ### Message Board Commands
 ```bash
-# Create personal, team, cross-layer (with-team), or global threads
+# Create personal, team, cross-layer (with-team), or global JSONL threads
 python3 ultron/core/core.py new-thread \
   --author api/coder \
   --visibility personal \
   --category lesson \
-  --title "SQLite WAL Locking Note" \
-  --content "Close sqlite3 connections explicitly in context managers to avoid Python 3.14 ResourceWarnings."
+  --title "Append-Only JSONL Locking Note" \
+  --content "Use fcntl.flock + fsync when appending JSONL event lines."
 
 python3 ultron/core/core.py new-thread \
   --author api/lead \
@@ -122,11 +131,11 @@ python3 ultron/core/core.py new-thread \
   --title "JWT Claims Contract" \
   --content "Align on token payload fields before endpoint integration."
 
-# Reply, list, view, search, update status, and reclassify
-python3 ultron/core/core.py reply 2 --author auth/lead --content "Validated claims schema."
+# Reply, list, view, search, update status, and reclassify (accepts full ID or short suffix)
+python3 ultron/core/core.py reply a3f91c4e --author auth/lead --content "Validated claims schema."
 python3 ultron/core/core.py list --as api/coder
-python3 ultron/core/core.py view 2 --as auth/lead
+python3 ultron/core/core.py view a3f91c4e --as auth/lead
 python3 ultron/core/core.py search "JWT" --as auth/lead
-python3 ultron/core/core.py set-status 2 resolved --as api/lead
-python3 ultron/core/core.py reclassify 1 --as ultron-prime --visibility global
+python3 ultron/core/core.py set-status a3f91c4e resolved --as api/lead
+python3 ultron/core/core.py reclassify a3f91c4e --as ultron-prime --visibility global
 ```

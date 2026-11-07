@@ -1,26 +1,36 @@
 #!/usr/bin/env python3
 """
 ULTRON Core (ultron/core/core.py)
-Central org registry, N-layer Hive team/role scaffolder, lifecycle coordinator,
-and visibility-scoped message board for ULTRON (Universal Layered Team & Role Orchestration Network).
+Pure Git-native org registry, N-layer Hive team/role scaffolder, lifecycle coordinator,
+and append-only JSONL message board for ULTRON (Universal Layered Team & Role Orchestration Network).
 
-Zero third-party dependencies (Python 3 standard library only).
+Storage Architecture (Zero SQLite / Zero External Dependencies):
+- Org & Role Definitions (Git-tracked):
+    ultron/hive/.../<team-slug>/team.json
+    ultron/hive/.../<team-slug>/roles/<role-slug>/role.json
+- Live Session UUID Bindings (Gitignored ephemeral runtime state):
+    ultron/core/.runtime/sessions.json
+- Message Board Threads (Git-tracked, conflict-free via *.jsonl merge=union):
+    ultron/core/threads/<thread_id>.jsonl  (1 append-only JSON event per line)
 """
 
 from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-import glob
+from datetime import datetime, timezone
 import json
 import os
+from pathlib import Path
 import re
 import shutil
-import sqlite3
 import sys
-from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Set, Tuple
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX fallback
+    fcntl = None  # type: ignore[assignment]
 
 CORE_DIR = Path(__file__).resolve().parent
 ULTRON_DIR = CORE_DIR.parent
@@ -40,108 +50,23 @@ VALID_THREAD_STATUSES = {"open", "in_progress", "resolved", "blocked", "closed"}
 PRIME_ID = "ultron-prime"
 RESERVED_SLUGS = {PRIME_ID, "prime", "teams", "roles", "workspace", "core", "hive"}
 
-SCHEMA = """
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
-PRAGMA busy_timeout = 5000;
-
-CREATE TABLE IF NOT EXISTS sync_state (
-    file_key TEXT PRIMARY KEY,
-    mtime_ns INTEGER NOT NULL,
-    size INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS teams (
-    slug TEXT PRIMARY KEY COLLATE NOCASE,
-    name TEXT NOT NULL,
-    parent_team TEXT COLLATE NOCASE REFERENCES teams(slug) ON DELETE RESTRICT,
-    mission TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'disabled',
-    hive_path TEXT NOT NULL,
-    default_model TEXT NOT NULL DEFAULT 'flash',
-    workspace_mode TEXT NOT NULL DEFAULT 'inherit',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS agents (
-    agent_id TEXT PRIMARY KEY COLLATE NOCASE,
-    team_slug TEXT COLLATE NOCASE REFERENCES teams(slug) ON DELETE CASCADE,
-    role TEXT NOT NULL,
-    title TEXT NOT NULL DEFAULT '',
-    responsibilities TEXT NOT NULL DEFAULT '',
-    model TEXT NOT NULL DEFAULT 'flash',
-    write_tools INTEGER NOT NULL DEFAULT 1,
-    mcp_tools INTEGER NOT NULL DEFAULT 1,
-    conversation_id TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'disabled',
-    role_path TEXT NOT NULL DEFAULT '',
-    last_seen TEXT NOT NULL,
-    registered_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS threads (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL,
-    category TEXT NOT NULL DEFAULT 'general',
-    status TEXT NOT NULL DEFAULT 'open',
-    visibility TEXT NOT NULL DEFAULT 'team',
-    team_slug TEXT COLLATE NOCASE,
-    with_team TEXT COLLATE NOCASE,
-    owner_agent TEXT COLLATE NOCASE,
-    author TEXT NOT NULL COLLATE NOCASE,
-    author_id TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS posts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-    parent_post_id INTEGER REFERENCES posts(id),
-    author TEXT NOT NULL COLLATE NOCASE,
-    author_id TEXT,
-    content TEXT NOT NULL,
-    tags TEXT,
-    created_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_teams_parent ON teams(parent_team);
-CREATE INDEX IF NOT EXISTS idx_teams_status ON teams(status);
-CREATE INDEX IF NOT EXISTS idx_agents_team ON agents(team_slug);
-CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
-CREATE INDEX IF NOT EXISTS idx_threads_visibility ON threads(visibility);
-CREATE INDEX IF NOT EXISTS idx_threads_team ON threads(team_slug);
-CREATE INDEX IF NOT EXISTS idx_threads_with_team ON threads(with_team);
-CREATE INDEX IF NOT EXISTS idx_threads_owner ON threads(owner_agent);
-CREATE INDEX IF NOT EXISTS idx_threads_category ON threads(category);
-CREATE INDEX IF NOT EXISTS idx_threads_status ON threads(status);
-CREATE INDEX IF NOT EXISTS idx_posts_thread ON posts(thread_id);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS posts_fts USING fts5(
-    content,
-    tags,
-    content='posts',
-    content_rowid='id'
-);
-
-CREATE TRIGGER IF NOT EXISTS posts_ai AFTER INSERT ON posts BEGIN
-    INSERT INTO posts_fts(rowid, content, tags) VALUES (new.id, new.content, new.tags);
-END;
-
-CREATE TRIGGER IF NOT EXISTS posts_ad AFTER DELETE ON posts BEGIN
-    INSERT INTO posts_fts(posts_fts, rowid, content, tags) VALUES('delete', old.id, old.content, old.tags);
-END;
-
-CREATE TRIGGER IF NOT EXISTS posts_au AFTER UPDATE ON posts BEGIN
-    INSERT INTO posts_fts(posts_fts, rowid, content, tags) VALUES('delete', old.id, old.content, old.tags);
-    INSERT INTO posts_fts(rowid, content, tags) VALUES (new.id, new.content, new.tags);
-END;
-"""
-
 
 def now_iso() -> str:
-    return datetime.now().astimezone().isoformat()
+    """UTC ISO-8601 timestamp with microsecond precision for deterministic event ordering."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def generate_thread_id() -> str:
+    day = datetime.now(timezone.utc).strftime("%Y%m%d")
+    return f"t-{day}-{os.urandom(4).hex()}"
+
+
+def generate_post_id() -> str:
+    return f"p-{os.urandom(4).hex()}"
+
+
+def generate_event_id() -> str:
+    return f"e-{os.urandom(6).hex()}"
 
 
 def render_template(template_text: str, values: Mapping[str, Any]) -> str:
@@ -197,22 +122,40 @@ def normalize_agent_id(value: str) -> str:
 
 def atomic_write_json(target_path: Path, data: Any) -> None:
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = target_path.with_name(f"{target_path.name}.tmp.{os.getpid()}")
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False, sort_keys=True)
-        f.write("\n")
-    os.replace(tmp_path, target_path)
+    tmp_path = target_path.with_name(
+        f".{target_path.name}.tmp.{os.getpid()}.{os.urandom(3).hex()}"
+    )
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False, sort_keys=True)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, target_path)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+
+def append_jsonl_event(target_path: Path, event: Mapping[str, Any]) -> None:
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+    with open(target_path, "a", encoding="utf-8") as f:
+        f.write(line)
+        f.flush()
+        os.fsync(f.fileno())
 
 
 class UltronCore:
     def __init__(
         self,
         repo_root: Optional[Path | str] = None,
-        db_path: Optional[Path | str] = None,
         hive_dir: Optional[Path | str] = None,
-        teams_file: Optional[Path | str] = None,
-        agents_file: Optional[Path | str] = None,
         threads_dir: Optional[Path | str] = None,
+        runtime_dir: Optional[Path | str] = None,
         templates_dir: Optional[Path | str] = None,
     ) -> None:
         env_root = os.environ.get("ULTRON_REPO_ROOT")
@@ -220,28 +163,31 @@ class UltronCore:
         default_core = self.repo_root / "ultron" / "core"
         default_hive = self.repo_root / "ultron" / "hive"
 
-        self.db_path = Path(
-            db_path or os.environ.get("ULTRON_DB_PATH") or (default_core / "core.db")
-        ).resolve()
         self.hive_dir = Path(
             hive_dir or os.environ.get("ULTRON_HIVE_DIR") or default_hive
-        ).resolve()
-        self.teams_file = Path(
-            teams_file or os.environ.get("ULTRON_TEAMS_FILE") or (default_core / "teams.json")
-        ).resolve()
-        self.agents_file = Path(
-            agents_file or os.environ.get("ULTRON_AGENTS_FILE") or (default_core / "agents.json")
         ).resolve()
         self.threads_dir = Path(
             threads_dir or os.environ.get("ULTRON_THREADS_DIR") or (default_core / "threads")
         ).resolve()
+        self.runtime_dir = Path(
+            runtime_dir or os.environ.get("ULTRON_RUNTIME_DIR") or (default_core / ".runtime")
+        ).resolve()
+        self.sessions_file = self.runtime_dir / "sessions.json"
+        self.lock_file = self.runtime_dir / ".lock"
         self.templates_dir = Path(templates_dir or TEMPLATES_DIR).resolve()
 
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.hive_dir.mkdir(parents=True, exist_ok=True)
         self.threads_dir.mkdir(parents=True, exist_ok=True)
+        self.runtime_dir.mkdir(parents=True, exist_ok=True)
 
-        self._init_db()
+        # Ensure threads/.gitattributes exists so *.jsonl merges union-style automatically
+        gitattr = self.threads_dir / ".gitattributes"
+        if not gitattr.exists():
+            gitattr.write_text(
+                "# Union-merge append-only JSONL thread logs across Git branches without conflict\n"
+                "*.jsonl merge=union\n",
+                encoding="utf-8",
+            )
 
     def _rel_posix(self, path: Path) -> str:
         resolved = path.resolve()
@@ -269,579 +215,255 @@ class UltronCore:
         return tpath.read_text(encoding="utf-8")
 
     @contextmanager
-    def _get_connection(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(str(self.db_path))
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON;")
-        conn.execute("PRAGMA busy_timeout = 5000;")
-        try:
-            with conn:
-                yield conn
-        finally:
-            conn.close()
+    def _lock(self, exclusive: bool = True) -> Iterator[None]:
+        self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        with open(self.lock_file, "a+", encoding="utf-8") as lf:
+            if fcntl is not None:
+                mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+                fcntl.flock(lf.fileno(), mode)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
 
     # ------------------------------------------------------------------
-    # Disk <-> SQLite Sync & Reconciliatory Restore
+    # Ephemeral Runtime Session State (.runtime/sessions.json)
     # ------------------------------------------------------------------
 
-    def _disk_snapshot(self) -> Dict[str, Tuple[int, int]]:
-        snap: Dict[str, Tuple[int, int]] = {}
-        if self.teams_file.is_file():
-            st = self.teams_file.stat()
-            snap["teams.json"] = (st.st_mtime_ns, st.st_size)
-        if self.agents_file.is_file():
-            st = self.agents_file.stat()
-            snap["agents.json"] = (st.st_mtime_ns, st.st_size)
-        if self.threads_dir.is_dir():
-            for fpath in sorted(self.threads_dir.glob("thread_*.json")):
-                if fpath.is_file():
-                    st = fpath.stat()
-                    snap[f"thread:{fpath.name}"] = (st.st_mtime_ns, st.st_size)
-        return snap
-
-    def _record_file_sync(self, conn: sqlite3.Connection, key: str, path: Path) -> None:
-        if path.is_file():
-            st = path.stat()
-            conn.execute(
-                """
-                INSERT INTO sync_state (file_key, mtime_ns, size)
-                VALUES (?, ?, ?)
-                ON CONFLICT(file_key) DO UPDATE SET
-                    mtime_ns = excluded.mtime_ns,
-                    size = excluded.size
-                """,
-                (key, st.st_mtime_ns, st.st_size),
-            )
-        else:
-            conn.execute("DELETE FROM sync_state WHERE file_key = ?", (key,))
-
-    def _replace_all_sync_state(
-        self, conn: sqlite3.Connection, snap: Mapping[str, Tuple[int, int]]
-    ) -> None:
-        conn.execute("DELETE FROM sync_state")
-        for key, (mtime_ns, size) in snap.items():
-            conn.execute(
-                "INSERT INTO sync_state (file_key, mtime_ns, size) VALUES (?, ?, ?)",
-                (key, mtime_ns, size),
-            )
-
-    def _checkpoint_wal(self, conn: sqlite3.Connection) -> None:
+    def _read_sessions_unlocked(self) -> Dict[str, Dict[str, Any]]:
+        if not self.sessions_file.is_file():
+            return {"agents": {}}
         try:
-            conn.execute("PRAGMA wal_checkpoint(PASSIVE);")
-        except sqlite3.OperationalError:
-            pass
+            raw = json.loads(self.sessions_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Corrupt runtime session file '{self.sessions_file}': {exc}"
+            ) from exc
+        if not isinstance(raw, dict) or not isinstance(raw.get("agents", {}), dict):
+            raise ValueError(f"Invalid schema in '{self.sessions_file}'.")
+        return {"agents": dict(raw.get("agents", {}))}
 
-    def _init_db(self) -> None:
-        with self._get_connection() as conn:
-            conn.executescript(SCHEMA)
-            disk_snap = self._disk_snapshot()
-            db_rows = conn.execute("SELECT file_key, mtime_ns, size FROM sync_state").fetchall()
-            db_snap = {r["file_key"]: (r["mtime_ns"], r["size"]) for r in db_rows}
+    def _write_sessions_unlocked(self, sessions: Mapping[str, Any]) -> None:
+        atomic_write_json(self.sessions_file, {"agents": dict(sessions.get("agents", {}))})
 
-            if disk_snap != db_snap:
-                self._reconcile_from_disk(conn, disk_snap)
-                self._checkpoint_wal(conn)
+    # ------------------------------------------------------------------
+    # Recursive N-Layer Hive Discovery (team.json & role.json)
+    # ------------------------------------------------------------------
 
-    @staticmethod
-    def _topological_sort_teams(teams_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        by_slug: Dict[str, Dict[str, Any]] = {}
-        for item in teams_list:
-            slug = item["slug"].strip().lower()
-            if slug in by_slug:
-                raise ValueError(f"Duplicate team slug '{slug}' in teams.json.")
-            by_slug[slug] = item
-
-        visited: Dict[str, int] = {}  # 0=visiting, 1=done
-        ordered: List[Dict[str, Any]] = []
-
-        def visit(slug: str) -> None:
-            state = visited.get(slug)
-            if state == 1:
-                return
-            if state == 0:
-                raise ValueError(f"Cycle detected in team parent hierarchy involving '{slug}'.")
-            visited[slug] = 0
-            item = by_slug[slug]
-            parent = (item.get("parent_team") or "").strip().lower() or None
-            if parent:
-                if parent not in by_slug:
-                    raise ValueError(
-                        f"Team '{slug}' references missing parent_team '{parent}'."
-                    )
-                visit(parent)
-            visited[slug] = 1
-            ordered.append(item)
-
-        for s in sorted(by_slug.keys()):
-            visit(s)
-        return ordered
-
-    def _reconcile_from_disk(
+    def _scan_state_unlocked(
         self,
-        conn: sqlite3.Connection,
-        disk_snap: Optional[Mapping[str, Tuple[int, int]]] = None,
-    ) -> Dict[str, int]:
-        snap = dict(disk_snap) if disk_snap is not None else self._disk_snapshot()
-        teams_data: List[Dict[str, Any]] = []
-        agents_data: List[Dict[str, Any]] = []
-        thread_files = sorted(self.threads_dir.glob("thread_*.json")) if self.threads_dir.is_dir() else []
+    ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+        """
+        Walk ultron/hive/ recursively to load all persistent teams and roles,
+        and overlay ephemeral session UUIDs/statuses from .runtime/sessions.json.
+        Returns (teams_by_slug, agents_by_id, sessions_data).
+        """
+        sessions = self._read_sessions_unlocked()
+        live_agents = sessions["agents"]
 
-        if self.teams_file.is_file():
-            with open(self.teams_file, "r", encoding="utf-8") as f:
-                raw = json.load(f)
-                if not isinstance(raw, list):
-                    raise ValueError(f"Expected JSON list in {self.teams_file}")
-                teams_data = self._topological_sort_teams(raw)
+        teams_by_slug: Dict[str, Dict[str, Any]] = {}
+        agents_by_id: Dict[str, Dict[str, Any]] = {}
 
-        if self.agents_file.is_file():
-            with open(self.agents_file, "r", encoding="utf-8") as f:
-                raw = json.load(f)
-                if not isinstance(raw, list):
-                    raise ValueError(f"Expected JSON list in {self.agents_file}")
-                agents_data = raw
+        # Include ULTRON PRIME if registered in runtime sessions
+        if PRIME_ID in live_agents:
+            p_sess = live_agents[PRIME_ID]
+            cid = str(p_sess.get("conversation_id", "")).strip()
+            p_status = "active" if cid and p_sess.get("status") == "active" else "disabled"
+            reg_at = str(p_sess.get("registered_at") or now_iso())
+            seen_at = str(p_sess.get("last_seen") or reg_at)
+            agents_by_id[PRIME_ID] = {
+                "agent_id": PRIME_ID,
+                "conversation_id": cid if p_status == "active" else "",
+                "last_seen": seen_at,
+                "mcp_tools": True,
+                "model": "inherit",
+                "registered_at": reg_at,
+                "responsibilities": "Ultimate Leader of Teams, Roles, and Operational Nodes",
+                "role": "prime",
+                "role_path": "ultron/core",
+                "status": p_status,
+                "team_slug": None,
+                "title": "ULTRON PRIME",
+                "write_tools": True,
+            }
 
-        conn.execute("PRAGMA defer_foreign_keys = ON;")
-        cursor = conn.cursor()
+        def walk_team_dir(team_dir: Path, expected_parent: Optional[str], lineage: List[str]) -> None:
+            t_manifest = team_dir / "team.json"
+            if not t_manifest.is_file():
+                return
+            try:
+                raw_t = json.loads(t_manifest.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Corrupt JSON in '{t_manifest}': {exc}") from exc
 
-        # 1. Reconcile teams (delete removed leaves/subtrees safely under deferred FKs)
-        if self.teams_file.is_file():
-            active_team_slugs = [t["slug"].strip().lower() for t in teams_data]
-            if active_team_slugs:
-                placeholders = ",".join("?" for _ in active_team_slugs)
-                cursor.execute(
-                    f"DELETE FROM teams WHERE lower(slug) NOT IN ({placeholders})",
-                    active_team_slugs,
+            slug = validate_slug(str(raw_t.get("slug", "")), "team slug")
+            if slug != team_dir.name:
+                raise ValueError(
+                    f"Team directory '{team_dir.name}' mismatches team.json slug '{slug}'."
                 )
-            else:
-                cursor.execute("DELETE FROM teams")
+            if slug in teams_by_slug:
+                raise ValueError(
+                    f"Duplicate team slug '{slug}' detected across Hive ('{t_manifest}')."
+                )
 
-            for t in teams_data:
-                slug = validate_slug(t["slug"], "team slug")
-                parent = (t.get("parent_team") or "").strip().lower() or None
-                if parent:
-                    validate_slug(parent, "parent_team")
-                status = t.get("status", "disabled").strip().lower()
-                if status not in VALID_TEAM_STATUSES:
-                    raise ValueError(f"Invalid team status '{status}' for team '{slug}'.")
-                hive_path = Path(t["hive_path"]).as_posix()
-                if hive_path.startswith("/") or ".." in Path(hive_path).parts:
-                    raise ValueError(f"Non-portable hive_path '{hive_path}' in teams.json.")
-                model = t.get("default_model", "flash").strip().lower()
-                ws = t.get("workspace_mode", "inherit").strip().lower()
-                created_at = t.get("created_at") or now_iso()
-                updated_at = t.get("updated_at") or created_at
-                cursor.execute(
-                    """
-                    INSERT INTO teams (
-                        slug, name, parent_team, mission, status,
-                        hive_path, default_model, workspace_mode, created_at, updated_at
+            stored_parent = (raw_t.get("parent_team") or "").strip().lower() or None
+            if stored_parent != expected_parent:
+                raise ValueError(
+                    f"Team '{slug}' parent_team '{stored_parent}' mismatches directory parent '{expected_parent}'."
+                )
+
+            model = str(raw_t.get("default_model", "flash")).strip().lower()
+            if model not in VALID_MODELS:
+                raise ValueError(f"Invalid default_model '{model}' in '{t_manifest}'.")
+            ws = str(raw_t.get("workspace_mode", "inherit")).strip().lower()
+            if ws not in VALID_WORKSPACES:
+                raise ValueError(f"Invalid workspace_mode '{ws}' in '{t_manifest}'.")
+
+            curr_lineage = [*lineage, slug]
+            hive_rel = self._rel_posix(team_dir)
+            created_at = str(raw_t.get("created_at") or now_iso())
+            updated_at = str(raw_t.get("updated_at") or created_at)
+
+            # Load flat intra-team roles under roles/*/role.json
+            roles_root = team_dir / "roles"
+            team_roles: List[Dict[str, Any]] = []
+            if roles_root.is_dir():
+                for role_dir in sorted(roles_root.iterdir()):
+                    if not role_dir.is_dir() or role_dir.name.startswith("."):
+                        continue
+                    r_manifest = role_dir / "role.json"
+                    if not r_manifest.is_file():
+                        continue
+                    try:
+                        raw_r = json.loads(r_manifest.read_text(encoding="utf-8"))
+                    except json.JSONDecodeError as exc:
+                        raise ValueError(f"Corrupt JSON in '{r_manifest}': {exc}") from exc
+
+                    r_slug = validate_role_slug(str(raw_r.get("role", role_dir.name)))
+                    if r_slug != role_dir.name:
+                        raise ValueError(
+                            f"Role directory '{role_dir.name}' mismatches role.json role '{r_slug}'."
+                        )
+                    aid = f"{slug}/{r_slug}"
+                    r_model = str(raw_r.get("model", model)).strip().lower()
+                    if r_model not in VALID_MODELS:
+                        raise ValueError(f"Invalid model '{r_model}' in '{r_manifest}'.")
+
+                    r_reg_at = str(raw_r.get("registered_at") or created_at)
+                    sess = live_agents.get(aid, {})
+                    cid = str(sess.get("conversation_id", "")).strip()
+                    r_status = (
+                        "active" if cid and sess.get("status") == "active" else "disabled"
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(slug) DO UPDATE SET
-                        name = excluded.name,
-                        parent_team = excluded.parent_team,
-                        mission = excluded.mission,
-                        status = excluded.status,
-                        hive_path = excluded.hive_path,
-                        default_model = excluded.default_model,
-                        workspace_mode = excluded.workspace_mode,
-                        created_at = excluded.created_at,
-                        updated_at = excluded.updated_at
-                    """,
-                    (
-                        slug,
-                        t["name"].strip(),
-                        parent,
-                        t.get("mission", "").strip(),
-                        status,
-                        hive_path,
-                        model,
-                        ws,
-                        created_at,
-                        updated_at,
-                    ),
-                )
+                    r_seen = str(sess.get("last_seen") or r_reg_at)
 
-        # 2. Reconcile agents
-        if self.agents_file.is_file():
-            active_agent_ids = [normalize_agent_id(a["agent_id"]) for a in agents_data]
-            if active_agent_ids:
-                placeholders = ",".join("?" for _ in active_agent_ids)
-                cursor.execute(
-                    f"DELETE FROM agents WHERE lower(agent_id) NOT IN ({placeholders})",
-                    active_agent_ids,
-                )
-            else:
-                cursor.execute("DELETE FROM agents")
+                    role_obj = {
+                        "agent_id": aid,
+                        "conversation_id": cid if r_status == "active" else "",
+                        "last_seen": r_seen,
+                        "mcp_tools": bool(raw_r.get("mcp_tools", True)),
+                        "model": r_model,
+                        "registered_at": r_reg_at,
+                        "responsibilities": str(raw_r.get("responsibilities", "")).strip(),
+                        "role": r_slug,
+                        "role_path": self._rel_posix(role_dir),
+                        "status": r_status,
+                        "team_slug": slug,
+                        "title": str(raw_r.get("title", "")).strip(),
+                        "write_tools": bool(raw_r.get("write_tools", True)),
+                    }
+                    agents_by_id[aid] = role_obj
+                    team_roles.append(role_obj)
 
-            for a in agents_data:
-                aid = normalize_agent_id(a["agent_id"])
-                team_slug = (a.get("team_slug") or "").strip().lower() or None
-                role = a.get("role", "").strip().lower()
-                if aid == PRIME_ID:
-                    team_slug = None
-                    role = "prime"
-                else:
-                    inferred_team, inferred_role = aid.split("/", 1)
-                    team_slug = inferred_team
-                    role = inferred_role
-                status = a.get("status", "disabled").strip().lower()
-                if status not in VALID_AGENT_STATUSES:
-                    raise ValueError(f"Invalid agent status '{status}' for '{aid}'.")
-                role_path = Path(a.get("role_path", "")).as_posix() if a.get("role_path") else ""
-                if role_path and (role_path.startswith("/") or ".." in Path(role_path).parts):
-                    raise ValueError(f"Non-portable role_path '{role_path}' in agents.json.")
-                reg_at = a.get("registered_at") or now_iso()
-                seen_at = a.get("last_seen") or reg_at
-                cursor.execute(
-                    """
-                    INSERT INTO agents (
-                        agent_id, team_slug, role, title, responsibilities,
-                        model, write_tools, mcp_tools, conversation_id,
-                        status, role_path, last_seen, registered_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(agent_id) DO UPDATE SET
-                        team_slug = excluded.team_slug,
-                        role = excluded.role,
-                        title = excluded.title,
-                        responsibilities = excluded.responsibilities,
-                        model = excluded.model,
-                        write_tools = excluded.write_tools,
-                        mcp_tools = excluded.mcp_tools,
-                        conversation_id = excluded.conversation_id,
-                        status = excluded.status,
-                        role_path = excluded.role_path,
-                        last_seen = excluded.last_seen,
-                        registered_at = excluded.registered_at
-                    """,
-                    (
-                        aid,
-                        team_slug,
-                        role,
-                        a.get("title", "").strip(),
-                        a.get("responsibilities", "").strip(),
-                        a.get("model", "flash").strip().lower(),
-                        1 if a.get("write_tools", True) else 0,
-                        1 if a.get("mcp_tools", True) else 0,
-                        a.get("conversation_id", "").strip(),
-                        status,
-                        role_path,
-                        seen_at,
-                        reg_at,
-                    ),
-                )
-
-        # 3. Reconcile threads & posts
-        loaded_thread_ids: List[int] = []
-        for fpath in thread_files:
-            with open(fpath, "r", encoding="utf-8") as f:
-                t_data = json.load(f)
-            t_id = int(t_data["id"])
-            loaded_thread_ids.append(t_id)
-            vis = t_data.get("visibility", "team").strip().lower()
-            if vis not in VALID_VISIBILITIES:
-                raise ValueError(f"Invalid visibility '{vis}' in {fpath.name}")
-            created_at = t_data.get("created_at") or now_iso()
-            updated_at = t_data.get("updated_at") or created_at
-            cursor.execute(
-                """
-                INSERT INTO threads (
-                    id, title, category, status, visibility, team_slug,
-                    with_team, owner_agent, author, author_id, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    title = excluded.title,
-                    category = excluded.category,
-                    status = excluded.status,
-                    visibility = excluded.visibility,
-                    team_slug = excluded.team_slug,
-                    with_team = excluded.with_team,
-                    owner_agent = excluded.owner_agent,
-                    author = excluded.author,
-                    author_id = excluded.author_id,
-                    created_at = excluded.created_at,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    t_id,
-                    t_data["title"],
-                    t_data.get("category", "general"),
-                    t_data.get("status", "open"),
-                    vis,
-                    t_data.get("team_slug"),
-                    t_data.get("with_team"),
-                    t_data.get("owner_agent"),
-                    t_data.get("author", PRIME_ID).strip().lower(),
-                    t_data.get("author_id", ""),
-                    created_at,
-                    updated_at,
-                ),
+            team_roles.sort(key=lambda r: (0 if r["role"] == "lead" else 1, r["role"]))
+            team_status = (
+                "active"
+                if any(r["status"] == "active" and r["conversation_id"] for r in team_roles)
+                else "disabled"
             )
 
-            posts = t_data.get("posts", [])
-            post_ids = [int(p["id"]) for p in posts]
-            if post_ids:
-                p_placeholders = ",".join("?" for _ in post_ids)
-                cursor.execute(
-                    f"DELETE FROM posts WHERE thread_id = ? AND id NOT IN ({p_placeholders})",
-                    [t_id, *post_ids],
-                )
-            else:
-                cursor.execute("DELETE FROM posts WHERE thread_id = ?", (t_id,))
+            teams_by_slug[slug] = {
+                "created_at": created_at,
+                "default_model": model,
+                "hive_path": hive_rel,
+                "layer": len(curr_lineage),
+                "lineage": curr_lineage,
+                "mission": str(raw_t.get("mission", "")).strip(),
+                "name": str(raw_t.get("name", slug)).strip(),
+                "parent_team": expected_parent,
+                "roles": team_roles,
+                "slug": slug,
+                "status": team_status,
+                "updated_at": updated_at,
+                "workspace_mode": ws,
+                "child_teams": [],
+            }
 
-            for p in posts:
-                cursor.execute(
-                    """
-                    INSERT INTO posts (
-                        id, thread_id, parent_post_id, author, author_id,
-                        content, tags, created_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        thread_id = excluded.thread_id,
-                        parent_post_id = excluded.parent_post_id,
-                        author = excluded.author,
-                        author_id = excluded.author_id,
-                        content = excluded.content,
-                        tags = excluded.tags,
-                        created_at = excluded.created_at
-                    """,
-                    (
-                        int(p["id"]),
-                        t_id,
-                        p.get("parent_post_id"),
-                        p.get("author", PRIME_ID).strip().lower(),
-                        p.get("author_id", ""),
-                        p.get("content", ""),
-                        p.get("tags", ""),
-                        p.get("created_at") or created_at,
-                    ),
+            # Recurse into child teams (teams/<child-slug>/team.json)
+            children_root = team_dir / "teams"
+            if children_root.is_dir():
+                for child_dir in sorted(children_root.iterdir()):
+                    if child_dir.is_dir() and not child_dir.name.startswith("."):
+                        walk_team_dir(child_dir, slug, curr_lineage)
+
+        if self.hive_dir.is_dir():
+            for top_dir in sorted(self.hive_dir.iterdir()):
+                if top_dir.is_dir() and not top_dir.name.startswith("."):
+                    walk_team_dir(top_dir, None, [])
+
+        # Populate child_teams summaries
+        for t in sorted(teams_by_slug.values(), key=lambda item: item["slug"]):
+            p_slug = t["parent_team"]
+            if p_slug and p_slug in teams_by_slug:
+                teams_by_slug[p_slug]["child_teams"].append(
+                    {"name": t["name"], "slug": t["slug"], "status": t["status"]}
                 )
 
-        if loaded_thread_ids:
-            t_placeholders = ",".join("?" for _ in loaded_thread_ids)
-            cursor.execute(
-                f"DELETE FROM threads WHERE id NOT IN ({t_placeholders})",
-                loaded_thread_ids,
-            )
-        else:
-            cursor.execute("DELETE FROM threads")
-
-        cursor.execute("INSERT INTO posts_fts(posts_fts) VALUES('rebuild');")
-
-        fk_violations = cursor.execute("PRAGMA foreign_key_check;").fetchall()
-        if fk_violations:
-            raise RuntimeError(
-                f"Foreign key integrity check failed during JSON restore: {[tuple(r) for r in fk_violations]}"
-            )
-
-        self._replace_all_sync_state(conn, snap)
-        return {
-            "teams": len(teams_data),
-            "agents": len(agents_data),
-            "threads": len(loaded_thread_ids),
-        }
-
-    # ------------------------------------------------------------------
-    # Deterministic JSON Exports
-    # ------------------------------------------------------------------
-
-    def _serialize_team_row(self, row: sqlite3.Row, layer: int) -> Dict[str, Any]:
-        return {
-            "created_at": row["created_at"],
-            "default_model": row["default_model"],
-            "hive_path": row["hive_path"],
-            "layer": layer,
-            "mission": row["mission"],
-            "name": row["name"],
-            "parent_team": row["parent_team"],
-            "slug": row["slug"],
-            "status": row["status"],
-            "updated_at": row["updated_at"],
-            "workspace_mode": row["workspace_mode"],
-        }
+        return teams_by_slug, agents_by_id, sessions
 
     @staticmethod
-    def _serialize_agent_row(row: sqlite3.Row) -> Dict[str, Any]:
-        return {
-            "agent_id": row["agent_id"],
-            "conversation_id": row["conversation_id"],
-            "last_seen": row["last_seen"],
-            "mcp_tools": bool(row["mcp_tools"]),
-            "model": row["model"],
-            "registered_at": row["registered_at"],
-            "responsibilities": row["responsibilities"],
-            "role": row["role"],
-            "role_path": row["role_path"],
-            "status": row["status"],
-            "team_slug": row["team_slug"],
-            "title": row["title"],
-            "write_tools": bool(row["write_tools"]),
-        }
-
-    def export_teams(self) -> str:
-        with self._get_connection() as conn:
-            rows = conn.execute("SELECT * FROM teams").fetchall()
-            by_slug = {r["slug"].lower(): r for r in rows}
-            layers: Dict[str, int] = {}
-
-            def get_layer(slug: str, seen: Set[str]) -> int:
-                if slug in layers:
-                    return layers[slug]
-                if slug in seen:
-                    raise RuntimeError(f"Cycle detected in teams table for '{slug}'.")
-                seen.add(slug)
-                parent = by_slug[slug]["parent_team"]
-                lvl = 1 if not parent else (get_layer(parent.lower(), seen) + 1)
-                layers[slug] = lvl
-                return lvl
-
-            for s in by_slug:
-                get_layer(s, set())
-
-            ordered_slugs = sorted(by_slug.keys(), key=lambda s: (layers[s], s))
-            payload = [self._serialize_team_row(by_slug[s], layers[s]) for s in ordered_slugs]
-            atomic_write_json(self.teams_file, payload)
-            self._record_file_sync(conn, "teams.json", self.teams_file)
-            self._checkpoint_wal(conn)
-        return str(self.teams_file)
-
-    def export_agents(self) -> str:
-        with self._get_connection() as conn:
-            rows = conn.execute("SELECT * FROM agents").fetchall()
-            ordered = sorted(
-                rows,
-                key=lambda r: (0 if r["agent_id"].lower() == PRIME_ID else 1, r["agent_id"].lower()),
+    def _get_descendant_slugs(
+        teams_by_slug: Mapping[str, Dict[str, Any]], root_slug: str
+    ) -> List[str]:
+        descendants: List[str] = []
+        queue = [root_slug]
+        seen: Set[str] = {root_slug}
+        while queue:
+            curr = queue.pop(0)
+            children = sorted(
+                t["slug"]
+                for t in teams_by_slug.values()
+                if t["parent_team"] == curr
             )
-            payload = [self._serialize_agent_row(r) for r in ordered]
-            atomic_write_json(self.agents_file, payload)
-            self._record_file_sync(conn, "agents.json", self.agents_file)
-            self._checkpoint_wal(conn)
-        return str(self.agents_file)
-
-    def export_thread(self, thread_id: int) -> str:
-        with self._get_connection() as conn:
-            t_row = conn.execute("SELECT * FROM threads WHERE id = ?", (thread_id,)).fetchone()
-            if not t_row:
-                raise ValueError(f"Thread #{thread_id} not found.")
-            p_rows = conn.execute(
-                "SELECT * FROM posts WHERE thread_id = ? ORDER BY id ASC",
-                (thread_id,),
-            ).fetchall()
-            thread_dict = dict(t_row)
-            thread_dict["posts"] = [dict(r) for r in p_rows]
-            fname = f"thread_{thread_id:04d}.json"
-            fpath = self.threads_dir / fname
-            atomic_write_json(fpath, thread_dict)
-            self._record_file_sync(conn, f"thread:{fname}", fpath)
-            self._checkpoint_wal(conn)
-        return str(fpath)
-
-    def export_all(self) -> Dict[str, int]:
-        self.export_teams()
-        self.export_agents()
-        with self._get_connection() as conn:
-            t_ids = [r["id"] for r in conn.execute("SELECT id FROM threads ORDER BY id ASC").fetchall()]
-            expected_names = {f"thread_{tid:04d}.json" for tid in t_ids}
-            for existing in self.threads_dir.glob("thread_*.json"):
-                if existing.name not in expected_names:
-                    existing.unlink()
-                    conn.execute("DELETE FROM sync_state WHERE file_key = ?", (f"thread:{existing.name}",))
-            a_count = conn.execute("SELECT COUNT(*) FROM agents").fetchone()[0]
-            t_count = conn.execute("SELECT COUNT(*) FROM teams").fetchone()[0]
-        for tid in t_ids:
-            self.export_thread(tid)
-        return {"teams": t_count, "agents": a_count, "threads": len(t_ids)}
-
-    def restore(self) -> Dict[str, int]:
-        with self._get_connection() as conn:
-            res = self._reconcile_from_disk(conn)
-            self._checkpoint_wal(conn)
-            return res
+            for c_slug in children:
+                if c_slug not in seen:
+                    seen.add(c_slug)
+                    descendants.append(c_slug)
+                    queue.append(c_slug)
+        return descendants
 
     # ------------------------------------------------------------------
     # Org Graph & Team / Role Scaffolding
     # ------------------------------------------------------------------
-
-    def _get_team_lineage_conn(self, conn: sqlite3.Connection, slug: str) -> List[sqlite3.Row]:
-        chain: List[sqlite3.Row] = []
-        seen: Set[str] = set()
-        curr: Optional[str] = slug.strip().lower()
-        while curr:
-            if curr in seen:
-                raise RuntimeError(f"Cycle detected in team lineage at '{curr}'.")
-            seen.add(curr)
-            row = conn.execute("SELECT * FROM teams WHERE slug = ? COLLATE NOCASE", (curr,)).fetchone()
-            if not row:
-                raise ValueError(f"Team '{curr}' does not exist.")
-            chain.append(row)
-            curr = row["parent_team"].lower() if row["parent_team"] else None
-        chain.reverse()
-        return chain
-
-    def _get_descendants_conn(self, conn: sqlite3.Connection, slug: str) -> List[sqlite3.Row]:
-        descendants: List[sqlite3.Row] = []
-        queue = [slug.strip().lower()]
-        seen: Set[str] = {slug.strip().lower()}
-        while queue:
-            parent = queue.pop(0)
-            children = conn.execute(
-                "SELECT * FROM teams WHERE parent_team = ? COLLATE NOCASE ORDER BY slug ASC",
-                (parent,),
-            ).fetchall()
-            for child in children:
-                c_slug = child["slug"].lower()
-                if c_slug not in seen:
-                    seen.add(c_slug)
-                    descendants.append(child)
-                    queue.append(c_slug)
-        return descendants
-
-    def _write_team_manifest_on_disk(self, team_row: Mapping[str, Any], layer: int) -> None:
-        team_dir = self._abs_from_rel(team_row["hive_path"])
-        if team_dir.is_dir():
-            manifest = {
-                "created_at": team_row["created_at"],
-                "default_model": team_row["default_model"],
-                "hive_path": team_row["hive_path"],
-                "layer": layer,
-                "mission": team_row["mission"],
-                "name": team_row["name"],
-                "parent_team": team_row["parent_team"],
-                "slug": team_row["slug"],
-                "status": team_row["status"],
-                "updated_at": team_row["updated_at"],
-                "workspace_mode": team_row["workspace_mode"],
-            }
-            atomic_write_json(team_dir / "team.json", manifest)
 
     def register_prime(self, conversation_id: str) -> Dict[str, Any]:
         cid = conversation_id.strip()
         if not cid:
             raise ValueError("conversation_id cannot be empty for register-prime.")
         iso = now_iso()
-        with self._get_connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO agents (
-                    agent_id, team_slug, role, title, responsibilities,
-                    model, write_tools, mcp_tools, conversation_id,
-                    status, role_path, last_seen, registered_at
-                )
-                VALUES (?, NULL, 'prime', 'ULTRON PRIME',
-                        'Ultimate Leader of Teams, Roles, and Operational Nodes',
-                        'inherit', 1, 1, ?, 'active', 'ultron/core', ?, ?)
-                ON CONFLICT(agent_id) DO UPDATE SET
-                    conversation_id = excluded.conversation_id,
-                    status = 'active',
-                    last_seen = excluded.last_seen
-                """,
-                (PRIME_ID, cid, iso, iso),
-            )
-        self.export_agents()
-        return self.get_agent(PRIME_ID) or {}
+        with self._lock(exclusive=True):
+            sessions = self._read_sessions_unlocked()
+            prev = sessions["agents"].get(PRIME_ID, {})
+            sessions["agents"][PRIME_ID] = {
+                "conversation_id": cid,
+                "last_seen": iso,
+                "registered_at": prev.get("registered_at") or iso,
+                "status": "active",
+            }
+            self._write_sessions_unlocked(sessions)
+            _, agents_by_id, _ = self._scan_state_unlocked()
+            return agents_by_id[PRIME_ID]
 
     def create_team(
         self,
@@ -863,7 +485,9 @@ class UltronCore:
 
         model = default_model.strip().lower()
         if model not in VALID_MODELS:
-            raise ValueError(f"Invalid model '{default_model}'. Must be one of {sorted(VALID_MODELS)}.")
+            raise ValueError(
+                f"Invalid model '{default_model}'. Must be one of {sorted(VALID_MODELS)}."
+            )
         ws = workspace_mode.strip().lower()
         if ws not in VALID_WORKSPACES:
             raise ValueError(
@@ -873,23 +497,26 @@ class UltronCore:
         clean_parent = validate_slug(parent_team, "parent_team") if parent_team else None
         iso = now_iso()
 
-        with self._get_connection() as conn:
-            existing = conn.execute(
-                "SELECT slug FROM teams WHERE slug = ? COLLATE NOCASE", (clean_slug,)
-            ).fetchone()
-            if existing:
+        with self._lock(exclusive=True):
+            teams_by_slug, _, sessions = self._scan_state_unlocked()
+            if clean_slug in teams_by_slug:
                 raise ValueError(f"Team '{clean_slug}' already exists.")
 
+            stale_keys = [
+                k for k in sessions["agents"] if k.startswith(f"{clean_slug}/")
+            ]
+            if stale_keys:
+                for k in stale_keys:
+                    sessions["agents"].pop(k, None)
+                self._write_sessions_unlocked(sessions)
+
             if clean_parent:
-                parent_row = conn.execute(
-                    "SELECT * FROM teams WHERE slug = ? COLLATE NOCASE", (clean_parent,)
-                ).fetchone()
-                if not parent_row:
+                parent_obj = teams_by_slug.get(clean_parent)
+                if not parent_obj:
                     raise ValueError(f"Parent team '{clean_parent}' does not exist.")
-                parent_abs = self._abs_from_rel(parent_row["hive_path"])
+                parent_abs = self._abs_from_rel(parent_obj["hive_path"])
                 team_dir = parent_abs / "teams" / clean_slug
-                lineage_rows = self._get_team_lineage_conn(conn, clean_parent)
-                layer = len(lineage_rows) + 1
+                layer = parent_obj["layer"] + 1
             else:
                 team_dir = self.hive_dir / clean_slug
                 layer = 1
@@ -906,7 +533,6 @@ class UltronCore:
                 or f"Coordinate internal execution for '{clean_name}' ({clean_slug}) and serve as sole external communication bridge along the ULTRON hierarchy."
             )
 
-            # Scaffold Hive folders & templates on disk
             (team_dir / "teams").mkdir(parents=True, exist_ok=True)
             (lead_dir / "workspace").mkdir(parents=True, exist_ok=True)
             (team_dir / "teams" / ".gitkeep").touch(exist_ok=True)
@@ -916,8 +542,8 @@ class UltronCore:
                 self._load_template("team_agents.md.tmpl"),
                 {
                     "TEAM_NAME": clean_name,
-                    "TEAM_SLUG": clean_slug,
                     "TEAM_MISSION": clean_mission,
+                    "TEAM_SLUG": clean_slug,
                     "PARENT_TEAM_DISPLAY": clean_parent or f"{PRIME_ID} (Layer 1 root)",
                     "HIVE_PATH": hive_rel,
                 },
@@ -942,36 +568,35 @@ class UltronCore:
             if not lead_agents_path.exists():
                 lead_agents_path.write_text(lead_role_md, encoding="utf-8")
 
-            conn.execute(
-                """
-                INSERT INTO teams (
-                    slug, name, parent_team, mission, status,
-                    hive_path, default_model, workspace_mode, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, 'disabled', ?, ?, ?, ?, ?)
-                """,
-                (clean_slug, clean_name, clean_parent, clean_mission, hive_rel, model, ws, iso, iso),
-            )
-            conn.execute(
-                """
-                INSERT INTO agents (
-                    agent_id, team_slug, role, title, responsibilities,
-                    model, write_tools, mcp_tools, conversation_id,
-                    status, role_path, last_seen, registered_at
-                )
-                VALUES (?, ?, 'lead', ?, ?, ?, 1, 1, '', 'disabled', ?, ?, ?)
-                """,
-                (lead_id, clean_slug, lead_title, lead_resp, model, lead_rel, iso, iso),
-            )
+            team_manifest = {
+                "created_at": iso,
+                "default_model": model,
+                "hive_path": hive_rel,
+                "layer": layer,
+                "mission": clean_mission,
+                "name": clean_name,
+                "parent_team": clean_parent,
+                "slug": clean_slug,
+                "updated_at": iso,
+                "workspace_mode": ws,
+            }
+            role_manifest = {
+                "agent_id": lead_id,
+                "mcp_tools": True,
+                "model": model,
+                "registered_at": iso,
+                "responsibilities": lead_resp,
+                "role": "lead",
+                "role_path": lead_rel,
+                "team_slug": clean_slug,
+                "title": lead_title,
+                "write_tools": True,
+            }
+            atomic_write_json(team_dir / "team.json", team_manifest)
+            atomic_write_json(lead_dir / "role.json", role_manifest)
 
-            t_row = conn.execute(
-                "SELECT * FROM teams WHERE slug = ? COLLATE NOCASE", (clean_slug,)
-            ).fetchone()
-            self._write_team_manifest_on_disk(t_row, layer)
-
-        self.export_teams()
-        self.export_agents()
-        return self.get_team(clean_slug) or {}
+            teams_after, _, _ = self._scan_state_unlocked()
+            return teams_after[clean_slug]
 
     def add_role(
         self,
@@ -997,26 +622,25 @@ class UltronCore:
         aid = f"{clean_team}/{clean_role}"
         iso = now_iso()
 
-        with self._get_connection() as conn:
-            t_row = conn.execute(
-                "SELECT * FROM teams WHERE slug = ? COLLATE NOCASE", (clean_team,)
-            ).fetchone()
-            if not t_row:
+        with self._lock(exclusive=True):
+            teams_by_slug, agents_by_id, sessions = self._scan_state_unlocked()
+            team_obj = teams_by_slug.get(clean_team)
+            if not team_obj:
                 raise ValueError(f"Team '{clean_team}' does not exist.")
-
-            existing = conn.execute(
-                "SELECT agent_id FROM agents WHERE agent_id = ? COLLATE NOCASE", (aid,)
-            ).fetchone()
-            if existing:
+            if aid in agents_by_id:
                 raise ValueError(f"Role '{aid}' already exists.")
 
-            chosen_model = (model or t_row["default_model"]).strip().lower()
+            if aid in sessions["agents"]:
+                sessions["agents"].pop(aid, None)
+                self._write_sessions_unlocked(sessions)
+
+            chosen_model = (model or team_obj["default_model"]).strip().lower()
             if chosen_model not in VALID_MODELS:
                 raise ValueError(
                     f"Invalid model '{chosen_model}'. Must be one of {sorted(VALID_MODELS)}."
                 )
 
-            team_dir = self._abs_from_rel(t_row["hive_path"])
+            team_dir = self._abs_from_rel(team_obj["hive_path"])
             role_dir = team_dir / "roles" / clean_role
             role_rel = self._rel_posix(role_dir)
             ws_rel = self._rel_posix(role_dir / "workspace")
@@ -1029,7 +653,7 @@ class UltronCore:
                 {
                     "ROLE_TITLE": clean_title,
                     "AGENT_ID": aid,
-                    "TEAM_NAME": t_row["name"],
+                    "TEAM_NAME": team_obj["name"],
                     "TEAM_SLUG": clean_team,
                     "ROLE_SLUG": clean_role,
                     "ROLE_WORKSPACE_PATH": ws_rel,
@@ -1040,195 +664,143 @@ class UltronCore:
             if not role_agents_path.exists():
                 role_agents_path.write_text(member_md, encoding="utf-8")
 
-            conn.execute(
-                """
-                INSERT INTO agents (
-                    agent_id, team_slug, role, title, responsibilities,
-                    model, write_tools, mcp_tools, conversation_id,
-                    status, role_path, last_seen, registered_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 'disabled', ?, ?, ?)
-                """,
-                (
-                    aid,
-                    clean_team,
-                    clean_role,
-                    clean_title,
-                    clean_resp,
-                    chosen_model,
-                    1 if write_tools else 0,
-                    1 if mcp_tools else 0,
-                    role_rel,
-                    iso,
-                    iso,
-                ),
-            )
-            conn.execute(
-                "UPDATE teams SET updated_at = ? WHERE slug = ? COLLATE NOCASE",
-                (iso, clean_team),
-            )
+            role_manifest = {
+                "agent_id": aid,
+                "mcp_tools": bool(mcp_tools),
+                "model": chosen_model,
+                "registered_at": iso,
+                "responsibilities": clean_resp,
+                "role": clean_role,
+                "role_path": role_rel,
+                "team_slug": clean_team,
+                "title": clean_title,
+                "write_tools": bool(write_tools),
+            }
+            atomic_write_json(role_dir / "role.json", role_manifest)
 
-        self.export_teams()
-        self.export_agents()
-        return self.get_agent(aid) or {}
+            # Update team.json updated_at
+            t_manifest_path = team_dir / "team.json"
+            t_manifest = json.loads(t_manifest_path.read_text(encoding="utf-8"))
+            t_manifest["updated_at"] = iso
+            atomic_write_json(t_manifest_path, t_manifest)
+
+            _, agents_after, _ = self._scan_state_unlocked()
+            return agents_after[aid]
 
     def get_team(self, slug: str) -> Optional[Dict[str, Any]]:
         clean = validate_slug(slug, "team slug")
-        with self._get_connection() as conn:
-            row = conn.execute(
-                "SELECT * FROM teams WHERE slug = ? COLLATE NOCASE", (clean,)
-            ).fetchone()
-            if not row:
-                return None
-            lineage = self._get_team_lineage_conn(conn, clean)
-            roles = conn.execute(
-                "SELECT * FROM agents WHERE team_slug = ? COLLATE NOCASE ORDER BY CASE WHEN role = 'lead' THEN 0 ELSE 1 END, role ASC",
-                (clean,),
-            ).fetchall()
-            children = conn.execute(
-                "SELECT slug, name, status FROM teams WHERE parent_team = ? COLLATE NOCASE ORDER BY slug ASC",
-                (clean,),
-            ).fetchall()
-            out = self._serialize_team_row(row, len(lineage))
-            out["lineage"] = [r["slug"] for r in lineage]
-            out["roles"] = [self._serialize_agent_row(r) for r in roles]
-            out["child_teams"] = [dict(c) for c in children]
-            return out
+        with self._lock(exclusive=False):
+            teams_by_slug, _, _ = self._scan_state_unlocked()
+            return teams_by_slug.get(clean)
 
     def list_teams(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
-        with self._get_connection() as conn:
-            query = "SELECT slug FROM teams"
-            params: List[Any] = []
-            if status:
-                st = status.strip().lower()
-                if st not in VALID_TEAM_STATUSES:
-                    raise ValueError(f"Invalid status '{status}'.")
-                query += " WHERE status = ?"
-                params.append(st)
-            slugs = [r["slug"] for r in conn.execute(query, params).fetchall()]
+        if status:
+            st = status.strip().lower()
+            if st not in VALID_TEAM_STATUSES:
+                raise ValueError(f"Invalid status '{status}'.")
+        else:
+            st = None
 
-        teams = [t for s in slugs if (t := self.get_team(s)) is not None]
-        teams.sort(key=lambda t: (t["layer"], t["slug"]))
-        return teams
+        with self._lock(exclusive=False):
+            teams_by_slug, _, _ = self._scan_state_unlocked()
+            teams = [
+                t
+                for t in teams_by_slug.values()
+                if st is None or t["status"] == st
+            ]
+            teams.sort(key=lambda item: (item["layer"], item["slug"]))
+            return teams
 
     def get_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
         aid = normalize_agent_id(agent_id)
-        with self._get_connection() as conn:
-            row = conn.execute(
-                "SELECT * FROM agents WHERE agent_id = ? COLLATE NOCASE", (aid,)
-            ).fetchone()
-            return self._serialize_agent_row(row) if row else None
+        with self._lock(exclusive=False):
+            _, agents_by_id, _ = self._scan_state_unlocked()
+            return agents_by_id.get(aid)
 
     def list_agents(
         self, team_slug: Optional[str] = None, status: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        query = "SELECT * FROM agents WHERE 1=1"
-        params: List[Any] = []
-        if team_slug:
-            query += " AND team_slug = ? COLLATE NOCASE"
-            params.append(validate_slug(team_slug, "team slug"))
+        clean_team = validate_slug(team_slug, "team slug") if team_slug else None
         if status:
             st = status.strip().lower()
             if st not in VALID_AGENT_STATUSES:
                 raise ValueError(f"Invalid status '{status}'.")
-            query += " AND status = ?"
-            params.append(st)
+        else:
+            st = None
 
-        with self._get_connection() as conn:
-            rows = conn.execute(query, params).fetchall()
-        ordered = sorted(
-            rows,
-            key=lambda r: (
-                0 if r["agent_id"].lower() == PRIME_ID else 1,
-                r["team_slug"] or "",
-                0 if r["role"] == "lead" else 1,
-                r["role"],
-            ),
-        )
-        return [self._serialize_agent_row(r) for r in ordered]
+        with self._lock(exclusive=False):
+            _, agents_by_id, _ = self._scan_state_unlocked()
+            items = [
+                a
+                for a in agents_by_id.values()
+                if (clean_team is None or a["team_slug"] == clean_team)
+                and (st is None or a["status"] == st)
+            ]
+            items.sort(
+                key=lambda r: (
+                    0 if r["agent_id"] == PRIME_ID else 1,
+                    r["team_slug"] or "",
+                    0 if r["role"] == "lead" else 1,
+                    r["role"],
+                )
+            )
+            return items
 
     # ------------------------------------------------------------------
-    # Lifecycle Operations: Render Spawn, Activate, Prepare-Disable, Disable
+    # Lifecycle Operations: Contacts, Render-Spawn, Activate, Disable, Remove
     # ------------------------------------------------------------------
 
     def get_contacts(self, agent_id: str) -> Dict[str, Any]:
         aid = normalize_agent_id(agent_id)
-        with self._get_connection() as conn:
-            agent = conn.execute(
-                "SELECT * FROM agents WHERE agent_id = ? COLLATE NOCASE", (aid,)
-            ).fetchone()
-            if not agent:
+        with self._lock(exclusive=False):
+            teams_by_slug, agents_by_id, _ = self._scan_state_unlocked()
+            agent = agents_by_id.get(aid)
+            if not agent and aid != PRIME_ID:
                 raise ValueError(f"Agent '{aid}' is not registered.")
 
-            prime_row = conn.execute(
-                "SELECT * FROM agents WHERE agent_id = ? COLLATE NOCASE", (PRIME_ID,)
-            ).fetchone()
-            prime_info = self._serialize_agent_row(prime_row) if prime_row else None
+            prime_info = agents_by_id.get(PRIME_ID)
 
             if aid == PRIME_ID:
-                l1_leads = conn.execute(
-                    """
-                    SELECT a.* FROM agents a
-                    JOIN teams t ON a.team_slug = t.slug
-                    WHERE t.parent_team IS NULL AND a.role = 'lead'
-                    ORDER BY t.slug ASC
-                    """
-                ).fetchall()
+                l1_leads = [
+                    agents_by_id[f"{t['slug']}/lead"]
+                    for t in sorted(teams_by_slug.values(), key=lambda x: x["slug"])
+                    if t["parent_team"] is None and f"{t['slug']}/lead" in agents_by_id
+                ]
                 return {
                     "agent_id": PRIME_ID,
                     "role": "prime",
                     "reports_to": "user",
-                    "layer1_team_leads": [self._serialize_agent_row(r) for r in l1_leads],
+                    "layer1_team_leads": l1_leads,
                 }
 
+            assert agent is not None
             t_slug = agent["team_slug"]
-            team = conn.execute(
-                "SELECT * FROM teams WHERE slug = ? COLLATE NOCASE", (t_slug,)
-            ).fetchone()
-            lineage = self._get_team_lineage_conn(conn, t_slug)
-            layer = len(lineage)
+            team = teams_by_slug[t_slug]
+            layer = team["layer"]
 
             if agent["role"] != "lead":
-                lead_row = conn.execute(
-                    "SELECT * FROM agents WHERE agent_id = ? COLLATE NOCASE",
-                    (f"{t_slug}/lead",),
-                ).fetchone()
                 return {
                     "agent_id": aid,
                     "team_slug": t_slug,
                     "layer": layer,
                     "role": agent["role"],
-                    "reports_to": self._serialize_agent_row(lead_row) if lead_row else None,
+                    "reports_to": agents_by_id.get(f"{t_slug}/lead"),
                     "direct_peers_allowed": False,
                     "note": f"Coordinate and escalate strictly through your Team Lead ('{t_slug}/lead').",
                 }
 
-            # Team Lead routing
             if team["parent_team"]:
-                parent_lead_id = f"{team['parent_team'].lower()}/lead"
-                superior_row = conn.execute(
-                    "SELECT * FROM agents WHERE agent_id = ? COLLATE NOCASE",
-                    (parent_lead_id,),
-                ).fetchone()
-                superior = self._serialize_agent_row(superior_row) if superior_row else None
+                superior = agents_by_id.get(f"{team['parent_team']}/lead")
             else:
                 superior = prime_info
 
-            teammates = conn.execute(
-                "SELECT * FROM agents WHERE team_slug = ? COLLATE NOCASE AND role != 'lead' ORDER BY role ASC",
-                (t_slug,),
-            ).fetchall()
-            child_leads = conn.execute(
-                """
-                SELECT a.* FROM agents a
-                JOIN teams ct ON a.team_slug = ct.slug
-                WHERE ct.parent_team = ? COLLATE NOCASE AND a.role = 'lead'
-                ORDER BY ct.slug ASC
-                """,
-                (t_slug,),
-            ).fetchall()
-
-            parent_disabled = bool(superior and superior["status"] != "active")
+            teammates = [r for r in team["roles"] if r["role"] != "lead"]
+            child_leads = [
+                agents_by_id[f"{ct['slug']}/lead"]
+                for ct in team["child_teams"]
+                if f"{ct['slug']}/lead" in agents_by_id
+            ]
+            parent_disabled = bool(superior is None or superior["status"] != "active")
             return {
                 "agent_id": aid,
                 "team_slug": t_slug,
@@ -1237,8 +809,8 @@ class UltronCore:
                 "reports_to": superior,
                 "parent_disabled_warning": parent_disabled,
                 "prime_fallback": prime_info if parent_disabled else None,
-                "team_members": [self._serialize_agent_row(r) for r in teammates],
-                "child_team_leads": [self._serialize_agent_row(r) for r in child_leads],
+                "team_members": teammates,
+                "child_team_leads": child_leads,
             }
 
     def render_spawn(
@@ -1250,31 +822,28 @@ class UltronCore:
         clean_team = validate_slug(team_slug, "team slug")
         clean_role = validate_role_slug(role) if role else None
 
-        with self._get_connection() as conn:
-            team = conn.execute(
-                "SELECT * FROM teams WHERE slug = ? COLLATE NOCASE", (clean_team,)
-            ).fetchone()
+        with self._lock(exclusive=False):
+            teams_by_slug, _, _ = self._scan_state_unlocked()
+            team = teams_by_slug.get(clean_team)
             if not team:
                 raise ValueError(f"Team '{clean_team}' does not exist.")
 
-            lineage = self._get_team_lineage_conn(conn, clean_team)
-            layer = len(lineage)
-            lineage_display = " -> ".join([PRIME_ID, *[r["slug"] for r in lineage]])
+            layer = team["layer"]
+            lineage_slugs: List[str] = team["lineage"]
+            lineage_display = " -> ".join([PRIME_ID, *lineage_slugs])
 
-            query = "SELECT * FROM agents WHERE team_slug = ? COLLATE NOCASE"
-            params: List[Any] = [clean_team]
-            if clean_role:
-                query += " AND role = ? COLLATE NOCASE"
-                params.append(clean_role)
-            query += " ORDER BY CASE WHEN role = 'lead' THEN 0 ELSE 1 END, role ASC"
-            role_rows = conn.execute(query, params).fetchall()
-            if not role_rows:
+            role_objs = [
+                r
+                for r in team["roles"]
+                if clean_role is None or r["role"] == clean_role
+            ]
+            if not role_objs:
                 target = f"{clean_team}/{clean_role}" if clean_role else clean_team
                 raise ValueError(f"No roles found for '{target}'.")
 
-            # Gather inherited team charters from Layer 1 down to this team
             charter_blocks: List[str] = []
-            for anc in lineage:
+            for anc_slug in lineage_slugs:
+                anc = teams_by_slug[anc_slug]
                 anc_dir = self._abs_from_rel(anc["hive_path"])
                 anc_agents_file = anc_dir / "AGENTS.md"
                 if anc_agents_file.is_file():
@@ -1282,27 +851,17 @@ class UltronCore:
                     charter_blocks.append(
                         f"### [{anc['slug']}] (`{anc['hive_path']}/AGENTS.md`)\n{content}"
                     )
-            inherited_charters = "\n\n".join(charter_blocks) if charter_blocks else "(No team charters found)"
+            inherited_charters = (
+                "\n\n".join(charter_blocks) if charter_blocks else "(No team charters found)"
+            )
 
-            teammate_ids = [
-                r["agent_id"]
-                for r in conn.execute(
-                    "SELECT agent_id FROM agents WHERE team_slug = ? COLLATE NOCASE AND role != 'lead' ORDER BY role ASC",
-                    (clean_team,),
-                ).fetchall()
-            ]
-            child_lead_ids = [
-                f"{r['slug']}/lead"
-                for r in conn.execute(
-                    "SELECT slug FROM teams WHERE parent_team = ? COLLATE NOCASE ORDER BY slug ASC",
-                    (clean_team,),
-                ).fetchall()
-            ]
+            teammate_ids = [r["agent_id"] for r in team["roles"] if r["role"] != "lead"]
+            child_lead_ids = [f"{ct['slug']}/lead" for ct in team["child_teams"]]
 
         spawn_tmpl = self._load_template("spawn_prompt.md.tmpl")
         specs: List[Dict[str, Any]] = []
 
-        for r in role_rows:
+        for r in role_objs:
             aid = r["agent_id"]
             r_slug = r["role"]
             role_dir = self._abs_from_rel(r["role_path"])
@@ -1315,9 +874,19 @@ class UltronCore:
             )
 
             if r_slug == "lead":
-                superior_id = f"{team['parent_team']}/lead" if team["parent_team"] else PRIME_ID
-                members_str = ", ".join(f"`{m}`" for m in teammate_ids) if teammate_ids else "(none provisioned yet)"
-                children_str = ", ".join(f"`{c}`" for c in child_lead_ids) if child_lead_ids else "(none)"
+                superior_id = (
+                    f"{team['parent_team']}/lead" if team["parent_team"] else PRIME_ID
+                )
+                members_str = (
+                    ", ".join(f"`{m}`" for m in teammate_ids)
+                    if teammate_ids
+                    else "(none provisioned yet)"
+                )
+                children_str = (
+                    ", ".join(f"`{c}`" for c in child_lead_ids)
+                    if child_lead_ids
+                    else "(none)"
+                )
                 routing_summary = (
                     f"- **Role Type:** Team Leader (`{aid}`)\n"
                     f"- **Report & Escalate UP to:** `{superior_id}`\n"
@@ -1411,60 +980,38 @@ class UltronCore:
             raise ValueError("conversation_id cannot be empty.")
 
         iso = now_iso()
-        with self._get_connection() as conn:
-            a_row = conn.execute(
-                "SELECT * FROM agents WHERE agent_id = ? COLLATE NOCASE", (aid,)
-            ).fetchone()
-            if not a_row:
+        with self._lock(exclusive=True):
+            teams_by_slug, agents_by_id, sessions = self._scan_state_unlocked()
+            a_obj = agents_by_id.get(aid)
+            if not a_obj:
                 raise ValueError(f"Agent '{aid}' does not exist.")
-            t_slug = a_row["team_slug"]
-            t_row = conn.execute(
-                "SELECT * FROM teams WHERE slug = ? COLLATE NOCASE", (t_slug,)
-            ).fetchone()
+            t_slug = a_obj["team_slug"]
+            t_obj = teams_by_slug[t_slug]
 
-            if t_row["parent_team"] and not allow_detached:
-                p_row = conn.execute(
-                    "SELECT status FROM teams WHERE slug = ? COLLATE NOCASE",
-                    (t_row["parent_team"],),
-                ).fetchone()
-                if not p_row or p_row["status"] != "active":
+            if t_obj["parent_team"] and not allow_detached:
+                parent_obj = teams_by_slug.get(t_obj["parent_team"])
+                if not parent_obj or parent_obj["status"] != "active":
                     raise ValueError(
-                        f"Cannot activate '{aid}': parent team '{t_row['parent_team']}' is disabled. "
-                        f"Activate '{t_row['parent_team']}' first or pass --allow-detached."
+                        f"Cannot activate '{aid}': parent team '{t_obj['parent_team']}' is disabled. "
+                        f"Activate '{t_obj['parent_team']}' first or pass --allow-detached."
                     )
 
-            if a_row["role"] != "lead":
-                lead_row = conn.execute(
-                    "SELECT status FROM agents WHERE agent_id = ? COLLATE NOCASE",
-                    (f"{t_slug}/lead",),
-                ).fetchone()
-                if (not lead_row or lead_row["status"] != "active") and not allow_detached:
+            if a_obj["role"] != "lead" and not allow_detached:
+                lead_obj = agents_by_id.get(f"{t_slug}/lead")
+                if not lead_obj or lead_obj["status"] != "active":
                     raise ValueError(
                         f"Cannot activate specialist '{aid}' while Team Lead '{t_slug}/lead' is disabled. "
                         f"Activate '{t_slug}/lead' first (or use activate-team)."
                     )
 
-            conn.execute(
-                """
-                UPDATE agents
-                SET conversation_id = ?, status = 'active', last_seen = ?
-                WHERE agent_id = ? COLLATE NOCASE
-                """,
-                (cid, iso, aid),
-            )
-            conn.execute(
-                "UPDATE teams SET status = 'active', updated_at = ? WHERE slug = ? COLLATE NOCASE",
-                (iso, t_slug),
-            )
-            lineage = self._get_team_lineage_conn(conn, t_slug)
-            updated_team = conn.execute(
-                "SELECT * FROM teams WHERE slug = ? COLLATE NOCASE", (t_slug,)
-            ).fetchone()
-            self._write_team_manifest_on_disk(updated_team, len(lineage))
-
-        self.export_teams()
-        self.export_agents()
-        return self.get_agent(aid) or {}
+            sessions["agents"][aid] = {
+                "conversation_id": cid,
+                "last_seen": iso,
+                "status": "active",
+            }
+            self._write_sessions_unlocked(sessions)
+            _, agents_after, _ = self._scan_state_unlocked()
+            return agents_after[aid]
 
     def activate_team(
         self,
@@ -1485,37 +1032,30 @@ class UltronCore:
             if "/" in key:
                 norm_id = normalize_agent_id(key)
                 if norm_id.split("/", 1)[0] != clean_team:
-                    raise ValueError(f"Agent '{norm_id}' does not belong to team '{clean_team}'.")
+                    raise ValueError(
+                        f"Agent '{norm_id}' does not belong to team '{clean_team}'."
+                    )
                 r_slug = norm_id.split("/", 1)[1]
             else:
                 r_slug = validate_role_slug(key)
             normalized_map[r_slug] = cid
 
         iso = now_iso()
-        with self._get_connection() as conn:
-            t_row = conn.execute(
-                "SELECT * FROM teams WHERE slug = ? COLLATE NOCASE", (clean_team,)
-            ).fetchone()
-            if not t_row:
+        with self._lock(exclusive=True):
+            teams_by_slug, _, sessions = self._scan_state_unlocked()
+            t_obj = teams_by_slug.get(clean_team)
+            if not t_obj:
                 raise ValueError(f"Team '{clean_team}' does not exist.")
 
-            if t_row["parent_team"] and not allow_detached:
-                p_row = conn.execute(
-                    "SELECT status FROM teams WHERE slug = ? COLLATE NOCASE",
-                    (t_row["parent_team"],),
-                ).fetchone()
-                if not p_row or p_row["status"] != "active":
+            if t_obj["parent_team"] and not allow_detached:
+                parent_obj = teams_by_slug.get(t_obj["parent_team"])
+                if not parent_obj or parent_obj["status"] != "active":
                     raise ValueError(
-                        f"Cannot activate team '{clean_team}': parent team '{t_row['parent_team']}' is disabled. "
-                        f"Activate '{t_row['parent_team']}' first or pass --allow-detached."
+                        f"Cannot activate team '{clean_team}': parent team '{t_obj['parent_team']}' is disabled. "
+                        f"Activate '{t_obj['parent_team']}' first or pass --allow-detached."
                     )
 
-            existing_roles = {
-                r["role"].lower(): r
-                for r in conn.execute(
-                    "SELECT * FROM agents WHERE team_slug = ? COLLATE NOCASE", (clean_team,)
-                ).fetchall()
-            }
+            existing_roles = {r["role"]: r for r in t_obj["roles"]}
             unknown = sorted(set(normalized_map.keys()) - set(existing_roles.keys()))
             if unknown:
                 raise ValueError(f"Unknown role(s) for team '{clean_team}': {unknown}")
@@ -1523,163 +1063,144 @@ class UltronCore:
             lead_will_be_active = (
                 "lead" in normalized_map or existing_roles["lead"]["status"] == "active"
             )
-            if not lead_will_be_active and not partial:
+            if not lead_will_be_active and not allow_detached:
                 raise ValueError(
-                    f"Team activation for '{clean_team}' must include 'lead' UUID (or 'lead' must already be active)."
+                    f"Team activation for '{clean_team}' must include 'lead' UUID (or 'lead' must already be active), "
+                    f"or pass --allow-detached."
+                )
+
+            missing_roles = sorted(
+                r_slug
+                for r_slug, r_obj in existing_roles.items()
+                if r_slug not in normalized_map and r_obj["status"] != "active"
+            )
+            if missing_roles and not partial:
+                raise ValueError(
+                    f"Missing UUID(s) for role(s) {missing_roles} in team '{clean_team}'. "
+                    f"Provide all role UUIDs or pass --partial."
                 )
 
             for r_slug, cid in normalized_map.items():
-                conn.execute(
-                    """
-                    UPDATE agents
-                    SET conversation_id = ?, status = 'active', last_seen = ?
-                    WHERE agent_id = ? COLLATE NOCASE
-                    """,
-                    (cid, iso, f"{clean_team}/{r_slug}"),
-                )
+                sessions["agents"][f"{clean_team}/{r_slug}"] = {
+                    "conversation_id": cid,
+                    "last_seen": iso,
+                    "status": "active",
+                }
+            self._write_sessions_unlocked(sessions)
+            teams_after, _, _ = self._scan_state_unlocked()
+            return teams_after[clean_team]
 
-            conn.execute(
-                "UPDATE teams SET status = 'active', updated_at = ? WHERE slug = ? COLLATE NOCASE",
-                (iso, clean_team),
+    def _prepare_disable_unlocked(
+        self,
+        teams_by_slug: Mapping[str, Dict[str, Any]],
+        agents_by_id: Mapping[str, Dict[str, Any]],
+        clean_team: str,
+        cascade: bool,
+    ) -> Dict[str, Any]:
+        if clean_team not in teams_by_slug:
+            raise ValueError(f"Team '{clean_team}' does not exist.")
+
+        descendants = self._get_descendant_slugs(teams_by_slug, clean_team)
+        active_descendants = [
+            d for d in descendants if teams_by_slug[d]["status"] == "active"
+        ]
+        if active_descendants and not cascade:
+            raise ValueError(
+                f"Cannot disable team '{clean_team}': active child teams exist ({active_descendants}). "
+                f"Re-run with --cascade to disable the entire subtree."
             )
-            lineage = self._get_team_lineage_conn(conn, clean_team)
-            updated_team = conn.execute(
-                "SELECT * FROM teams WHERE slug = ? COLLATE NOCASE", (clean_team,)
-            ).fetchone()
-            self._write_team_manifest_on_disk(updated_team, len(lineage))
 
-        self.export_teams()
-        self.export_agents()
-        return self.get_team(clean_team) or {}
+        target_teams = [clean_team] + (descendants if cascade else [])
+        target_set = set(target_teams)
+        active_agents = [
+            {
+                "agent_id": a["agent_id"],
+                "conversation_id": a["conversation_id"],
+                "role": a["role"],
+                "team_slug": a["team_slug"],
+            }
+            for a in sorted(agents_by_id.values(), key=lambda x: x["agent_id"])
+            if a["team_slug"] in target_set and a["conversation_id"]
+        ]
+
+        uuids: List[str] = []
+        seen_uuids: Set[str] = set()
+        for item in active_agents:
+            cid = item["conversation_id"].strip()
+            if cid and cid not in seen_uuids:
+                seen_uuids.add(cid)
+                uuids.append(cid)
+
+        return {
+            "agents_to_kill": active_agents,
+            "cascade": cascade,
+            "conversation_ids_to_kill": uuids,
+            "team_slug": clean_team,
+            "teams_affected": target_teams,
+        }
 
     def prepare_disable(self, team_slug: str, cascade: bool = False) -> Dict[str, Any]:
         clean_team = validate_slug(team_slug, "team slug")
-        with self._get_connection() as conn:
-            t_row = conn.execute(
-                "SELECT * FROM teams WHERE slug = ? COLLATE NOCASE", (clean_team,)
-            ).fetchone()
-            if not t_row:
-                raise ValueError(f"Team '{clean_team}' does not exist.")
-
-            descendants = self._get_descendants_conn(conn, clean_team)
-            active_descendants = [d["slug"] for d in descendants if d["status"] == "active"]
-            if active_descendants and not cascade:
-                raise ValueError(
-                    f"Cannot disable team '{clean_team}': active child teams exist ({active_descendants}). "
-                    f"Re-run with --cascade to disable the entire subtree."
-                )
-
-            target_teams = [clean_team] + ([d["slug"].lower() for d in descendants] if cascade else [])
-            placeholders = ",".join("?" for _ in target_teams)
-            active_agents = conn.execute(
-                f"""
-                SELECT agent_id, team_slug, role, conversation_id
-                FROM agents
-                WHERE lower(team_slug) IN ({placeholders})
-                  AND conversation_id != ''
-                ORDER BY agent_id ASC
-                """,
-                target_teams,
-            ).fetchall()
-
-            uuids: List[str] = []
-            seen_uuids: Set[str] = set()
-            for r in active_agents:
-                cid = r["conversation_id"].strip()
-                if cid and cid not in seen_uuids:
-                    seen_uuids.add(cid)
-                    uuids.append(cid)
-
-            return {
-                "team_slug": clean_team,
-                "cascade": cascade,
-                "teams_affected": target_teams,
-                "agents_to_kill": [dict(r) for r in active_agents],
-                "conversation_ids_to_kill": uuids,
-            }
+        with self._lock(exclusive=False):
+            teams_by_slug, agents_by_id, _ = self._scan_state_unlocked()
+            return self._prepare_disable_unlocked(
+                teams_by_slug, agents_by_id, clean_team, cascade
+            )
 
     def disable_team(self, team_slug: str, cascade: bool = False) -> Dict[str, Any]:
-        plan = self.prepare_disable(team_slug, cascade=cascade)
-        target_teams = plan["teams_affected"]
+        clean_team = validate_slug(team_slug, "team slug")
         iso = now_iso()
-
-        with self._get_connection() as conn:
-            placeholders = ",".join("?" for _ in target_teams)
-            conn.execute(
-                f"""
-                UPDATE agents
-                SET conversation_id = '', status = 'disabled', last_seen = ?
-                WHERE lower(team_slug) IN ({placeholders})
-                """,
-                [iso, *target_teams],
+        with self._lock(exclusive=True):
+            teams_by_slug, agents_by_id, sessions = self._scan_state_unlocked()
+            plan = self._prepare_disable_unlocked(
+                teams_by_slug, agents_by_id, clean_team, cascade
             )
-            conn.execute(
-                f"""
-                UPDATE teams
-                SET status = 'disabled', updated_at = ?
-                WHERE lower(slug) IN ({placeholders})
-                """,
-                [iso, *target_teams],
-            )
-            for t_slug in target_teams:
-                lineage = self._get_team_lineage_conn(conn, t_slug)
-                t_row = conn.execute(
-                    "SELECT * FROM teams WHERE slug = ? COLLATE NOCASE", (t_slug,)
-                ).fetchone()
-                self._write_team_manifest_on_disk(t_row, len(lineage))
-
-        self.export_teams()
-        self.export_agents()
-        return plan
+            target_set = set(plan["teams_affected"])
+            for aid, a_obj in agents_by_id.items():
+                if a_obj["team_slug"] in target_set and aid in sessions["agents"]:
+                    sessions["agents"][aid] = {
+                        "conversation_id": "",
+                        "last_seen": iso,
+                        "status": "disabled",
+                    }
+            self._write_sessions_unlocked(sessions)
+            return plan
 
     def disable_agent(self, agent_id: str) -> Dict[str, Any]:
         aid = normalize_agent_id(agent_id)
         if aid == PRIME_ID:
             raise ValueError(f"Cannot disable '{PRIME_ID}'.")
         iso = now_iso()
-        with self._get_connection() as conn:
-            a_row = conn.execute(
-                "SELECT * FROM agents WHERE agent_id = ? COLLATE NOCASE", (aid,)
-            ).fetchone()
-            if not a_row:
+        with self._lock(exclusive=True):
+            teams_by_slug, agents_by_id, sessions = self._scan_state_unlocked()
+            a_obj = agents_by_id.get(aid)
+            if not a_obj:
                 raise ValueError(f"Agent '{aid}' does not exist.")
-            t_slug = a_row["team_slug"]
-            if a_row["role"] == "lead":
-                active_peers = conn.execute(
-                    """
-                    SELECT agent_id FROM agents
-                    WHERE team_slug = ? COLLATE NOCASE AND role != 'lead' AND status = 'active'
-                    """,
-                    (t_slug,),
-                ).fetchall()
+            t_slug = a_obj["team_slug"]
+            t_obj = teams_by_slug[t_slug]
+            if a_obj["role"] == "lead":
+                active_peers = [
+                    r["agent_id"]
+                    for r in t_obj["roles"]
+                    if r["role"] != "lead" and r["status"] == "active"
+                ]
                 if active_peers:
                     raise ValueError(
                         f"Cannot disable Team Lead '{aid}' while specialists are still active "
-                        f"({[r['agent_id'] for r in active_peers]}). Use 'disable-team {t_slug}' instead."
+                        f"({active_peers}). Use 'disable-team {t_slug}' instead."
                     )
-            old_uuid = a_row["conversation_id"]
-            conn.execute(
-                "UPDATE agents SET conversation_id = '', status = 'disabled', last_seen = ? WHERE agent_id = ? COLLATE NOCASE",
-                (iso, aid),
-            )
-            remaining = conn.execute(
-                "SELECT COUNT(*) FROM agents WHERE team_slug = ? COLLATE NOCASE AND status = 'active'",
-                (t_slug,),
-            ).fetchone()[0]
-            if remaining == 0:
-                conn.execute(
-                    "UPDATE teams SET status = 'disabled', updated_at = ? WHERE slug = ? COLLATE NOCASE",
-                    (iso, t_slug),
-                )
-                lineage = self._get_team_lineage_conn(conn, t_slug)
-                t_row = conn.execute(
-                    "SELECT * FROM teams WHERE slug = ? COLLATE NOCASE", (t_slug,)
-                ).fetchone()
-                self._write_team_manifest_on_disk(t_row, len(lineage))
-
-        self.export_teams()
-        self.export_agents()
-        return {"agent_id": aid, "previous_conversation_id": old_uuid, "status": "disabled"}
+            old_uuid = a_obj["conversation_id"]
+            sessions["agents"][aid] = {
+                "conversation_id": "",
+                "last_seen": iso,
+                "status": "disabled",
+            }
+            self._write_sessions_unlocked(sessions)
+            return {
+                "agent_id": aid,
+                "previous_conversation_id": old_uuid,
+                "status": "disabled",
+            }
 
     def remove_team(
         self,
@@ -1688,45 +1209,54 @@ class UltronCore:
         delete_files: bool = False,
     ) -> Dict[str, Any]:
         clean_team = validate_slug(team_slug, "team slug")
-        with self._get_connection() as conn:
-            t_row = conn.execute(
-                "SELECT * FROM teams WHERE slug = ? COLLATE NOCASE", (clean_team,)
-            ).fetchone()
-            if not t_row:
+        with self._lock(exclusive=True):
+            teams_by_slug, _, sessions = self._scan_state_unlocked()
+            t_obj = teams_by_slug.get(clean_team)
+            if not t_obj:
                 raise ValueError(f"Team '{clean_team}' does not exist.")
 
-            descendants = self._get_descendants_conn(conn, clean_team)
+            descendants = self._get_descendant_slugs(teams_by_slug, clean_team)
             if descendants and not cascade:
                 raise ValueError(
-                    f"Cannot remove team '{clean_team}': child teams exist ({[d['slug'] for d in descendants]}). "
+                    f"Cannot remove team '{clean_team}': child teams exist ({descendants}). "
                     f"Pass --cascade to remove the entire subtree."
                 )
 
-            target_rows = [t_row, *descendants]
-            active_any = [r["slug"] for r in target_rows if r["status"] == "active"]
+            target_slugs = [clean_team, *descendants]
+            active_any = [
+                s for s in target_slugs if teams_by_slug[s]["status"] == "active"
+            ]
             if active_any:
                 raise ValueError(
                     f"Cannot remove active team(s) {active_any}. Disable and kill live sessions first."
                 )
 
-            # Delete bottom-up so ON DELETE RESTRICT on parent_team is respected
-            for r in reversed(target_rows):
-                conn.execute("DELETE FROM teams WHERE slug = ? COLLATE NOCASE", (r["slug"],))
+            # Clean runtime session entries for removed teams
+            target_set = set(target_slugs)
+            for aid in list(sessions["agents"].keys()):
+                if "/" in aid and aid.split("/", 1)[0] in target_set:
+                    sessions["agents"].pop(aid, None)
+            self._write_sessions_unlocked(sessions)
 
-            root_hive_dir = self._abs_from_rel(t_row["hive_path"])
+            root_hive_dir = self._abs_from_rel(t_obj["hive_path"])
+            if delete_files:
+                if root_hive_dir.is_dir():
+                    shutil.rmtree(root_hive_dir)
+            else:
+                # Deregister team.json & role.json manifests while leaving AGENTS.md & workspace/ intact
+                for s in reversed(target_slugs):
+                    s_dir = self._abs_from_rel(teams_by_slug[s]["hive_path"])
+                    for r_json in (s_dir / "roles").glob("*/role.json"):
+                        r_json.unlink(missing_ok=True)
+                    (s_dir / "team.json").unlink(missing_ok=True)
 
-        if delete_files and root_hive_dir.is_dir():
-            shutil.rmtree(root_hive_dir)
-
-        self.export_teams()
-        self.export_agents()
-        return {
-            "removed_teams": [r["slug"] for r in target_rows],
-            "deleted_files": delete_files,
-        }
+            return {
+                "deleted_files": delete_files,
+                "removed_teams": target_slugs,
+            }
 
     # ------------------------------------------------------------------
-    # Board Operations with Visibility & Authorization Enforcement
+    # Append-Only JSONL Message Board (Conflict-Free via merge=union)
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -1748,52 +1278,215 @@ class UltronCore:
         return (viewer, False)
 
     @staticmethod
-    def _can_access_thread(viewer_id: str, unrestricted: bool, thread_row: Mapping[str, Any]) -> bool:
+    def _can_access_thread(
+        viewer_id: str, unrestricted: bool, thread_obj: Mapping[str, Any]
+    ) -> bool:
         if unrestricted or viewer_id == PRIME_ID:
             return True
-        vis = (thread_row["visibility"] or "team").lower()
+        vis = (thread_obj.get("visibility") or "team").lower()
         if vis == "global":
             return True
         viewer_team = viewer_id.split("/", 1)[0] if "/" in viewer_id else ""
         if vis == "team":
-            t_slug = (thread_row["team_slug"] or "").lower()
-            w_slug = (thread_row["with_team"] or "").lower()
+            t_slug = (thread_obj.get("team_slug") or "").lower()
+            w_slug = (thread_obj.get("with_team") or "").lower()
             return bool(viewer_team and viewer_team in {t_slug, w_slug})
         if vis == "personal":
-            owner = (thread_row["owner_agent"] or "").lower()
+            owner = (thread_obj.get("owner_agent") or "").lower()
             return viewer_id.lower() == owner
         return False
 
-    def _visibility_sql_clause(self, viewer_id: str, unrestricted: bool) -> Tuple[str, List[Any]]:
-        if unrestricted or viewer_id == PRIME_ID:
-            return ("1=1", [])
-        viewer_team = viewer_id.split("/", 1)[0]
-        clause = (
-            "(t.visibility = 'global' "
-            "OR (t.visibility = 'team' AND (lower(t.team_slug) = ? OR lower(t.with_team) = ?)) "
-            "OR (t.visibility = 'personal' AND lower(t.owner_agent) = ?))"
-        )
-        return (clause, [viewer_team, viewer_team, viewer_id])
+    def _resolve_thread_path_unlocked(self, thread_ref: str | int) -> Optional[Path]:
+        raw = str(thread_ref).strip()
+        if raw.startswith("#"):
+            raw = raw[1:].strip()
+        if not raw:
+            return None
+        clean = raw.lower()
 
-    def _resolve_author_and_touch(
-        self, conn: sqlite3.Connection, author: str, author_id: str, iso_time: str
+        exact = self.threads_dir / f"{clean}.jsonl"
+        if exact.is_file():
+            return exact
+
+        matches: List[Path] = []
+        if self.threads_dir.is_dir():
+            for fpath in sorted(self.threads_dir.glob("*.jsonl")):
+                stem = fpath.stem.lower()
+                short_hex = stem.rsplit("-", 1)[-1]
+                if (
+                    stem.startswith(clean)
+                    or stem.endswith(clean)
+                    or short_hex.startswith(clean)
+                ):
+                    matches.append(fpath)
+
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise ValueError(
+                f"Ambiguous thread reference '{thread_ref}': matches {[m.stem for m in matches]}."
+            )
+        return None
+
+    @staticmethod
+    def _fold_thread_jsonl(fpath: Path) -> Dict[str, Any]:
+        """
+        Deterministically fold append-only JSONL events into a materialized thread dict.
+        Sorting follow-up events by (created_at, event_id) makes Git `merge=union`
+        merges across branches 100% commutative and deterministic.
+        """
+        raw_lines = fpath.read_text(encoding="utf-8").splitlines()
+        events: List[Dict[str, Any]] = []
+        seen_event_ids: Set[str] = set()
+
+        for line_no, raw_line in enumerate(raw_lines, start=1):
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            try:
+                ev = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"Corrupt JSONL in '{fpath.name}' at line {line_no}: {exc}"
+                ) from exc
+            if not isinstance(ev, dict):
+                raise ValueError(
+                    f"Expected JSON object in '{fpath.name}' at line {line_no}."
+                )
+            ev_id = str(ev.get("event_id") or f"line-{line_no}")
+            if ev_id in seen_event_ids:
+                continue
+            seen_event_ids.add(ev_id)
+            events.append(ev)
+
+        root_events = [e for e in events if e.get("type") == "thread"]
+        if len(root_events) != 1:
+            raise ValueError(
+                f"Invalid thread file '{fpath.name}': expected exactly 1 root 'thread' event, found {len(root_events)}."
+            )
+        root = root_events[0]
+        tid = str(root.get("thread_id") or fpath.stem)
+        created_at = str(root["created_at"])
+
+        vis = str(root.get("visibility", "team")).strip().lower()
+        if vis not in VALID_VISIBILITIES:
+            raise ValueError(f"Invalid visibility '{vis}' in '{fpath.name}'.")
+        status = str(root.get("status", "open")).strip().lower()
+        if status not in VALID_THREAD_STATUSES:
+            raise ValueError(f"Invalid thread status '{status}' in '{fpath.name}'.")
+
+        team_slug = (root.get("team_slug") or "") or None
+        with_team = (root.get("with_team") or "") or None
+        owner_agent = (root.get("owner_agent") or "") or None
+
+        posts: List[Dict[str, Any]] = [
+            {
+                "author": str(root["author"]).lower(),
+                "author_id": str(root.get("author_id") or ""),
+                "content": str(root.get("content") or ""),
+                "created_at": created_at,
+                "id": str(root["post_id"]),
+                "parent_post_id": None,
+                "tags": str(root.get("tags") or ""),
+                "thread_id": tid,
+            }
+        ]
+
+        follow_ups = [e for e in events if e.get("type") != "thread"]
+        follow_ups.sort(
+            key=lambda e: (str(e.get("created_at") or ""), str(e.get("event_id") or ""))
+        )
+
+        updated_at = created_at
+        for ev in follow_ups:
+            ev_type = ev.get("type")
+            ev_ts = str(ev.get("created_at") or created_at)
+            if ev_ts > updated_at:
+                updated_at = ev_ts
+
+            if ev_type == "post":
+                posts.append(
+                    {
+                        "author": str(ev["author"]).lower(),
+                        "author_id": str(ev.get("author_id") or ""),
+                        "content": str(ev.get("content") or ""),
+                        "created_at": ev_ts,
+                        "id": str(ev["post_id"]),
+                        "parent_post_id": (ev.get("parent_post_id") or "") or None,
+                        "tags": str(ev.get("tags") or ""),
+                        "thread_id": tid,
+                    }
+                )
+            elif ev_type == "status":
+                new_st = str(ev["status"]).strip().lower()
+                if new_st not in VALID_THREAD_STATUSES:
+                    raise ValueError(
+                        f"Invalid status event '{new_st}' in '{fpath.name}'."
+                    )
+                status = new_st
+            elif ev_type == "reclassify":
+                new_vis = str(ev["visibility"]).strip().lower()
+                if new_vis not in VALID_VISIBILITIES:
+                    raise ValueError(
+                        f"Invalid reclassify visibility '{new_vis}' in '{fpath.name}'."
+                    )
+                vis = new_vis
+                team_slug = (ev.get("team_slug") or "") or None
+                with_team = (ev.get("with_team") or "") or None
+                owner_agent = (ev.get("owner_agent") or "") or None
+            else:
+                raise ValueError(
+                    f"Unknown event type '{ev_type}' in '{fpath.name}'."
+                )
+
+        return {
+            "author": str(root["author"]).lower(),
+            "author_id": str(root.get("author_id") or ""),
+            "category": str(root.get("category") or "general").lower(),
+            "created_at": created_at,
+            "id": tid,
+            "owner_agent": owner_agent,
+            "post_count": len(posts),
+            "posts": posts,
+            "status": status,
+            "team_slug": team_slug,
+            "title": str(root["title"]),
+            "updated_at": updated_at,
+            "visibility": vis,
+            "with_team": with_team,
+        }
+
+    def _load_all_threads_unlocked(self) -> List[Dict[str, Any]]:
+        if not self.threads_dir.is_dir():
+            return []
+        threads = [
+            self._fold_thread_jsonl(fpath)
+            for fpath in sorted(self.threads_dir.glob("*.jsonl"))
+            if fpath.is_file()
+        ]
+        threads.sort(key=lambda t: (t["updated_at"], t["id"]), reverse=True)
+        return threads
+
+    def _resolve_author_and_touch_unlocked(
+        self,
+        agents_by_id: Mapping[str, Dict[str, Any]],
+        sessions: Dict[str, Dict[str, Any]],
+        author: str,
+        author_id: str,
+        iso_time: str,
     ) -> Tuple[str, Optional[str], str]:
         norm_author = normalize_agent_id(author)
-        row = conn.execute(
-            "SELECT * FROM agents WHERE agent_id = ? COLLATE NOCASE", (norm_author,)
-        ).fetchone()
-        if not row and norm_author != PRIME_ID:
+        a_obj = agents_by_id.get(norm_author)
+        if not a_obj and norm_author != PRIME_ID:
             raise ValueError(
                 f"Author '{norm_author}' is not a registered ULTRON agent. Create the team/role first."
             )
         resolved_uuid = author_id.strip()
-        if row:
-            if not resolved_uuid:
-                resolved_uuid = row["conversation_id"]
-            conn.execute(
-                "UPDATE agents SET last_seen = ? WHERE agent_id = ? COLLATE NOCASE",
-                (iso_time, norm_author),
-            )
+        if a_obj and not resolved_uuid:
+            resolved_uuid = a_obj["conversation_id"]
+        if norm_author in sessions["agents"]:
+            sessions["agents"][norm_author]["last_seen"] = iso_time
+            self._write_sessions_unlocked(sessions)
         author_team = None if norm_author == PRIME_ID else norm_author.split("/", 1)[0]
         return (norm_author, author_team, resolved_uuid)
 
@@ -1808,7 +1501,6 @@ class UltronCore:
         with_team: Optional[str] = None,
         tags: str = "",
         author_id: str = "",
-        auto_backup: bool = True,
     ) -> Dict[str, Any]:
         clean_title = title.strip()
         clean_content = content.strip()
@@ -1818,9 +1510,10 @@ class UltronCore:
             raise ValueError("Thread content cannot be empty.")
 
         iso = now_iso()
-        with self._get_connection() as conn:
-            norm_author, author_team, resolved_uuid = self._resolve_author_and_touch(
-                conn, author, author_id, iso
+        with self._lock(exclusive=True):
+            teams_by_slug, agents_by_id, sessions = self._scan_state_unlocked()
+            norm_author, author_team, resolved_uuid = self._resolve_author_and_touch_unlocked(
+                agents_by_id, sessions, author, author_id, iso
             )
 
             chosen_vis = (
@@ -1833,8 +1526,12 @@ class UltronCore:
                     f"Invalid visibility '{chosen_vis}'. Must be one of {sorted(VALID_VISIBILITIES)}."
                 )
 
-            resolved_team: Optional[str] = validate_slug(team_slug, "team") if team_slug else None
-            resolved_with: Optional[str] = validate_slug(with_team, "with_team") if with_team else None
+            resolved_team: Optional[str] = (
+                validate_slug(team_slug, "team") if team_slug else None
+            )
+            resolved_with: Optional[str] = (
+                validate_slug(with_team, "with_team") if with_team else None
+            )
             resolved_owner: Optional[str] = None
 
             if chosen_vis == "personal":
@@ -1860,137 +1557,142 @@ class UltronCore:
                         )
                     resolved_team = author_team
 
-                t_exists = conn.execute(
-                    "SELECT slug FROM teams WHERE slug = ? COLLATE NOCASE", (resolved_team,)
-                ).fetchone()
-                if not t_exists:
+                if resolved_team not in teams_by_slug:
                     raise ValueError(f"Team '{resolved_team}' does not exist.")
 
                 if resolved_with:
                     if resolved_with == resolved_team:
-                        raise ValueError("--with-team cannot be the same as the owning team.")
-                    w_exists = conn.execute(
-                        "SELECT slug FROM teams WHERE slug = ? COLLATE NOCASE", (resolved_with,)
-                    ).fetchone()
-                    if not w_exists:
-                        raise ValueError(f"Target --with-team '{resolved_with}' does not exist.")
+                        raise ValueError(
+                            "--with-team cannot be the same as the owning team."
+                        )
+                    if resolved_with not in teams_by_slug:
+                        raise ValueError(
+                            f"Target --with-team '{resolved_with}' does not exist."
+                        )
 
             elif chosen_vis == "global":
                 if with_team:
                     raise ValueError("--with-team is only valid for --visibility team.")
+                if resolved_team and resolved_team not in teams_by_slug:
+                    raise ValueError(f"Team '{resolved_team}' does not exist.")
                 if not resolved_team and author_team:
                     resolved_team = author_team
 
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO threads (
-                    title, category, status, visibility, team_slug,
-                    with_team, owner_agent, author, author_id, created_at, updated_at
-                )
-                VALUES (?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    clean_title,
-                    category.strip().lower(),
-                    chosen_vis,
-                    resolved_team,
-                    resolved_with,
-                    resolved_owner,
-                    norm_author,
-                    resolved_uuid,
-                    iso,
-                    iso,
-                ),
-            )
-            thread_id = int(cursor.lastrowid)
-            cursor.execute(
-                """
-                INSERT INTO posts (thread_id, parent_post_id, author, author_id, content, tags, created_at)
-                VALUES (?, NULL, ?, ?, ?, ?, ?)
-                """,
-                (thread_id, norm_author, resolved_uuid, clean_content, tags.strip(), iso),
-            )
-            post_id = int(cursor.lastrowid)
+            thread_id = generate_thread_id()
+            while (self.threads_dir / f"{thread_id}.jsonl").exists():
+                thread_id = generate_thread_id()
+            post_id = generate_post_id()
 
-        if auto_backup:
-            self.export_thread(thread_id)
-            self.export_agents()
+            root_event = {
+                "author": norm_author,
+                "author_id": resolved_uuid,
+                "category": category.strip().lower(),
+                "content": clean_content,
+                "created_at": iso,
+                "event_id": generate_event_id(),
+                "owner_agent": resolved_owner or "",
+                "post_id": post_id,
+                "status": "open",
+                "tags": tags.strip(),
+                "team_slug": resolved_team or "",
+                "thread_id": thread_id,
+                "title": clean_title,
+                "type": "thread",
+                "visibility": chosen_vis,
+                "with_team": resolved_with or "",
+            }
+            append_jsonl_event(self.threads_dir / f"{thread_id}.jsonl", root_event)
 
         return {
-            "thread_id": thread_id,
-            "post_id": post_id,
-            "title": clean_title,
-            "category": category.strip().lower(),
-            "visibility": chosen_vis,
-            "team_slug": resolved_team,
-            "with_team": resolved_with,
-            "owner_agent": resolved_owner,
             "author": norm_author,
             "author_id": resolved_uuid,
+            "category": category.strip().lower(),
             "created_at": iso,
+            "owner_agent": resolved_owner,
+            "post_id": post_id,
+            "team_slug": resolved_team,
+            "thread_id": thread_id,
+            "title": clean_title,
+            "visibility": chosen_vis,
+            "with_team": resolved_with,
         }
 
     def add_post(
         self,
-        thread_id: int,
+        thread_id: str | int,
         author: str,
         content: str,
-        parent_post_id: Optional[int] = None,
+        parent_post_id: Optional[str | int] = None,
         tags: str = "",
         author_id: str = "",
-        auto_backup: bool = True,
     ) -> Dict[str, Any]:
         clean_content = content.strip()
         if not clean_content:
             raise ValueError("Post content cannot be empty.")
 
         iso = now_iso()
-        with self._get_connection() as conn:
-            t_row = conn.execute("SELECT * FROM threads WHERE id = ?", (thread_id,)).fetchone()
-            if not t_row:
-                raise ValueError(f"Thread #{thread_id} does not exist.")
+        with self._lock(exclusive=True):
+            fpath = self._resolve_thread_path_unlocked(thread_id)
+            if not fpath:
+                raise ValueError(f"Thread '{thread_id}' does not exist.")
+            t_obj = self._fold_thread_jsonl(fpath)
+            canonical_tid = t_obj["id"]
 
-            norm_author, _, resolved_uuid = self._resolve_author_and_touch(
-                conn, author, author_id, iso
+            _, agents_by_id, sessions = self._scan_state_unlocked()
+            norm_author, _, resolved_uuid = self._resolve_author_and_touch_unlocked(
+                agents_by_id, sessions, author, author_id, iso
             )
-            if not self._can_access_thread(norm_author, norm_author == PRIME_ID, t_row):
+            if not self._can_access_thread(
+                norm_author, norm_author == PRIME_ID, t_obj
+            ):
                 raise PermissionError(
-                    f"Author '{norm_author}' is not authorized to access or reply to Thread #{thread_id} "
-                    f"(visibility='{t_row['visibility']}')."
+                    f"Author '{norm_author}' is not authorized to access or reply to Thread '{canonical_tid}' "
+                    f"(visibility='{t_obj['visibility']}')."
                 )
 
-            if parent_post_id is not None:
-                p_exists = conn.execute(
-                    "SELECT id FROM posts WHERE id = ? AND thread_id = ?",
-                    (parent_post_id, thread_id),
-                ).fetchone()
-                if not p_exists:
+            resolved_parent_post: Optional[str] = None
+            if parent_post_id is not None and str(parent_post_id).strip():
+                raw_pp = str(parent_post_id).strip().lstrip("#").lower()
+                matching_posts = [
+                    p["id"]
+                    for p in t_obj["posts"]
+                    if p["id"].lower() == raw_pp or p["id"].lower().endswith(raw_pp)
+                ]
+                if not matching_posts:
                     raise ValueError(
-                        f"Parent post #{parent_post_id} does not exist in Thread #{thread_id}."
+                        f"Parent post '{parent_post_id}' does not exist in Thread '{canonical_tid}'."
                     )
+                if len(matching_posts) > 1:
+                    raise ValueError(
+                        f"Ambiguous parent post '{parent_post_id}': matches {matching_posts}."
+                    )
+                resolved_parent_post = matching_posts[0]
 
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO posts (thread_id, parent_post_id, author, author_id, content, tags, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (thread_id, parent_post_id, norm_author, resolved_uuid, clean_content, tags.strip(), iso),
-            )
-            post_id = int(cursor.lastrowid)
-            cursor.execute("UPDATE threads SET updated_at = ? WHERE id = ?", (iso, thread_id))
+            existing_pids = {p["id"] for p in t_obj["posts"]}
+            post_id = generate_post_id()
+            while post_id in existing_pids:
+                post_id = generate_post_id()
 
-        if auto_backup:
-            self.export_thread(thread_id)
-            self.export_agents()
+            post_event = {
+                "author": norm_author,
+                "author_id": resolved_uuid,
+                "content": clean_content,
+                "created_at": iso,
+                "event_id": generate_event_id(),
+                "parent_post_id": resolved_parent_post or "",
+                "post_id": post_id,
+                "tags": tags.strip(),
+                "thread_id": canonical_tid,
+                "type": "post",
+            }
+            append_jsonl_event(fpath, post_event)
 
         return {
-            "thread_id": thread_id,
-            "post_id": post_id,
             "author": norm_author,
             "author_id": resolved_uuid,
             "created_at": iso,
+            "post_id": post_id,
+            "thread_id": canonical_tid,
         }
 
     def list_threads(
@@ -2004,68 +1706,66 @@ class UltronCore:
         limit: int = 25,
     ) -> List[Dict[str, Any]]:
         viewer_id, unrestricted = self._resolve_viewer(as_agent, show_all)
-        vis_clause, vis_params = self._visibility_sql_clause(viewer_id, unrestricted)
 
-        query = f"""
-            SELECT t.id, t.title, t.category, t.status, t.visibility,
-                   t.team_slug, t.with_team, t.owner_agent, t.author,
-                   t.created_at, t.updated_at, COUNT(p.id) AS post_count
-            FROM threads t
-            LEFT JOIN posts p ON t.id = p.thread_id
-            WHERE {vis_clause}
-        """
-        params: List[Any] = list(vis_params)
-
+        vis_filter: Optional[str] = None
         if visibility:
-            v = visibility.strip().lower()
-            if v not in VALID_VISIBILITIES:
+            vis_filter = visibility.strip().lower()
+            if vis_filter not in VALID_VISIBILITIES:
                 raise ValueError(f"Invalid visibility '{visibility}'.")
-            query += " AND t.visibility = ?"
-            params.append(v)
-        if team_slug:
-            ts = validate_slug(team_slug, "team")
-            query += " AND (lower(t.team_slug) = ? OR lower(t.with_team) = ?)"
-            params.extend([ts, ts])
-        if category:
-            query += " AND t.category = ?"
-            params.append(category.strip().lower())
+
+        team_filter = validate_slug(team_slug, "team") if team_slug else None
+        cat_filter = category.strip().lower() if category else None
+
+        status_filter: Optional[str] = None
         if status:
-            st = status.strip().lower()
-            if st not in VALID_THREAD_STATUSES:
+            status_filter = status.strip().lower()
+            if status_filter not in VALID_THREAD_STATUSES:
                 raise ValueError(f"Invalid thread status '{status}'.")
-            query += " AND t.status = ?"
-            params.append(st)
 
-        query += " GROUP BY t.id ORDER BY t.updated_at DESC, t.id DESC LIMIT ?"
-        params.append(limit)
+        with self._lock(exclusive=False):
+            all_threads = self._load_all_threads_unlocked()
 
-        with self._get_connection() as conn:
-            rows = conn.execute(query, params).fetchall()
-            return [dict(r) for r in rows]
+        results: List[Dict[str, Any]] = []
+        for t in all_threads:
+            if not self._can_access_thread(viewer_id, unrestricted, t):
+                continue
+            if vis_filter and t["visibility"] != vis_filter:
+                continue
+            if team_filter and team_filter not in {
+                (t["team_slug"] or "").lower(),
+                (t["with_team"] or "").lower(),
+            }:
+                continue
+            if cat_filter and t["category"] != cat_filter:
+                continue
+            if status_filter and t["status"] != status_filter:
+                continue
+
+            summary = {k: v for k, v in t.items() if k != "posts"}
+            results.append(summary)
+            if len(results) >= limit:
+                break
+        return results
 
     def get_thread(
         self,
-        thread_id: int,
+        thread_id: str | int,
         as_agent: Optional[str] = None,
         show_all: bool = False,
     ) -> Optional[Dict[str, Any]]:
         viewer_id, unrestricted = self._resolve_viewer(as_agent, show_all)
-        with self._get_connection() as conn:
-            t_row = conn.execute("SELECT * FROM threads WHERE id = ?", (thread_id,)).fetchone()
-            if not t_row:
+        with self._lock(exclusive=False):
+            fpath = self._resolve_thread_path_unlocked(thread_id)
+            if not fpath:
                 return None
-            if not self._can_access_thread(viewer_id, unrestricted, t_row):
-                raise PermissionError(
-                    f"Agent '{viewer_id}' is not authorized to view Thread #{thread_id} "
-                    f"(visibility='{t_row['visibility']}')."
-                )
-            p_rows = conn.execute(
-                "SELECT * FROM posts WHERE thread_id = ? ORDER BY id ASC",
-                (thread_id,),
-            ).fetchall()
-            out = dict(t_row)
-            out["posts"] = [dict(r) for r in p_rows]
-            return out
+            t_obj = self._fold_thread_jsonl(fpath)
+
+        if not self._can_access_thread(viewer_id, unrestricted, t_obj):
+            raise PermissionError(
+                f"Agent '{viewer_id}' is not authorized to view Thread '{t_obj['id']}' "
+                f"(visibility='{t_obj['visibility']}')."
+            )
+        return t_obj
 
     def search(
         self,
@@ -2077,64 +1777,75 @@ class UltronCore:
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
         viewer_id, unrestricted = self._resolve_viewer(as_agent, show_all)
-        vis_clause, vis_params = self._visibility_sql_clause(viewer_id, unrestricted)
+        clean_q = query_str.strip()
+        if not clean_q:
+            raise ValueError("Search query cannot be empty.")
 
-        extra_sql = ""
-        extra_params: List[Any] = []
+        vis_filter: Optional[str] = None
         if visibility:
-            v = visibility.strip().lower()
-            if v not in VALID_VISIBILITIES:
+            vis_filter = visibility.strip().lower()
+            if vis_filter not in VALID_VISIBILITIES:
                 raise ValueError(f"Invalid visibility '{visibility}'.")
-            extra_sql += " AND t.visibility = ?"
-            extra_params.append(v)
-        if team_slug:
-            ts = validate_slug(team_slug, "team")
-            extra_sql += " AND (lower(t.team_slug) = ? OR lower(t.with_team) = ?)"
-            extra_params.extend([ts, ts])
+        team_filter = validate_slug(team_slug, "team") if team_slug else None
 
-        fts_sql = f"""
-            SELECT p.id AS post_id, p.thread_id, t.title AS thread_title, t.category,
-                   t.visibility, t.team_slug, t.with_team, t.owner_agent,
-                   p.author, p.content, p.tags, p.created_at
-            FROM posts_fts fts
-            JOIN posts p ON fts.rowid = p.id
-            JOIN threads t ON p.thread_id = t.id
-            WHERE posts_fts MATCH ? AND {vis_clause}{extra_sql}
-            ORDER BY rank
-            LIMIT ?
-        """
-        with self._get_connection() as conn:
-            try:
-                rows = conn.execute(
-                    fts_sql, [query_str, *vis_params, *extra_params, limit]
-                ).fetchall()
-                return [dict(r) for r in rows]
-            except sqlite3.OperationalError:
-                like_pat = f"%{query_str}%"
-                like_sql = f"""
-                    SELECT p.id AS post_id, p.thread_id, t.title AS thread_title, t.category,
-                           t.visibility, t.team_slug, t.with_team, t.owner_agent,
-                           p.author, p.content, p.tags, p.created_at
-                    FROM posts p
-                    JOIN threads t ON p.thread_id = t.id
-                    WHERE (p.content LIKE ? OR p.tags LIKE ? OR t.title LIKE ?)
-                      AND {vis_clause}{extra_sql}
-                    ORDER BY p.created_at DESC
-                    LIMIT ?
-                """
-                rows = conn.execute(
-                    like_sql,
-                    [like_pat, like_pat, like_pat, *vis_params, *extra_params, limit],
-                ).fetchall()
-                return [dict(r) for r in rows]
+        q_lower = clean_q.lower()
+        tokens = [tok for tok in re.split(r"\s+", q_lower) if tok]
+
+        with self._lock(exclusive=False):
+            all_threads = self._load_all_threads_unlocked()
+
+        scored_hits: List[Tuple[int, str, str, Dict[str, Any]]] = []
+        for t in all_threads:
+            if not self._can_access_thread(viewer_id, unrestricted, t):
+                continue
+            if vis_filter and t["visibility"] != vis_filter:
+                continue
+            if team_filter and team_filter not in {
+                (t["team_slug"] or "").lower(),
+                (t["with_team"] or "").lower(),
+            }:
+                continue
+
+            title_lower = t["title"].lower()
+            for p in t["posts"]:
+                content_lower = p["content"].lower()
+                tags_lower = p["tags"].lower()
+                combined = f"{title_lower}\n{tags_lower}\n{content_lower}"
+
+                score = 0
+                if q_lower in content_lower:
+                    score += 4
+                if q_lower in title_lower or q_lower in tags_lower:
+                    score += 3
+                if score == 0 and len(tokens) > 1 and all(tok in combined for tok in tokens):
+                    score = 1 + sum(1 for tok in tokens if tok in content_lower)
+
+                if score > 0:
+                    hit = {
+                        "author": p["author"],
+                        "category": t["category"],
+                        "content": p["content"],
+                        "created_at": p["created_at"],
+                        "owner_agent": t["owner_agent"],
+                        "post_id": p["id"],
+                        "tags": p["tags"],
+                        "team_slug": t["team_slug"],
+                        "thread_id": t["id"],
+                        "thread_title": t["title"],
+                        "visibility": t["visibility"],
+                        "with_team": t["with_team"],
+                    }
+                    scored_hits.append((score, p["created_at"], p["id"], hit))
+
+        scored_hits.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+        return [item[3] for item in scored_hits[:limit]]
 
     def set_thread_status(
         self,
-        thread_id: int,
+        thread_id: str | int,
         status: str,
         as_agent: Optional[str] = None,
         show_all: bool = False,
-        auto_backup: bool = True,
     ) -> bool:
         st = status.strip().lower()
         if st not in VALID_THREAD_STATUSES:
@@ -2143,32 +1854,36 @@ class UltronCore:
             )
         viewer_id, unrestricted = self._resolve_viewer(as_agent, show_all)
         iso = now_iso()
-        with self._get_connection() as conn:
-            t_row = conn.execute("SELECT * FROM threads WHERE id = ?", (thread_id,)).fetchone()
-            if not t_row:
+
+        with self._lock(exclusive=True):
+            fpath = self._resolve_thread_path_unlocked(thread_id)
+            if not fpath:
                 return False
-            if not self._can_access_thread(viewer_id, unrestricted, t_row):
+            t_obj = self._fold_thread_jsonl(fpath)
+            if not self._can_access_thread(viewer_id, unrestricted, t_obj):
                 raise PermissionError(
-                    f"Agent '{viewer_id}' is not authorized to modify Thread #{thread_id}."
+                    f"Agent '{viewer_id}' is not authorized to modify Thread '{t_obj['id']}'."
                 )
-            conn.execute(
-                "UPDATE threads SET status = ?, updated_at = ? WHERE id = ?",
-                (st, iso, thread_id),
-            )
-        if auto_backup:
-            self.export_thread(thread_id)
+            status_event = {
+                "actor": viewer_id,
+                "created_at": iso,
+                "event_id": generate_event_id(),
+                "status": st,
+                "thread_id": t_obj["id"],
+                "type": "status",
+            }
+            append_jsonl_event(fpath, status_event)
         return True
 
     def reclassify_thread(
         self,
-        thread_id: int,
+        thread_id: str | int,
         visibility: str,
         team_slug: Optional[str] = None,
         with_team: Optional[str] = None,
         owner_agent: Optional[str] = None,
         as_agent: Optional[str] = None,
         show_all: bool = False,
-        auto_backup: bool = True,
     ) -> Dict[str, Any]:
         viewer_id, unrestricted = self._resolve_viewer(as_agent, show_all)
         if not unrestricted and viewer_id != PRIME_ID:
@@ -2183,10 +1898,12 @@ class UltronCore:
             )
 
         iso = now_iso()
-        with self._get_connection() as conn:
-            t_row = conn.execute("SELECT * FROM threads WHERE id = ?", (thread_id,)).fetchone()
-            if not t_row:
-                raise ValueError(f"Thread #{thread_id} does not exist.")
+        with self._lock(exclusive=True):
+            fpath = self._resolve_thread_path_unlocked(thread_id)
+            if not fpath:
+                raise ValueError(f"Thread '{thread_id}' does not exist.")
+            t_obj = self._fold_thread_jsonl(fpath)
+            teams_by_slug, agents_by_id, _ = self._scan_state_unlocked()
 
             new_team: Optional[str] = None
             new_with: Optional[str] = None
@@ -2196,105 +1913,157 @@ class UltronCore:
                 if with_team:
                     raise ValueError("--with-team cannot be set on a 'personal' thread.")
                 candidate_owner = normalize_agent_id(
-                    owner_agent or t_row["owner_agent"] or t_row["author"]
+                    owner_agent or t_obj["owner_agent"] or t_obj["author"]
                 )
                 if candidate_owner != PRIME_ID:
-                    owner_row = conn.execute(
-                        "SELECT agent_id, team_slug FROM agents WHERE agent_id = ? COLLATE NOCASE",
-                        (candidate_owner,),
-                    ).fetchone()
-                    if not owner_row:
+                    owner_obj = agents_by_id.get(candidate_owner)
+                    if not owner_obj:
                         raise ValueError(
                             f"Target owner agent '{candidate_owner}' does not exist."
                         )
-                    new_team = owner_row["team_slug"]
+                    new_team = owner_obj["team_slug"]
                 else:
                     new_team = None
                 new_owner = candidate_owner
 
             elif vis == "team":
-                candidate_team = team_slug or t_row["team_slug"]
-                if not candidate_team and "/" in t_row["author"]:
-                    candidate_team = t_row["author"].split("/", 1)[0]
+                candidate_team = team_slug or t_obj["team_slug"]
+                if not candidate_team and "/" in t_obj["author"]:
+                    candidate_team = t_obj["author"].split("/", 1)[0]
                 if not candidate_team:
                     raise ValueError("Reclassifying to 'team' requires --team <slug>.")
                 new_team = validate_slug(candidate_team, "team")
-                t_exists = conn.execute(
-                    "SELECT slug FROM teams WHERE slug = ? COLLATE NOCASE", (new_team,)
-                ).fetchone()
-                if not t_exists:
+                if new_team not in teams_by_slug:
                     raise ValueError(f"Target team '{new_team}' does not exist.")
 
                 if with_team:
                     new_with = validate_slug(with_team, "with_team")
                     if new_with == new_team:
                         raise ValueError("--with-team cannot equal --team.")
-                    w_exists = conn.execute(
-                        "SELECT slug FROM teams WHERE slug = ? COLLATE NOCASE", (new_with,)
-                    ).fetchone()
-                    if not w_exists:
-                        raise ValueError(f"Target --with-team '{new_with}' does not exist.")
+                    if new_with not in teams_by_slug:
+                        raise ValueError(
+                            f"Target --with-team '{new_with}' does not exist."
+                        )
 
             elif vis == "global":
                 if with_team:
                     raise ValueError("--with-team cannot be set on a 'global' thread.")
                 if team_slug:
                     new_team = validate_slug(team_slug, "team")
-                    t_exists = conn.execute(
-                        "SELECT slug FROM teams WHERE slug = ? COLLATE NOCASE", (new_team,)
-                    ).fetchone()
-                    if not t_exists:
+                    if new_team not in teams_by_slug:
                         raise ValueError(f"Target team '{new_team}' does not exist.")
                 else:
-                    new_team = t_row["team_slug"]
+                    new_team = t_obj["team_slug"]
 
-            conn.execute(
-                """
-                UPDATE threads
-                SET visibility = ?, team_slug = ?, with_team = ?, owner_agent = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (vis, new_team, new_with, new_owner, iso, thread_id),
+            reclass_event = {
+                "actor": viewer_id,
+                "created_at": iso,
+                "event_id": generate_event_id(),
+                "owner_agent": new_owner or "",
+                "team_slug": new_team or "",
+                "thread_id": t_obj["id"],
+                "type": "reclassify",
+                "visibility": vis,
+                "with_team": new_with or "",
+            }
+            append_jsonl_event(fpath, reclass_event)
+            return self._fold_thread_jsonl(fpath)
+
+    def verify(self, prune_orphans: bool = False) -> Dict[str, Any]:
+        """Validate integrity of Hive manifests, runtime sessions, JSONL threads, and .gitattributes."""
+        with self._lock(exclusive=prune_orphans):
+            teams_by_slug, agents_by_id, sessions = self._scan_state_unlocked()
+            for slug, t_obj in teams_by_slug.items():
+                if f"{slug}/lead" not in agents_by_id:
+                    raise ValueError(f"Team '{slug}' is missing required role '{slug}/lead'.")
+                t_dir = self._abs_from_rel(t_obj["hive_path"])
+                if not (t_dir / "AGENTS.md").is_file():
+                    raise ValueError(f"Team '{slug}' is missing '{t_obj['hive_path']}/AGENTS.md'.")
+
+            orphan_ids: List[str] = []
+            for s_aid, s_entry in list(sessions["agents"].items()):
+                norm_s_aid = normalize_agent_id(s_aid)
+                if not isinstance(s_entry, dict):
+                    raise ValueError(
+                        f"Invalid runtime session entry for '{s_aid}': expected JSON object."
+                    )
+                s_status = str(s_entry.get("status", "disabled")).strip().lower()
+                if s_status not in VALID_AGENT_STATUSES:
+                    raise ValueError(
+                        f"Invalid runtime status '{s_status}' for '{s_aid}' in sessions.json."
+                    )
+                s_cid = str(s_entry.get("conversation_id", "")).strip()
+                if s_status == "active" and not s_cid:
+                    raise ValueError(
+                        f"Runtime session '{s_aid}' has status='active' with empty conversation_id."
+                    )
+                if norm_s_aid != PRIME_ID and norm_s_aid not in agents_by_id:
+                    orphan_ids.append(s_aid)
+
+            pruned_orphans: List[str] = []
+            if orphan_ids:
+                if prune_orphans:
+                    for oid in orphan_ids:
+                        sessions["agents"].pop(oid, None)
+                    self._write_sessions_unlocked(sessions)
+                    pruned_orphans = sorted(orphan_ids)
+                else:
+                    raise ValueError(
+                        f"Found orphan runtime session(s) not present in Hive: {sorted(orphan_ids)}. "
+                        f"Run 'verify --prune-orphans' to clean."
+                    )
+
+            threads = self._load_all_threads_unlocked()
+            gitattr = self.threads_dir / ".gitattributes"
+            has_union = (
+                gitattr.is_file()
+                and "merge=union" in gitattr.read_text(encoding="utf-8")
             )
+            if not has_union:
+                raise ValueError(
+                    f"Missing '*.jsonl merge=union' in '{gitattr}'."
+                )
 
-        if auto_backup:
-            self.export_thread(thread_id)
-        return self.get_thread(thread_id, show_all=True) or {}
+            return {
+                "agents": len(agents_by_id),
+                "gitattributes_union_merge": has_union,
+                "ok": True,
+                "orphan_sessions": 0,
+                "posts": sum(t["post_count"] for t in threads),
+                "pruned_orphan_sessions": pruned_orphans,
+                "teams": len(teams_by_slug),
+                "threads": len(threads),
+            }
 
     def get_stats(self) -> Dict[str, Any]:
-        with self._get_connection() as conn:
-            total_teams = conn.execute("SELECT COUNT(*) FROM teams").fetchone()[0]
-            active_teams = conn.execute("SELECT COUNT(*) FROM teams WHERE status = 'active'").fetchone()[0]
-            total_agents = conn.execute("SELECT COUNT(*) FROM agents").fetchone()[0]
-            active_agents = conn.execute("SELECT COUNT(*) FROM agents WHERE status = 'active'").fetchone()[0]
-            total_threads = conn.execute("SELECT COUNT(*) FROM threads").fetchone()[0]
-            total_posts = conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
-            vis_counts = conn.execute(
-                "SELECT visibility, COUNT(*) FROM threads GROUP BY visibility"
-            ).fetchall()
-            cat_counts = conn.execute(
-                "SELECT category, COUNT(*) FROM threads GROUP BY category"
-            ).fetchall()
-            status_counts = conn.execute(
-                "SELECT status, COUNT(*) FROM threads GROUP BY status"
-            ).fetchall()
+        with self._lock(exclusive=False):
+            teams_by_slug, agents_by_id, _ = self._scan_state_unlocked()
+            threads = self._load_all_threads_unlocked()
+
+        vis_counts: Dict[str, int] = {}
+        cat_counts: Dict[str, int] = {}
+        status_counts: Dict[str, int] = {}
+        total_posts = 0
+        for t in threads:
+            total_posts += t["post_count"]
+            vis_counts[t["visibility"]] = vis_counts.get(t["visibility"], 0) + 1
+            cat_counts[t["category"]] = cat_counts.get(t["category"], 0) + 1
+            status_counts[t["status"]] = status_counts.get(t["status"], 0) + 1
 
         return {
-            "repo_root": str(self.repo_root),
-            "db_path": str(self.db_path),
+            "active_agents": sum(1 for a in agents_by_id.values() if a["status"] == "active"),
+            "active_teams": sum(1 for t in teams_by_slug.values() if t["status"] == "active"),
+            "categories": cat_counts,
             "hive_dir": str(self.hive_dir),
-            "teams_file": str(self.teams_file),
-            "agents_file": str(self.agents_file),
+            "repo_root": str(self.repo_root),
+            "sessions_file": str(self.sessions_file),
+            "statuses": status_counts,
             "threads_dir": str(self.threads_dir),
-            "total_teams": total_teams,
-            "active_teams": active_teams,
-            "total_agents": total_agents,
-            "active_agents": active_agents,
-            "total_threads": total_threads,
+            "total_agents": len(agents_by_id),
             "total_posts": total_posts,
-            "visibilities": {r[0]: r[1] for r in vis_counts},
-            "categories": {r[0]: r[1] for r in cat_counts},
-            "statuses": {r[0]: r[1] for r in status_counts},
+            "total_teams": len(teams_by_slug),
+            "total_threads": len(threads),
+            "visibilities": vis_counts,
         }
 
 
@@ -2346,7 +2115,10 @@ def format_agent_table(agents: List[Dict[str, Any]]) -> str:
     if not agents:
         return "[ULTRON] No registered agents/roles found."
     lines = [f"[ULTRON] Registered Roles & Sessions ({len(agents)}):\n"]
-    header = f"{'AGENT ID':<28} {'STATUS':<10} {'MODEL':<10} {'CONVERSATION ID (UUID)':<38} {'TITLE'}"
+    header = (
+        f"{'AGENT ID':<28} {'STATUS':<10} {'MODEL':<10} "
+        f"{'CONVERSATION ID (UUID)':<38} {'TITLE'}"
+    )
     lines.append(header)
     lines.append("-" * 110)
     for a in agents:
@@ -2370,16 +2142,18 @@ def format_scope_badge(t: Mapping[str, Any]) -> str:
 
 def format_thread_view(thread: Dict[str, Any]) -> str:
     lines = ["=" * 84]
-    lines.append(f"THREAD #{thread['id']}: {thread['title']}")
+    lines.append(f"THREAD {thread['id']}: {thread['title']}")
     lines.append(
         f"Scope: [{format_scope_badge(thread)}] | Category: [{thread['category'].upper()}] | "
         f"Status: [{thread['status'].upper()}] | By: {thread['author']} ({thread['created_at'][:19]})"
     )
     lines.append("=" * 84)
     for post in thread.get("posts", []):
-        reply_info = f" (reply to #{post['parent_post_id']})" if post.get("parent_post_id") else ""
+        reply_info = (
+            f" (reply to {post['parent_post_id']})" if post.get("parent_post_id") else ""
+        )
         lines.append(
-            f"\n--- Post #{post['id']} by @{post['author']}{reply_info} at {post['created_at'][:19]} ---"
+            f"\n--- Post {post['id']} by @{post['author']}{reply_info} at {post['created_at'][:19]} ---"
         )
         if post.get("tags"):
             lines.append(f"Tags: [{post['tags']}]")
@@ -2397,15 +2171,21 @@ def format_thread_view(thread: Dict[str, Any]) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--root", default=argparse.SUPPRESS, help="Override ULTRON repository root")
-    common.add_argument("--db", default=argparse.SUPPRESS, help="Override SQLite database path")
-    common.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Emit machine-readable JSON output")
+    common.add_argument(
+        "--root", default=argparse.SUPPRESS, help="Override ULTRON repository root"
+    )
+    common.add_argument(
+        "--json",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Emit machine-readable JSON output",
+    )
 
     parser = argparse.ArgumentParser(
-        description="ULTRON Core: Org Registry, N-Layer Hive Scaffolder & Visibility-Scoped Message Board",
+        description="ULTRON Core: Pure Git-Native Org Registry, N-Layer Hive Scaffolder & JSONL Message Board",
         parents=[common],
     )
-    parser.set_defaults(root=None, db=None, json=False)
+    parser.set_defaults(root=None, json=False)
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add_cmd(
@@ -2425,28 +2205,59 @@ def build_parser() -> argparse.ArgumentParser:
     p_ct.add_argument("--slug", required=True, help="Unique team slug (kebab-case)")
     p_ct.add_argument("--name", required=True, help="Human-readable team name")
     p_ct.add_argument("--mission", required=True, help="Team mission and scope boundaries")
-    p_ct.add_argument("--parent", default=None, help="Parent team slug (omit for Layer 1 under ULTRON PRIME)")
-    p_ct.add_argument("--model", default="flash", choices=sorted(VALID_MODELS), help="Default model tier (default: flash)")
-    p_ct.add_argument("--workspace", default="inherit", choices=sorted(VALID_WORKSPACES), help="Workspace mode (default: inherit)")
-    p_ct.add_argument("--lead-responsibilities", default="", help="Optional custom Team Lead responsibilities")
+    p_ct.add_argument(
+        "--parent",
+        default=None,
+        help="Parent team slug (omit for Layer 1 under ULTRON PRIME)",
+    )
+    p_ct.add_argument(
+        "--model",
+        default="flash",
+        choices=sorted(VALID_MODELS),
+        help="Default model tier (default: flash)",
+    )
+    p_ct.add_argument(
+        "--workspace",
+        default="inherit",
+        choices=sorted(VALID_WORKSPACES),
+        help="Workspace mode (default: inherit)",
+    )
+    p_ct.add_argument(
+        "--lead-responsibilities",
+        default="",
+        help="Optional custom Team Lead responsibilities",
+    )
 
     # add-role
     p_ar = add_cmd("add-role", "Add a specialist role to a team")
     p_ar.add_argument("--team", required=True, help="Team slug")
-    p_ar.add_argument("--role", required=True, help="Role slug (e.g. coder, reviewer, designer)")
+    p_ar.add_argument(
+        "--role", required=True, help="Role slug (e.g. coder, reviewer, designer)"
+    )
     p_ar.add_argument("--title", required=True, help="Human-readable role title")
-    p_ar.add_argument("--responsibilities", required=True, help="Role duties and deliverables")
-    p_ar.add_argument("--model", default=None, choices=sorted(VALID_MODELS), help="Override model for this role")
+    p_ar.add_argument(
+        "--responsibilities", required=True, help="Role duties and deliverables"
+    )
+    p_ar.add_argument(
+        "--model",
+        default=None,
+        choices=sorted(VALID_MODELS),
+        help="Override model for this role",
+    )
     p_ar.add_argument(
         "--read-only",
         action="store_true",
         help="Enforce [READ-ONLY ROLE MODE] prompt guardrails while preserving run_command for core.py",
     )
-    p_ar.add_argument("--no-mcp", action="store_true", help="Disable MCP tools (EnableMCPTools=False)")
+    p_ar.add_argument(
+        "--no-mcp", action="store_true", help="Disable MCP tools (EnableMCPTools=False)"
+    )
 
     # teams
     p_tms = add_cmd("teams", "List registered teams")
-    p_tms.add_argument("--status", default=None, choices=sorted(VALID_TEAM_STATUSES), help="Filter by status")
+    p_tms.add_argument(
+        "--status", default=None, choices=sorted(VALID_TEAM_STATUSES), help="Filter by status"
+    )
 
     # team-info
     p_ti = add_cmd("team-info", "Show detailed info and role roster for a team")
@@ -2460,121 +2271,231 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_rs.add_argument("team", help="Team slug")
     p_rs.add_argument("--role", default=None, help="Optional single role slug to render")
-    p_rs.add_argument("--brief", default="", help="Optional initial directive appended to startup prompt")
+    p_rs.add_argument(
+        "--brief", default="", help="Optional initial directive appended to startup prompt"
+    )
 
     # activate-team
     p_at = add_cmd("activate-team", "Bind live Antigravity UUIDs and mark a team active")
     p_at.add_argument("team", help="Team slug")
-    p_at.add_argument("--uuids", required=True, help='JSON object mapping role -> UUID (e.g. \'{"lead":"...","coder":"..."}\')')
-    p_at.add_argument("--allow-detached", action="store_true", help="Allow activation even if parent team is disabled")
+    p_at.add_argument(
+        "--uuids",
+        required=True,
+        help='JSON object mapping role -> UUID (e.g. \'{"lead":"...","coder":"..."}\')',
+    )
+    p_at.add_argument(
+        "--allow-detached",
+        action="store_true",
+        help="Allow activation even if parent team is disabled",
+    )
     p_at.add_argument("--partial", action="store_true", help="Allow partial role activation")
 
     # activate-agent
     p_aa = add_cmd("activate-agent", "Bind a live Antigravity UUID to a single role")
     p_aa.add_argument("agent_id", help="Agent ID (<team>/<role> or ultron-prime)")
     p_aa.add_argument("--id", required=True, help="Conversation UUID")
-    p_aa.add_argument("--allow-detached", action="store_true", help="Allow activation if parent/lead is disabled")
+    p_aa.add_argument(
+        "--allow-detached",
+        action="store_true",
+        help="Allow activation if parent/lead is disabled",
+    )
 
     # prepare-disable
     p_pd = add_cmd("prepare-disable", "List live UUIDs to kill before disabling a team")
     p_pd.add_argument("team", help="Team slug")
-    p_pd.add_argument("--cascade", action="store_true", help="Include all descendant child teams")
+    p_pd.add_argument(
+        "--cascade", action="store_true", help="Include all descendant child teams"
+    )
 
     # disable-team
-    p_dt = add_cmd("disable-team", "Clear UUIDs and mark a team disabled after killing sessions")
+    p_dt = add_cmd(
+        "disable-team", "Clear UUIDs and mark a team disabled after killing sessions"
+    )
     p_dt.add_argument("team", help="Team slug")
-    p_dt.add_argument("--cascade", action="store_true", help="Disable entire descendant subtree")
+    p_dt.add_argument(
+        "--cascade", action="store_true", help="Disable entire descendant subtree"
+    )
 
     # disable-agent
     p_da = add_cmd("disable-agent", "Disable a single specialist role")
     p_da.add_argument("agent_id", help="Agent ID (<team>/<role>)")
 
     # remove-team
-    p_rm = add_cmd("remove-team", "Remove a disabled team from registry (preserves board threads)")
+    p_rm = add_cmd(
+        "remove-team", "Remove a disabled team from registry (preserves board threads)"
+    )
     p_rm.add_argument("team", help="Team slug")
-    p_rm.add_argument("--cascade", action="store_true", help="Remove child teams recursively")
-    p_rm.add_argument("--delete-files", action="store_true", help="Also delete ultron/hive/<team> folder on disk")
+    p_rm.add_argument(
+        "--cascade", action="store_true", help="Remove child teams recursively"
+    )
+    p_rm.add_argument(
+        "--delete-files",
+        action="store_true",
+        help="Also delete ultron/hive/<team> folder on disk",
+    )
 
     # agents
     p_ag = add_cmd("agents", "List registered roles and live session UUIDs")
     p_ag.add_argument("--team", default=None, help="Filter by team slug")
-    p_ag.add_argument("--status", default=None, choices=sorted(VALID_AGENT_STATUSES), help="Filter by status")
+    p_ag.add_argument(
+        "--status", default=None, choices=sorted(VALID_AGENT_STATUSES), help="Filter by status"
+    )
 
     # whois
     p_who = add_cmd("whois", "Resolve <team>/<role> or ultron-prime to live session UUID")
     p_who.add_argument("agent_id", help="Agent ID (e.g. platform/lead or ultron-prime)")
-    p_who.add_argument("--id-only", action="store_true", help="Print ONLY raw UUID to stdout (errors go strictly to stderr)")
+    p_who.add_argument(
+        "--id-only",
+        action="store_true",
+        help="Print ONLY raw UUID to stdout (errors go strictly to stderr)",
+    )
 
     # contacts
-    p_con = add_cmd("contacts", "Show chain-of-command contacts and live UUIDs for an agent")
+    p_con = add_cmd(
+        "contacts", "Show chain-of-command contacts and live UUIDs for an agent"
+    )
     p_con.add_argument("agent_id", help="Agent ID (e.g. platform/lead)")
 
     # new-thread
-    p_new = add_cmd("new-thread", "Create a visibility-scoped board thread")
+    p_new = add_cmd("new-thread", "Create a visibility-scoped JSONL board thread")
     p_new.add_argument("--title", required=True, help="Thread title")
-    p_new.add_argument("--author", required=True, help="Canonical author ID (<team>/<role> or ultron-prime)")
+    p_new.add_argument(
+        "--author", required=True, help="Canonical author ID (<team>/<role> or ultron-prime)"
+    )
     p_new.add_argument("--content", "-m", required=True, help="Initial post content")
-    p_new.add_argument("--category", default="general", help="Category (task, architecture, review, escalation, lesson, etc.)")
-    p_new.add_argument("--visibility", default=None, choices=sorted(VALID_VISIBILITIES), help="Visibility (personal | team | global)")
-    p_new.add_argument("--team", default=None, help="Owning team slug (inferred from author if omitted)")
-    p_new.add_argument("--with-team", default=None, help="Secondary team slug for parent/child handoffs (team visibility only)")
+    p_new.add_argument(
+        "--category",
+        default="general",
+        help="Category (task, architecture, review, escalation, lesson, etc.)",
+    )
+    p_new.add_argument(
+        "--visibility",
+        default=None,
+        choices=sorted(VALID_VISIBILITIES),
+        help="Visibility (personal | team | global)",
+    )
+    p_new.add_argument(
+        "--team", default=None, help="Owning team slug (inferred from author if omitted)"
+    )
+    p_new.add_argument(
+        "--with-team",
+        default=None,
+        help="Secondary team slug for parent/child handoffs (team visibility only)",
+    )
     p_new.add_argument("--tags", default="", help="Comma-separated tags")
     p_new.add_argument("--author-id", default="", help="Optional conversation UUID override")
 
     # reply
-    p_rep = add_cmd("reply", "Reply to an existing thread (enforces visibility auth)")
-    p_rep.add_argument("thread_id", type=int, help="Thread ID")
-    p_rep.add_argument("--author", required=True, help="Canonical author ID (<team>/<role> or ultron-prime)")
+    p_rep = add_cmd("reply", "Append a reply to an existing JSONL thread")
+    p_rep.add_argument("thread_id", help="Thread ID (full ID or unique short suffix/prefix)")
+    p_rep.add_argument(
+        "--author", required=True, help="Canonical author ID (<team>/<role> or ultron-prime)"
+    )
     p_rep.add_argument("--content", "-m", required=True, help="Reply body")
-    p_rep.add_argument("--reply-to", type=int, default=None, help="Optional parent post ID")
+    p_rep.add_argument("--reply-to", default=None, help="Optional parent post ID")
     p_rep.add_argument("--tags", default="", help="Comma-separated tags")
     p_rep.add_argument("--author-id", default="", help="Optional conversation UUID override")
 
     # list
     p_lst = add_cmd("list", "List visible threads (--as <agent_id> or --all required)")
-    p_lst.add_argument("--as", dest="as_agent", default=None, help="Caller agent ID (<team>/<role> or ultron-prime)")
-    p_lst.add_argument("--all", dest="show_all", action="store_true", help="Unfiltered view (ULTRON PRIME / Curator)")
-    p_lst.add_argument("--visibility", default=None, choices=sorted(VALID_VISIBILITIES), help="Filter by visibility")
+    p_lst.add_argument(
+        "--as", dest="as_agent", default=None, help="Caller agent ID (<team>/<role> or ultron-prime)"
+    )
+    p_lst.add_argument(
+        "--all",
+        dest="show_all",
+        action="store_true",
+        help="Unfiltered view (ULTRON PRIME / Curator)",
+    )
+    p_lst.add_argument(
+        "--visibility",
+        default=None,
+        choices=sorted(VALID_VISIBILITIES),
+        help="Filter by visibility",
+    )
     p_lst.add_argument("--team", default=None, help="Filter by team involvement")
     p_lst.add_argument("--category", default=None, help="Filter by category")
-    p_lst.add_argument("--status", default=None, choices=sorted(VALID_THREAD_STATUSES), help="Filter by status")
+    p_lst.add_argument(
+        "--status", default=None, choices=sorted(VALID_THREAD_STATUSES), help="Filter by status"
+    )
     p_lst.add_argument("--limit", type=int, default=25, help="Max threads to return")
 
     # view
     p_vw = add_cmd("view", "View full thread and replies (--as <agent_id> or --all required)")
-    p_vw.add_argument("thread_id", type=int, help="Thread ID")
+    p_vw.add_argument("thread_id", help="Thread ID (full ID or unique short suffix/prefix)")
     p_vw.add_argument("--as", dest="as_agent", default=None, help="Caller agent ID")
-    p_vw.add_argument("--all", dest="show_all", action="store_true", help="Unfiltered view (ULTRON PRIME / Curator)")
+    p_vw.add_argument(
+        "--all",
+        dest="show_all",
+        action="store_true",
+        help="Unfiltered view (ULTRON PRIME / Curator)",
+    )
 
     # search
-    p_sr = add_cmd("search", "Full-text search across visible threads (--as <agent_id> or --all required)")
+    p_sr = add_cmd("search", "Search across visible threads (--as <agent_id> or --all required)")
     p_sr.add_argument("query", help="Search query")
     p_sr.add_argument("--as", dest="as_agent", default=None, help="Caller agent ID")
-    p_sr.add_argument("--all", dest="show_all", action="store_true", help="Unfiltered view (ULTRON PRIME / Curator)")
-    p_sr.add_argument("--visibility", default=None, choices=sorted(VALID_VISIBILITIES), help="Filter by visibility")
+    p_sr.add_argument(
+        "--all",
+        dest="show_all",
+        action="store_true",
+        help="Unfiltered view (ULTRON PRIME / Curator)",
+    )
+    p_sr.add_argument(
+        "--visibility",
+        default=None,
+        choices=sorted(VALID_VISIBILITIES),
+        help="Filter by visibility",
+    )
     p_sr.add_argument("--team", default=None, help="Filter by team involvement")
     p_sr.add_argument("--limit", type=int, default=20, help="Max results")
 
     # set-status (alias: status)
-    p_st = add_cmd("set-status", "Update thread status", aliases=["status"])
-    p_st.add_argument("thread_id", type=int, help="Thread ID")
+    p_st = add_cmd(
+        "set-status", "Append a thread status update event", aliases=["status"]
+    )
+    p_st.add_argument("thread_id", help="Thread ID (full ID or unique short suffix/prefix)")
     p_st.add_argument("status", choices=sorted(VALID_THREAD_STATUSES), help="New status")
     p_st.add_argument("--as", dest="as_agent", default=None, help="Caller agent ID")
-    p_st.add_argument("--all", dest="show_all", action="store_true", help="Unfiltered access (ULTRON PRIME)")
+    p_st.add_argument(
+        "--all", dest="show_all", action="store_true", help="Unfiltered access (ULTRON PRIME)"
+    )
 
     # reclassify
-    p_rc = add_cmd("reclassify", "Reclassify a thread's visibility/scope (ULTRON PRIME / Curator)")
-    p_rc.add_argument("thread_id", type=int, help="Thread ID")
-    p_rc.add_argument("--visibility", required=True, choices=sorted(VALID_VISIBILITIES), help="Target visibility")
+    p_rc = add_cmd(
+        "reclassify", "Append a visibility/scope reclassification event (ULTRON PRIME / Curator)"
+    )
+    p_rc.add_argument("thread_id", help="Thread ID (full ID or unique short suffix/prefix)")
+    p_rc.add_argument(
+        "--visibility",
+        required=True,
+        choices=sorted(VALID_VISIBILITIES),
+        help="Target visibility",
+    )
     p_rc.add_argument("--team", default=None, help="Target owning team slug")
-    p_rc.add_argument("--with-team", default=None, help="Target secondary team slug (team visibility)")
-    p_rc.add_argument("--owner", default=None, help="Target owner agent_id (personal visibility)")
-    p_rc.add_argument("--as", dest="as_agent", default=None, help="Caller agent ID (must be ultron-prime)")
-    p_rc.add_argument("--all", dest="show_all", action="store_true", help="Authorized ULTRON PRIME override")
+    p_rc.add_argument(
+        "--with-team", default=None, help="Target secondary team slug (team visibility)"
+    )
+    p_rc.add_argument(
+        "--owner", default=None, help="Target owner agent_id (personal visibility)"
+    )
+    p_rc.add_argument(
+        "--as", dest="as_agent", default=None, help="Caller agent ID (must be ultron-prime)"
+    )
+    p_rc.add_argument(
+        "--all", dest="show_all", action="store_true", help="Authorized ULTRON PRIME override"
+    )
 
-    # backup / restore / stats
-    add_cmd("backup", "Export all teams, agents, and threads to Git-tracked JSON")
-    add_cmd("restore", "Reconcile SQLite database from Git-tracked JSON files")
+    # verify & stats
+    p_ver = add_cmd(
+        "verify",
+        "Verify integrity of Hive manifests, runtime sessions, JSONL threads, and .gitattributes",
+    )
+    p_ver.add_argument(
+        "--prune-orphans",
+        action="store_true",
+        help="Prune stale runtime session entries not present in ultron/hive/",
+    )
     add_cmd("stats", "Show ULTRON Core & Hive statistics")
 
     return parser
@@ -2585,7 +2506,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        core = UltronCore(repo_root=args.root, db_path=args.db)
+        core = UltronCore(repo_root=args.root)
         cmd = args.command
 
         if cmd == "register-prime":
@@ -2593,7 +2514,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             if args.json:
                 print(json.dumps(res, indent=2, sort_keys=True))
             else:
-                print(f"[ULTRON] Registered {PRIME_ID} -> {res['conversation_id']} (status=active)")
+                print(
+                    f"[ULTRON] Registered {PRIME_ID} -> {res['conversation_id']} (status=active)"
+                )
 
         elif cmd == "org-tree":
             if args.json:
@@ -2664,13 +2587,17 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(json.dumps(res, indent=2, sort_keys=True))
 
         elif cmd in ("render-spawn", "prepare-spawn"):
-            specs = core.render_spawn(team_slug=args.team, role=args.role, mission_brief=args.brief)
+            specs = core.render_spawn(
+                team_slug=args.team, role=args.role, mission_brief=args.brief
+            )
             if args.json:
                 print(json.dumps(specs, indent=2, sort_keys=True))
             else:
                 for s in specs:
                     print("=" * 80)
-                    print(f"SPAWN SPEC FOR: {s['agent_id']} (TypeName={s['define_subagent']['Name']})")
+                    print(
+                        f"SPAWN SPEC FOR: {s['agent_id']} (TypeName={s['define_subagent']['Name']})"
+                    )
                     print(
                         f"  Model={s['invoke_subagent']['Model']} | "
                         f"Workspace={s['invoke_subagent']['Workspace']} | "
@@ -2721,7 +2648,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(json.dumps(res, indent=2, sort_keys=True))
             else:
                 print(f"[ULTRON] Teams to disable: {res['teams_affected']}")
-                print(f"[ULTRON] ConversationIds to kill ({len(res['conversation_ids_to_kill'])}):")
+                print(
+                    f"[ULTRON] ConversationIds to kill ({len(res['conversation_ids_to_kill'])}):"
+                )
                 for cid in res["conversation_ids_to_kill"]:
                     print(f"  {cid}")
 
@@ -2732,7 +2661,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             else:
                 print(
                     f"[ULTRON] Disabled team(s) {res['teams_affected']} "
-                    f"(cleared {len(res['conversation_ids_to_kill'])} live UUID(s); Hive files & board threads preserved)."
+                    f"(cleared {len(res['conversation_ids_to_kill'])} live UUID(s); Hive files & JSONL threads preserved)."
                 )
 
         elif cmd == "disable-agent":
@@ -2765,7 +2694,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         elif cmd == "whois":
             agent = core.get_agent(args.agent_id)
             if not agent:
-                print(f"[ULTRON Error] Agent '{args.agent_id}' is not registered.", file=sys.stderr)
+                print(
+                    f"[ULTRON Error] Agent '{args.agent_id}' is not registered.",
+                    file=sys.stderr,
+                )
                 return 1
             if agent["status"] != "active" or not agent["conversation_id"]:
                 print(
@@ -2787,10 +2719,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         elif cmd == "contacts":
             res = core.get_contacts(args.agent_id)
-            if args.json:
-                print(json.dumps(res, indent=2, sort_keys=True))
-            else:
-                print(json.dumps(res, indent=2, sort_keys=True))
+            print(json.dumps(res, indent=2, sort_keys=True))
 
         elif cmd == "new-thread":
             res = core.create_thread(
@@ -2808,8 +2737,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(json.dumps(res, indent=2, sort_keys=True))
             else:
                 print(
-                    f"[ULTRON] Created Thread #{res['thread_id']} [{format_scope_badge(res)}]: "
-                    f"'{res['title']}' (Post #{res['post_id']})"
+                    f"[ULTRON] Created Thread {res['thread_id']} [{format_scope_badge(res)}]: "
+                    f"'{res['title']}' (Post {res['post_id']})"
                 )
 
         elif cmd == "reply":
@@ -2825,7 +2754,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(json.dumps(res, indent=2, sort_keys=True))
             else:
                 print(
-                    f"[ULTRON] Added Post #{res['post_id']} to Thread #{res['thread_id']} by @{res['author']}"
+                    f"[ULTRON] Added Post {res['post_id']} to Thread {res['thread_id']} by @{res['author']}"
                 )
 
         elif cmd == "list":
@@ -2844,12 +2773,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print("[ULTRON] No visible threads matched criteria.")
             else:
                 print(f"[ULTRON] Visible Threads ({len(threads)}):\n")
-                header = f"{'ID':<5} {'SCOPE':<24} {'CAT':<12} {'STATUS':<12} {'POSTS':<6} {'AUTHOR':<18} {'TITLE'}"
+                header = (
+                    f"{'ID':<21} {'SCOPE':<24} {'CAT':<12} "
+                    f"{'STATUS':<12} {'POSTS':<6} {'AUTHOR':<18} {'TITLE'}"
+                )
                 print(header)
-                print("-" * 105)
+                print("-" * 118)
                 for t in threads:
                     print(
-                        f"#{t['id']:<4} {format_scope_badge(t):<24} {t['category']:<12} "
+                        f"{t['id']:<21} {format_scope_badge(t):<24} {t['category']:<12} "
                         f"{t['status']:<12} {t['post_count']:<6} {t['author']:<18} {t['title']}"
                     )
 
@@ -2860,7 +2792,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                 show_all=args.show_all,
             )
             if not thread:
-                print(f"[ULTRON Error] Thread #{args.thread_id} not found.", file=sys.stderr)
+                print(
+                    f"[ULTRON Error] Thread '{args.thread_id}' not found.",
+                    file=sys.stderr,
+                )
                 return 1
             if args.json:
                 print(json.dumps(thread, indent=2, sort_keys=True))
@@ -2883,15 +2818,19 @@ def main(argv: Optional[List[str]] = None) -> int:
             else:
                 print(f"[ULTRON] Found {len(results)} matching post(s) for '{args.query}':\n")
                 for r in results:
-                    snippet = r["content"][:140] + ("..." if len(r["content"]) > 140 else "")
+                    snippet = r["content"][:140] + (
+                        "..." if len(r["content"]) > 140 else ""
+                    )
                     print(
-                        f"[Post #{r['post_id']} in Thread #{r['thread_id']} "
+                        f"[Post {r['post_id']} in Thread {r['thread_id']} "
                         f"({format_scope_badge(r)}) '{r['thread_title']}' by @{r['author']}]"
                     )
                     print(f"  {snippet}\n")
 
         elif cmd in ("set-status", "status"):
-            has_identity = bool(args.as_agent or os.environ.get("ULTRON_AGENT_ID") or args.show_all)
+            has_identity = bool(
+                args.as_agent or os.environ.get("ULTRON_AGENT_ID") or args.show_all
+            )
             if not has_identity:
                 raise PermissionError(
                     "Caller identity required: pass --as <agent_id> (or set ULTRON_AGENT_ID), or --all."
@@ -2903,9 +2842,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                 show_all=args.show_all,
             )
             if not ok:
-                print(f"[ULTRON Error] Thread #{args.thread_id} not found.", file=sys.stderr)
+                print(
+                    f"[ULTRON Error] Thread '{args.thread_id}' not found.",
+                    file=sys.stderr,
+                )
                 return 1
-            print(f"[ULTRON] Thread #{args.thread_id} status updated to '{args.status}'.")
+            print(f"[ULTRON] Thread '{args.thread_id}' status updated to '{args.status}'.")
 
         elif cmd == "reclassify":
             res = core.reclassify_thread(
@@ -2921,27 +2863,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(json.dumps(res, indent=2, sort_keys=True))
             else:
                 print(
-                    f"[ULTRON] Reclassified Thread #{res['id']} -> [{format_scope_badge(res)}]"
+                    f"[ULTRON] Reclassified Thread {res['id']} -> [{format_scope_badge(res)}]"
                 )
 
-        elif cmd == "backup":
-            res = core.export_all()
+        elif cmd == "verify":
+            res = core.verify(prune_orphans=args.prune_orphans)
             if args.json:
                 print(json.dumps(res, indent=2, sort_keys=True))
             else:
                 print(
-                    f"[ULTRON] Exported {res['teams']} team(s), {res['agents']} agent(s), "
-                    f"and {res['threads']} thread(s) to Git-tracked JSON."
-                )
-
-        elif cmd == "restore":
-            res = core.restore()
-            if args.json:
-                print(json.dumps(res, indent=2, sort_keys=True))
-            else:
-                print(
-                    f"[ULTRON] Restored {res['teams']} team(s), {res['agents']} agent(s), "
-                    f"and {res['threads']} thread(s) from Git-tracked JSON."
+                    f"[ULTRON] Integrity Verified: {res['teams']} team(s), {res['agents']} role(s), "
+                    f"{res['threads']} JSONL thread(s) ({res['posts']} post(s)), "
+                    f"pruned_orphans={len(res['pruned_orphan_sessions'])}, "
+                    f"merge=union={res['gitattributes_union_merge']}."
                 )
 
         elif cmd == "stats":
@@ -2951,11 +2885,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             else:
                 print("[ULTRON] System Statistics:")
                 print(f"  Repo Root:        {stats['repo_root']}")
-                print(f"  Database Path:    {stats['db_path']}")
                 print(f"  Hive Directory:   {stats['hive_dir']}")
-                print(f"  Teams:            {stats['active_teams']} active / {stats['total_teams']} total")
-                print(f"  Agents / Roles:   {stats['active_agents']} active / {stats['total_agents']} total")
-                print(f"  Threads:          {stats['total_threads']} (Visibilities: {stats['visibilities']})")
+                print(f"  Threads Dir:      {stats['threads_dir']}")
+                print(f"  Runtime Sessions: {stats['sessions_file']}")
+                print(
+                    f"  Teams:            {stats['active_teams']} active / {stats['total_teams']} total"
+                )
+                print(
+                    f"  Agents / Roles:   {stats['active_agents']} active / {stats['total_agents']} total"
+                )
+                print(
+                    f"  Threads:          {stats['total_threads']} (Visibilities: {stats['visibilities']})"
+                )
                 print(f"  Posts:            {stats['total_posts']}")
 
         return 0

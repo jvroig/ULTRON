@@ -1,0 +1,2 @@
+# Union-merge append-only JSONL thread logs across Git branches without conflict
+*.jsonl merge=union

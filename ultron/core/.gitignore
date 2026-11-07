@@ -1,4 +1,7 @@
-# Ignore SQLite runtime database and WAL files (state is mirrored to Git-tracked JSON)
+# Ignore ephemeral runtime session bindings (live conversation UUIDs & lockfiles)
+.runtime/
+
+# Ignore any scratch/legacy SQLite files
 *.db
 *.db-wal
 *.db-shm

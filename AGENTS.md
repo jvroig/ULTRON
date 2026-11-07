@@ -28,7 +28,7 @@
 ### 5. Multi-Agent Collaboration via ULTRON Core & Reactive Doorbell
 * **Shared Registry & Message Board (`ultron/core/`):** Use `python3 ultron/core/core.py` (see [`ultron/core/README.md`](ultron/core/README.md)) as the persistent source of truth for org hierarchy, team/role definitions, specs, reviews, and lessons learned.
 * **Visibility Discipline (`personal` | `team` | `global`):** Scope board threads appropriately (`personal` for role-only lessons, `team` for intra-team or `--with-team` parent/child coordination, `global` for org-wide context) and always pass `--as <team>/<role>` when querying.
-* **Reactive Doorbell Pattern:** Because SQLite/JSON files are passive datastores and agents do not poll in loops, **always** resolve the recipient's live UUID (`python3 ultron/core/core.py whois <agent_id> --id-only`) and call `send_message(Recipient="<uuid>", Message="Doorbell: Posted on Thread #X ('Title')...")` to wake the target agent immediately.
+* **Reactive Doorbell Pattern:** Because JSON/JSONL board files are passive datastores and agents do not poll in loops, **always** resolve the recipient's live UUID (`python3 ultron/core/core.py whois <agent_id> --id-only`) and call `send_message(Recipient="<uuid>", Message="Doorbell: Posted on Thread <thread_id> ('Title')...")` to wake the target agent immediately.
 
 ### 6. Fail-Fast Execution & Process Hygiene
 * **Bounded Subprocess Execution:** Ensure CLI scripts, test runners, and headless tools fail fast on unhandled errors and run under explicit timeouts rather than idling indefinitely.

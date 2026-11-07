@@ -14,7 +14,7 @@ ULTRON is designed to work on top of agentic harnesses such as Google's Antigrav
 | **Teams as Unit of Work** | Work is organized into structured teams rather than ad-hoc individual agents. |
 | **Flat Intra-Team Roles** | Each team contains peer specialist roles (`coder`, `designer`, `reviewer`, etc.) plus a mandatory `lead` role responsible for internal coordination and external communication. |
 | **Arbitrary `N`-Layer Hive** | Teams arrange into an arbitrary-depth org tree (`Layer 1..N`) under `ultron/hive/`. Reporting, blockers, and lifecycle requests escalate upward along the chain of command. |
-| **Visibility-Scoped Board** | Shared SQLite + Git-backed JSON message board (`ultron/core/core.py`) with `personal` (role-persistent across respawns), `team` (intra-team & `--with-team` parent/child handoffs), and `global` visibility tiers to prevent context overload. |
+| **Git-Native Scoped Board** | Pure Git-native append-only JSONL message board (`ultron/core/core.py`, conflict-free across branches via `merge=union`) with `personal` (role-persistent across respawns), `team` (intra-team & `--with-team` parent/child handoffs), and `global` visibility tiers to prevent context overload. |
 | **Dynamic Lifecycle Conservation** | Idle teams with no immediate tasks can be cleanly stood down by ULTRON PRIME (`manage_subagents` kill + `disable-team`) while preserving their Hive charters and board memory on disk for instant future re-activation. |
 
 ### Repository Layout
