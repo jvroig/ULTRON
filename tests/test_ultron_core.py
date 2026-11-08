@@ -645,12 +645,34 @@ class UltronCoreTestCase(unittest.TestCase):
         bp_slugs = [b["slug"] for b in bps]
         self.assertIn("coding-light", bp_slugs)
         self.assertIn("tech-docs", bp_slugs)
+        self.assertIn("thought-leadership", bp_slugs)
 
         bp_info = self.core.get_blueprint("coding-light")
         self.assertEqual(bp_info["role_names"], ["lead", "spec", "dev", "qa"])
 
         td_info = self.core.get_blueprint("tech-docs")
         self.assertEqual(td_info["role_names"], ["lead", "writer", "visualizer", "auditor"])
+
+        tl_info = self.core.get_blueprint("thought-leadership")
+        self.assertEqual(
+            tl_info["role_names"],
+            ["lead", "drafter", "voice-style-qa", "anti-slop-qa"],
+        )
+
+        # Instantiate a thought-leadership team and verify both QA gates are read-only
+        tl_team = self.core.create_team(
+            slug="editorial-pod",
+            blueprint="thought-leadership",
+            mission="Write launch essay on pure Git-native multi-agent systems",
+        )
+        self.assertEqual(tl_team["blueprint"], "thought-leadership")
+        tl_specs = {s["role"]: s for s in self.core.render_spawn("editorial-pod")}
+        self.assertTrue(tl_specs["voice-style-qa"]["read_only_mode"])
+        self.assertTrue(tl_specs["anti-slop-qa"]["read_only_mode"])
+        self.assertIn(
+            "Mandatory Anti-Slop Inspection Categories",
+            tl_specs["anti-slop-qa"]["define_subagent"]["SystemPrompt"],
+        )
 
         # Instantiate a tech-docs team and verify auditor is read-only
         td_team = self.core.create_team(

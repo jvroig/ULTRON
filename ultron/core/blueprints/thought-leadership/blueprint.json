@@ -1,0 +1,45 @@
+{
+  "description": "4-agent editorial & thought-leadership pod (Team Lead, Drafter, Voice-and-Style QA, Anti-Writing-Slop QA) for producing sharp, authentic articles, essays, technical blogs, and social media posts with zero AI-slop tropes.",
+  "name": "Thought Leadership & Editorial Team",
+  "roles": [
+    {
+      "default_model": "flash",
+      "mcp_tools": true,
+      "responsibilities": "Define the core thesis, contrarian/original angle, target audience, and medium with Drafter; oversee the dual Voice-Style and Anti-Slop QA gates; perform final editorial sign-off; and serve as sole external communication bridge.",
+      "role": "lead",
+      "template": "roles/lead.md.tmpl",
+      "title": "Team Leader & Managing Editor",
+      "write_tools": true
+    },
+    {
+      "default_model": "flash",
+      "mcp_tools": true,
+      "responsibilities": "Co-develop the narrative thesis and outline with Team Lead, author compelling long-form articles, blogs, or social posts grounded in concrete examples, and execute rewrites from Voice-Style QA and Anti-Slop QA punchlists.",
+      "role": "drafter",
+      "template": "roles/drafter.md.tmpl",
+      "title": "Lead Author & Narrative Drafter",
+      "write_tools": true
+    },
+    {
+      "default_model": "flash",
+      "mcp_tools": true,
+      "responsibilities": "Audit drafts for authentic human voice, opening hook velocity, sentence cadence, structural pacing, concrete evidence, and platform fit; bounce weak or flat passages directly to Drafter.",
+      "role": "voice-style-qa",
+      "template": "roles/voice-style-qa.md.tmpl",
+      "title": "Voice, Style & Narrative Flow Auditor",
+      "write_tools": false
+    },
+    {
+      "default_model": "flash",
+      "mcp_tools": true,
+      "responsibilities": "Ruthlessly detect and reject LLM writing clichés ('delve', 'tapestry', 'testament', 'not just X, it's Y'), throat-clearing intros, moralizing outros, and generic filler; bounce offending lines directly to Drafter until 100% slop-free.",
+      "role": "anti-slop-qa",
+      "template": "roles/anti-slop-qa.md.tmpl",
+      "title": "Anti-Writing-Slop & Authenticity Auditor",
+      "write_tools": false
+    }
+  ],
+  "slug": "thought-leadership",
+  "when_to_use": "Ideal for authoring high-impact technical blog posts, opinion essays, engineering postmortems, launch announcements, and social media threads (X/LinkedIn) that must read with sharp, authentic practitioner voice and zero LLM filler.",
+  "workflow_summary": "1. Lead <-> Drafter (Thesis, angle & outline) -> 2. Drafter (Full draft) -> 3. Drafter <-> Voice-Style QA & Anti-Slop QA (Dual editorial + anti-slop audit & rewrite loops) -> 4. QA Gates -> Lead (Final Editorial Sign-Off)."
+}

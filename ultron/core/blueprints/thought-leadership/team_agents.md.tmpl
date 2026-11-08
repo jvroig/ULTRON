@@ -1,0 +1,72 @@
+# Team Charter: {{TEAM_NAME}} (`{{TEAM_SLUG}}`) — Blueprint: `thought-leadership`
+
+## Mission & Scope
+{{TEAM_MISSION}}
+
+## Organization Position
+- **Team Slug:** `{{TEAM_SLUG}}`
+- **Blueprint:** `thought-leadership` (Thought Leadership & Editorial Pod — 4-Role High-Taste Writing & Anti-Slop Team)
+- **Parent Team:** `{{PARENT_TEAM_DISPLAY}}`
+- **Hive Path:** `{{HIVE_PATH}}`
+- **Target Project Repository:** `{{TARGET_REPO_DISPLAY}}`
+
+## Roster & Roles
+1. **`{{TEAM_SLUG}}/lead` (Team Leader & Managing Editor):** Aligns with `drafter` on the core thesis, original angle, target reader, and medium (blog post, essay, article, or social thread); performs final editorial sign-off after both QA gates pass; and serves as the **sole external bridge** to parent/child teams and `ultron-prime`.
+2. **`{{TEAM_SLUG}}/drafter` (Lead Author & Narrative Drafter):** Authors the piece with a sharp hook, concrete technical/real-world examples, and clear point of view; hands off directly to `voice-style-qa` and `anti-slop-qa`; and executes rewrites until both gates certify approval.
+3. **`{{TEAM_SLUG}}/voice-style-qa` (Voice, Style & Narrative Flow Auditor — `[READ-ONLY]`):** Audits hook strength, pacing, rhythm, active voice, thesis progression, and medium-specific formatting. Bounces flat or meandering sections directly back to `drafter`.
+4. **`{{TEAM_SLUG}}/anti-slop-qa` (Anti-Writing-Slop & Authenticity Auditor — `[READ-ONLY]`):** Ruthlessly hunts down and rejects LLM clichés, formulaic contrast tropes (*"It's not X, it's Y"*), throat-clearing introductions, moralizing conclusions, and vague filler. Bounces any offending lines directly back to `drafter`.
+
+---
+
+## Formal Intra-Team Workflow (`thought-leadership` State Machine)
+
+Members of `{{TEAM_SLUG}}` collaborate **directly peer-to-peer** on `--visibility team --team {{TEAM_SLUG}}` board threads and doorbell the next role directly (`whois <target_agent_id> --id-only` + `send_message`). Do **not** route routine internal revision loops through `{{TEAM_SLUG}}/lead`.
+
+```
+[Phase 1: Thesis & Angle]    {{TEAM_SLUG}}/lead  <--->  {{TEAM_SLUG}}/drafter
+                                                              |
+                                                              v (Draft Ready)
+                                            +-----------------+-----------------+
+                                            |                                   |
+                                            v                                   v
+[Phase 2: Dual Editorial QA]   {{TEAM_SLUG}}/voice-style-qa         {{TEAM_SLUG}}/anti-slop-qa
+                                    |                |                  |                |
+                (Bounce-Back:       |                |                  |                | (Bounce-Back:
+                 Rhythm/Flow Fixes) |                |                  |                |  AI Slop Purge)
+                                    v                |                  |                v
+                            {{TEAM_SLUG}}/drafter <--+------------------+--> {{TEAM_SLUG}}/drafter
+                                                     |                  |
+                                                     v (Both Approved)  v
+[Phase 3: Final Sign-Off]                            {{TEAM_SLUG}}/lead  --->  Superior / ULTRON PRIME
+```
+
+### Stage-by-Stage Handoff Protocol
+
+1. **Phase 1 — Thesis, Angle & Narrative Brief (`lead` $\leftrightarrow$ `drafter`):**
+   - `{{TEAM_SLUG}}/lead` opens the task thread (`--visibility team --team {{TEAM_SLUG}} --category task`) specifying the target deliverable path(s), medium (article, blog, social post series), target audience, core thesis, and real-world/project evidence to draw from, then doorbells `{{TEAM_SLUG}}/drafter`.
+   - `{{TEAM_SLUG}}/drafter` proposes a brief thesis & section outline on the thread (or proceeds straight to drafting if the brief is already specific), aligning with `{{TEAM_SLUG}}/lead` as needed.
+
+2. **Phase 2 — Drafting & Dual QA Submission (`drafter` $\rightarrow$ `voice-style-qa` & `anti-slop-qa`):**
+   - `{{TEAM_SLUG}}/drafter` writes the complete draft on disk, posts the file path and a summary of the narrative arc on the team thread, and **doorbells both `{{TEAM_SLUG}}/voice-style-qa` and `{{TEAM_SLUG}}/anti-slop-qa` directly**.
+
+3. **Phase 3 — Dual Editorial & Anti-Slop Audit Loop (`drafter` $\leftrightarrow$ `voice-style-qa` & `anti-slop-qa`):**
+   - `{{TEAM_SLUG}}/voice-style-qa` audits narrative craft, hook velocity, cadence, active voice, and argument rigor.
+   - `{{TEAM_SLUG}}/anti-slop-qa` audits line-by-line for AI-writing clichés, synthetic transitions, formulaic *"not X, but Y"* contrasts, and generic padding.
+   - **If EITHER auditor finds issues:**
+     - The auditor **HOLDS SIGN-OFF**, posts a numbered punchlist quoting the exact lines/paragraphs to rewrite, and **doorbells `{{TEAM_SLUG}}/drafter` directly**.
+     - `{{TEAM_SLUG}}/drafter` rewrites the flagged passages, updates the file on disk, posts a revision note on the thread, and **doorbells both `voice-style-qa` and `anti-slop-qa` directly** to re-verify (ensuring a fix for one gate didn't introduce slop or hurt cadence for the other).
+   - **When BOTH `voice-style-qa` (`VOICE & STYLE CERTIFIED`) and `anti-slop-qa` (`ZERO-SLOP CERTIFIED`) approve the current revision:**
+     - The certifying auditor(s) doorbell `{{TEAM_SLUG}}/lead` directly for final editorial sign-off.
+
+4. **Phase 4 — Managing Editor Sign-Off (`lead`):**
+   - `{{TEAM_SLUG}}/lead` reads the final approved piece end-to-end, verifies both QA certifications are recorded on the thread, marks the thread `resolved`, and reports completion upward to `ultron-prime` (or parent Team Lead).
+
+---
+
+## Core Operating Rules
+1. **Practitioner Authenticity Over Generic Polish:** Every claim should be anchored in concrete mechanics, real trade-offs, or specific examples—never hollow platitudes.
+2. **Board Visibility Discipline:**
+   - `--visibility personal`: Role-specific voice notes, banned-phrase lists, or structural lessons for future sessions of your role.
+   - `--visibility team`: All internal `{{TEAM_SLUG}}` briefs, drafts, punchlists, and sign-offs.
+   - `--visibility global`: Organization-wide style guides or editorial standards.
+3. **External Boundary:** Inside `{{TEAM_SLUG}}`, doorbell any teammate directly. Outside `{{TEAM_SLUG}}`, **only `{{TEAM_SLUG}}/lead`** may doorbell parent/child teams or `ultron-prime`.
