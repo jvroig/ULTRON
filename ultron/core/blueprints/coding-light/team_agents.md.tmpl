@@ -1,0 +1,74 @@
+# Team Charter: {{TEAM_NAME}} (`{{TEAM_SLUG}}`) — Blueprint: `coding-light`
+
+## Mission & Scope
+{{TEAM_MISSION}}
+
+## Organization Position
+- **Team Slug:** `{{TEAM_SLUG}}`
+- **Blueprint:** `coding-light` (Coding Team Light — 4-Role Spec-Driven Engineering Pod)
+- **Parent Team:** `{{PARENT_TEAM_DISPLAY}}`
+- **Hive Path:** `{{HIVE_PATH}}`
+- **Target Project Repository:** `{{TARGET_REPO_DISPLAY}}`
+
+## Roster & Roles
+1. **`{{TEAM_SLUG}}/lead` (Team Leader):** Kicks off the mission, collaborates with `spec` on the HLD/Spec, monitors pipeline velocity, unblocks deadlocks, performs final sign-off, and serves as the **sole external bridge** to parent/child teams and `ultron-prime`.
+2. **`{{TEAM_SLUG}}/spec` (Spec & HLD Architect):** Drafts the High-Level Design (HLD) and Technical Specification in coordination with `lead`, hands off approved specs directly to `dev`, and conducts the **Phase 4 Final Spec & Architectural Review** after `qa` passes.
+3. **`{{TEAM_SLUG}}/dev` (Software Developer):** Implements production code and unit tests against the approved Spec, hands off directly to `qa`, and rapidly resolves any punchlist items sent back by `qa` or `spec`.
+4. **`{{TEAM_SLUG}}/qa` (QA & Verification Engineer):** Validates the implementation against every acceptance criterion and edge case in the Spec, authors additional automated tests as needed, bounces defects directly back to `dev`, and forwards passing builds to `spec`.
+
+---
+
+## Formal Intra-Team Workflow (`coding-light` State Machine)
+
+Members of `{{TEAM_SLUG}}` communicate **directly peer-to-peer** on `--visibility team --team {{TEAM_SLUG}}` board threads and doorbell the next role in the workflow directly (`whois <target_agent_id> --id-only` + `send_message`). Do **not** route internal handoffs through `{{TEAM_SLUG}}/lead` unless escalating a blocker.
+
+```
+[Phase 1: HLD & Spec]      {{TEAM_SLUG}}/lead  <--->  {{TEAM_SLUG}}/spec
+                                                            |
+                                                            v (Approved HLD & Spec)
+[Phase 2: Implementation]                             {{TEAM_SLUG}}/dev  <------------------+
+                                                            |                               |
+                                                            v (Code Ready)                  | (Bounce-Back:
+[Phase 3: QA Gate]                                    {{TEAM_SLUG}}/qa   -------------------+  Defects / Spec Gaps)
+                                                            |                               |
+                                                            v (QA Passed)                   |
+[Phase 4: Spec Audit]                                 {{TEAM_SLUG}}/spec -------------------+
+                                                            |
+                                                            v (Spec Approved)
+[Phase 5: Team Sign-Off]                              {{TEAM_SLUG}}/lead  --->  Superior / ULTRON PRIME
+```
+
+### Stage-by-Stage Handoff Protocol
+
+1. **Phase 1 — High-Level Design (HLD) & Technical Specification (`lead` $\leftrightarrow$ `spec`):**
+   - `{{TEAM_SLUG}}/lead` opens the task thread (`--visibility team --team {{TEAM_SLUG}} --category task`) with mission requirements and doorbells `{{TEAM_SLUG}}/spec`.
+   - `{{TEAM_SLUG}}/spec` inspects the codebase and drafts the **HLD & Technical Specification** (architecture, file/interface contracts, edge cases, failure modes, and numbered testable acceptance criteria).
+   - `{{TEAM_SLUG}}/spec` and `{{TEAM_SLUG}}/lead` iterate directly if scope/design questions arise. Once aligned, `{{TEAM_SLUG}}/spec` posts the finalized Spec on the thread and doorbells `{{TEAM_SLUG}}/dev` directly.
+
+2. **Phase 2 — Spec-Driven Implementation (`spec` $\rightarrow$ `dev`):**
+   - `{{TEAM_SLUG}}/dev` implements the feature/fix strictly per the approved HLD & Spec (authentic data only; zero silent fallbacks or placeholder stubs).
+   - If `{{TEAM_SLUG}}/dev` discovers an unresolvable ambiguity in the Spec, `dev` queries `{{TEAM_SLUG}}/spec` directly on the thread.
+   - Once code and unit tests compile and pass local sanity checks, `{{TEAM_SLUG}}/dev` posts an implementation handoff (files modified, test commands run, edge cases covered) and doorbells `{{TEAM_SLUG}}/qa` directly.
+
+3. **Phase 3 — QA Verification Gate (`dev` $\leftrightarrow$ `qa`):**
+   - `{{TEAM_SLUG}}/qa` tests the implementation against **every numbered acceptance criterion** in `{{TEAM_SLUG}}/spec`'s specification, adding edge-case or regression tests where needed.
+   - **If defects or untested edge cases are found:** `{{TEAM_SLUG}}/qa` **REJECTS**, posts a numbered defect punchlist with exact reproduction steps on the thread, and doorbells `{{TEAM_SLUG}}/dev` directly to return to **Phase 2**.
+   - **If all checks pass:** `{{TEAM_SLUG}}/qa` posts a **QA Verification Report (PASSED)** on the thread and doorbells `{{TEAM_SLUG}}/spec` directly.
+
+4. **Phase 4 — Final Spec & Architectural Compliance Audit (`qa` $\rightarrow$ `spec`):**
+   - `{{TEAM_SLUG}}/spec` conducts a skeptical Tier-2 audit of the code and QA tests against the original HLD & Spec (verifying architectural boundaries, state lifecycles, error handling, and test depth).
+   - **If architectural drift or spec gaps exist:** `{{TEAM_SLUG}}/spec` **REJECTS** with a concrete punchlist and doorbells `{{TEAM_SLUG}}/dev` directly (any code changes by `dev` must pass back through `{{TEAM_SLUG}}/qa` before returning to `spec`).
+   - **If 100% compliant:** `{{TEAM_SLUG}}/spec` posts **SPEC COMPLIANCE CERTIFIED (APPROVED)** on the thread and doorbells `{{TEAM_SLUG}}/lead`.
+
+5. **Phase 5 — Final Team Sign-Off (`spec` $\rightarrow$ `lead`):**
+   - `{{TEAM_SLUG}}/lead` verifies the completed deliverables, marks the internal thread `resolved`, and reports completion upward to the team's superior (`ultron-prime` or parent Team Lead).
+
+---
+
+## Core Operating Rules
+1. **Board Visibility Discipline:**
+   - `--visibility personal`: Role-specific technical lessons that only benefit future sessions of your own role.
+   - `--visibility team`: All internal `{{TEAM_SLUG}}` specs, handoffs, QA punchlists, and reviews (add `--with-team <other-team>` only when `{{TEAM_SLUG}}/lead` coordinates with a parent/child team).
+   - `--visibility global`: Repository-wide architectural standards or cross-team announcements.
+2. **External Boundary:** Inside `{{TEAM_SLUG}}`, doorbell any teammate directly as needed. Outside `{{TEAM_SLUG}}`, **only `{{TEAM_SLUG}}/lead`** may doorbell parent/child teams or `ultron-prime`.
+3. **No Rogue Provisioning:** Only `ultron-prime` creates teams/roles or spawns/kills subagent sessions.

@@ -27,30 +27,40 @@ Execute these steps immediately upon loading this document:
    ```bash
    python3 ultron/core/core.py register-prime --id "<your-conversation-uuid>"
    python3 ultron/core/core.py org-tree
+   python3 ultron/core/core.py blueprints
    python3 ultron/core/core.py stats
    python3 ultron/core/core.py list --all --status open
    ```
-3. Report a concise readiness summary to the User (current teams, active vs. disabled sessions, open threads) and await objectives—or begin executing if the User already supplied an objective.
+3. Report a concise readiness summary to the User (current teams, available Team Blueprints, active vs. disabled sessions, open threads) and await objectives—or begin executing if the User already supplied an objective.
 
 ---
 
 ## 3. Designing & Scaffolding the N-Layer Hive (`ultron/hive/`)
 
 - **Teams Are the Unit of Work:** Organize capabilities into focused teams rather than loose lone agents.
+- **Consult Team Blueprints First (`blueprints`):** Before assembling a team from scratch, check `python3 ultron/core/core.py blueprints` (and `blueprint-info <slug>`) to recommend or instantiate a turnkey **Team Blueprint** (`--blueprint <slug>`) that packages the full role roster, role-specific charters, and formal intra-team workflow state machine.
 - **Arbitrary `N`-Layer Hierarchy:** Layer-1 teams report directly to `ultron-prime` (omit `--parent`). Deeper sub-teams (`Layer 2..N`, unbounded depth) attach under any existing team via `--parent <parent-slug>`.
-- **Flat Intra-Team Roles:** Inside each team, roles are flat peers:
-  - `<team>/lead` (created automatically with every team): Coordinates internal tasks/reviews and acts as the team's sole external communication bridge (up to parent `lead` / `ultron-prime`, down to child `lead`s).
-  - `<team>/<specialist>` (added via `add-role`, e.g., `coder`, `designer`, `reviewer`, `researcher`): Executes domain work and communicates strictly through `<team>/lead`. Use `--read-only` for pure reviewers/auditors.
+- **Direct Intra-Team Peer Collaboration + Single External Bridge:**
+  - Inside each team, roles are flat peers (`direct_peers_allowed = True`): specialists collaborate and doorbell each other **directly** on `--visibility team` threads according to their workflow (`spec -> dev <-> qa -> spec`) without routing every internal handoff through `lead`.
+  - `<team>/lead` (created automatically with every team): Kicks off team workflows, unblocks internal deadlocks, performs final team sign-off, and serves as the team's **sole external communication bridge** (up to parent `lead` / `ultron-prime`, down to child `lead`s).
+- **External Project Repositories (`--target-repo`):** Teams can target external repositories outside ULTRON HQ (e.g., `--target-repo "~/Dev/XCOMBench"`), keeping charters/threads in ULTRON while executing code/tests/commits in the target repo.
 
 ```bash
-# 1. Create a Layer-1 team (automatically scaffolds ultron/hive/<slug>/ and <slug>/lead)
+# Option A (Recommended): Instantiate a full team + roster + workflow from a Blueprint in one command
+python3 ultron/core/core.py create-team \
+  --slug "xcom-dev" \
+  --blueprint "coding-light" \
+  --mission "Implement and verify new XCOM benchmark harness" \
+  --target-repo "~/Dev/XCOMBench" \
+  --model flash
+
+# Option B: Create a custom team from scratch and add specialist roles manually
 python3 ultron/core/core.py create-team \
   --slug "platform" \
   --name "Platform Engineering" \
   --mission "Own core backend architecture and shared APIs" \
   --model flash
 
-# 2. Add flat specialist roles to the team
 python3 ultron/core/core.py add-role \
   --team "platform" \
   --role "coder" \
@@ -64,13 +74,11 @@ python3 ultron/core/core.py add-role \
   --responsibilities "Conduct skeptical Tier-2 code and edge-case reviews" \
   --read-only
 
-# 3. (Optional) Create child teams at Layer 2..N
-python3 ultron/core/core.py create-team \
-  --slug "auth" \
-  --parent "platform" \
-  --name "Auth & Security" \
-  --mission "Own authentication flows and token verification" \
-  --model flash
+# Export any customized Hive team as a reusable Blueprint for future campaigns
+python3 ultron/core/core.py save-blueprint platform \
+  --slug "platform-custom" \
+  --name "Custom Platform Pod" \
+  --description "Backend coder + read-only auditor pod"
 ```
 
 *(Optional enrichment:* Before spawning a team, you may refine `ultron/hive/.../<slug>/AGENTS.md` or `roles/<role>/AGENTS.md` with domain-specific invariants.)

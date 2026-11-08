@@ -175,6 +175,10 @@ class UltronCore:
         self.sessions_file = self.runtime_dir / "sessions.json"
         self.lock_file = self.runtime_dir / ".lock"
         self.templates_dir = Path(templates_dir or TEMPLATES_DIR).resolve()
+        self.blueprints_dir = Path(
+            os.environ.get("ULTRON_BLUEPRINTS_DIR") or (default_core / "blueprints")
+        ).resolve()
+        self._builtin_blueprints_dir = (CORE_DIR / "blueprints").resolve()
 
         self.hive_dir.mkdir(parents=True, exist_ok=True)
         self.threads_dir.mkdir(parents=True, exist_ok=True)
@@ -411,6 +415,7 @@ class UltronCore:
             )
 
             teams_by_slug[slug] = {
+                "blueprint": str(raw_t.get("blueprint", "")).strip(),
                 "created_at": created_at,
                 "default_model": model,
                 "hive_path": hive_rel,
@@ -473,6 +478,190 @@ class UltronCore:
         return descendants
 
     # ------------------------------------------------------------------
+    # Blueprint Discovery & Authoring (ultron/core/blueprints/)
+    # ------------------------------------------------------------------
+
+    def _load_blueprint_dir(self, bp_dir: Path) -> Dict[str, Any]:
+        manifest_path = bp_dir / "blueprint.json"
+        if not manifest_path.is_file():
+            raise ValueError(f"Blueprint directory '{bp_dir}' is missing 'blueprint.json'.")
+        try:
+            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Corrupt JSON in '{manifest_path}': {exc}") from exc
+
+        slug = validate_slug(str(raw.get("slug", bp_dir.name)), "blueprint slug")
+        if slug != bp_dir.name:
+            raise ValueError(
+                f"Blueprint folder '{bp_dir.name}' mismatches blueprint.json slug '{slug}'."
+            )
+        roles_raw = raw.get("roles", [])
+        if not isinstance(roles_raw, list) or not roles_raw:
+            raise ValueError(f"Blueprint '{slug}' must define a non-empty 'roles' list.")
+
+        roles: List[Dict[str, Any]] = []
+        seen_roles: Set[str] = set()
+        for r in roles_raw:
+            r_slug = validate_role_slug(str(r.get("role", "")))
+            if r_slug in seen_roles:
+                raise ValueError(f"Duplicate role '{r_slug}' in blueprint '{slug}'.")
+            seen_roles.add(r_slug)
+            r_model = str(r.get("default_model", "flash")).strip().lower()
+            if r_model not in VALID_MODELS:
+                raise ValueError(
+                    f"Invalid default_model '{r_model}' for role '{r_slug}' in blueprint '{slug}'."
+                )
+            tmpl_rel = str(r.get("template", f"roles/{r_slug}.md.tmpl")).strip()
+            tmpl_path = (bp_dir / tmpl_rel).resolve()
+            if not tmpl_path.is_file():
+                raise ValueError(
+                    f"Blueprint '{slug}' role '{r_slug}' is missing template file '{tmpl_rel}'."
+                )
+            roles.append(
+                {
+                    "default_model": r_model,
+                    "mcp_tools": bool(r.get("mcp_tools", True)),
+                    "responsibilities": str(r.get("responsibilities", "")).strip(),
+                    "role": r_slug,
+                    "template": tmpl_rel,
+                    "title": str(r.get("title", r_slug)).strip(),
+                    "write_tools": bool(r.get("write_tools", True)),
+                }
+            )
+        if "lead" not in seen_roles:
+            raise ValueError(f"Blueprint '{slug}' must include a 'lead' role.")
+
+        team_tmpl = bp_dir / "team_agents.md.tmpl"
+        if not team_tmpl.is_file():
+            raise ValueError(
+                f"Blueprint '{slug}' is missing 'team_agents.md.tmpl'."
+            )
+
+        return {
+            "blueprint_path": str(bp_dir),
+            "description": str(raw.get("description", "")).strip(),
+            "name": str(raw.get("name", slug)).strip(),
+            "role_names": [r["role"] for r in roles],
+            "roles": roles,
+            "slug": slug,
+            "when_to_use": str(raw.get("when_to_use", "")).strip(),
+            "workflow_summary": str(raw.get("workflow_summary", "")).strip(),
+        }
+
+    def list_blueprints(self) -> List[Dict[str, Any]]:
+        by_slug: Dict[str, Dict[str, Any]] = {}
+        search_dirs = [self._builtin_blueprints_dir]
+        if self.blueprints_dir != self._builtin_blueprints_dir:
+            search_dirs.append(self.blueprints_dir)
+        for root_dir in search_dirs:
+            if not root_dir.is_dir():
+                continue
+            for child in sorted(root_dir.iterdir()):
+                if (
+                    child.is_dir()
+                    and not child.name.startswith(".")
+                    and (child / "blueprint.json").is_file()
+                ):
+                    bp = self._load_blueprint_dir(child)
+                    by_slug[bp["slug"]] = bp
+        return [by_slug[k] for k in sorted(by_slug)]
+
+    def get_blueprint(self, blueprint_slug: str) -> Dict[str, Any]:
+        clean = validate_slug(blueprint_slug, "blueprint slug")
+        for root_dir in (self.blueprints_dir, self._builtin_blueprints_dir):
+            bp_dir = root_dir / clean
+            if bp_dir.is_dir() and (bp_dir / "blueprint.json").is_file():
+                return self._load_blueprint_dir(bp_dir)
+        available = [b["slug"] for b in self.list_blueprints()]
+        raise ValueError(
+            f"Blueprint '{clean}' not found in '{self.blueprints_dir}'. Available: {available}"
+        )
+
+    def save_blueprint(
+        self,
+        team_slug: str,
+        blueprint_slug: str,
+        name: str,
+        description: str,
+        when_to_use: str = "",
+        workflow_summary: str = "",
+        overwrite: bool = False,
+    ) -> Dict[str, Any]:
+        """Export an existing Hive team's roster and charters into a reusable blueprint."""
+        clean_team = validate_slug(team_slug, "team slug")
+        clean_bp = validate_slug(blueprint_slug, "blueprint slug")
+        clean_name = name.strip()
+        clean_desc = description.strip()
+        if not clean_name:
+            raise ValueError("Blueprint name cannot be empty.")
+        if not clean_desc:
+            raise ValueError("Blueprint description cannot be empty.")
+
+        with self._lock(exclusive=True):
+            teams_by_slug, _, _ = self._scan_state_unlocked()
+            team = teams_by_slug.get(clean_team)
+            if not team:
+                raise ValueError(f"Team '{clean_team}' does not exist.")
+
+            bp_dir = self.blueprints_dir / clean_bp
+            if bp_dir.exists() and not overwrite:
+                raise ValueError(
+                    f"Blueprint '{clean_bp}' already exists at '{bp_dir}'. Pass --overwrite to replace."
+                )
+
+            (bp_dir / "roles").mkdir(parents=True, exist_ok=True)
+            team_dir = self._abs_from_rel(team["hive_path"])
+            team_agents_src = (team_dir / "AGENTS.md").read_text(encoding="utf-8")
+
+            # Parameterize team-specific literals back to template tokens
+            team_tmpl = (
+                team_agents_src.replace(team["name"], "{{TEAM_NAME}}")
+                .replace(team["mission"], "{{TEAM_MISSION}}")
+                .replace(team["hive_path"], "{{HIVE_PATH}}")
+                .replace(clean_team, "{{TEAM_SLUG}}")
+            )
+            (bp_dir / "team_agents.md.tmpl").write_text(team_tmpl, encoding="utf-8")
+
+            bp_roles: List[Dict[str, Any]] = []
+            for r in team["roles"]:
+                r_slug = r["role"]
+                r_dir = self._abs_from_rel(r["role_path"])
+                r_ws_rel = self._rel_posix(r_dir / "workspace")
+                r_src = (r_dir / "AGENTS.md").read_text(encoding="utf-8")
+                r_tmpl = (
+                    r_src.replace(r["title"], "{{ROLE_TITLE}}")
+                    .replace(r["agent_id"], "{{AGENT_ID}}")
+                    .replace(team["name"], "{{TEAM_NAME}}")
+                    .replace(r_ws_rel, "{{ROLE_WORKSPACE_PATH}}")
+                    .replace(r["responsibilities"], "{{RESPONSIBILITIES}}")
+                    .replace(clean_team, "{{TEAM_SLUG}}")
+                )
+                rel_tmpl_path = f"roles/{r_slug}.md.tmpl"
+                (bp_dir / rel_tmpl_path).write_text(r_tmpl, encoding="utf-8")
+                bp_roles.append(
+                    {
+                        "default_model": r["model"],
+                        "mcp_tools": bool(r["mcp_tools"]),
+                        "responsibilities": r["responsibilities"],
+                        "role": r_slug,
+                        "template": rel_tmpl_path,
+                        "title": r["title"],
+                        "write_tools": bool(r["write_tools"]),
+                    }
+                )
+
+            manifest = {
+                "description": clean_desc,
+                "name": clean_name,
+                "roles": bp_roles,
+                "slug": clean_bp,
+                "when_to_use": when_to_use.strip() or f"Reusable team blueprint exported from '{clean_team}'.",
+                "workflow_summary": workflow_summary.strip(),
+            }
+            atomic_write_json(bp_dir / "blueprint.json", manifest)
+            return self._load_blueprint_dir(bp_dir)
+
+    # ------------------------------------------------------------------
     # Org Graph & Team / Role Scaffolding
     # ------------------------------------------------------------------
 
@@ -497,16 +686,20 @@ class UltronCore:
     def create_team(
         self,
         slug: str,
-        name: str,
-        mission: str,
+        name: str = "",
+        mission: str = "",
         parent_team: Optional[str] = None,
         default_model: str = "flash",
         workspace_mode: str = "inherit",
         lead_responsibilities: str = "",
         target_repo: str = "",
+        blueprint: Optional[str] = None,
     ) -> Dict[str, Any]:
         clean_slug = validate_slug(slug, "team slug")
-        clean_name = name.strip()
+        bp_obj = self.get_blueprint(blueprint) if blueprint else None
+        clean_bp = bp_obj["slug"] if bp_obj else ""
+
+        clean_name = name.strip() or (f"{bp_obj['name']} ({clean_slug})" if bp_obj else "")
         clean_mission = mission.strip()
         if not clean_name:
             raise ValueError("Team name cannot be empty.")
@@ -555,59 +748,39 @@ class UltronCore:
                 layer = 1
 
             hive_rel = self._rel_posix(team_dir)
-            lead_dir = team_dir / "roles" / "lead"
-            lead_rel = self._rel_posix(lead_dir)
-            lead_ws_rel = self._rel_posix(lead_dir / "workspace")
-
-            lead_id = f"{clean_slug}/lead"
-            lead_title = f"{clean_name} Team Leader"
-            lead_resp = (
-                lead_responsibilities.strip()
-                or f"Coordinate internal execution for '{clean_name}' ({clean_slug}) and serve as sole external communication bridge along the ULTRON hierarchy."
-            )
-
             (team_dir / "teams").mkdir(parents=True, exist_ok=True)
-            (lead_dir / "workspace").mkdir(parents=True, exist_ok=True)
             (team_dir / "teams" / ".gitkeep").touch(exist_ok=True)
-            (lead_dir / "workspace" / ".gitkeep").touch(exist_ok=True)
 
             target_repo_display = (
                 clean_target_repo
                 if clean_target_repo
                 else "Local ULTRON Repository (default)"
             )
+            parent_display = clean_parent or f"{PRIME_ID} (Layer 1 root)"
+
+            if bp_obj:
+                bp_dir = Path(bp_obj["blueprint_path"])
+                team_tmpl_text = (bp_dir / "team_agents.md.tmpl").read_text(encoding="utf-8")
+            else:
+                team_tmpl_text = self._load_template("team_agents.md.tmpl")
+
             team_agents_md = render_template(
-                self._load_template("team_agents.md.tmpl"),
+                team_tmpl_text,
                 {
                     "TEAM_NAME": clean_name,
                     "TEAM_MISSION": clean_mission,
                     "TEAM_SLUG": clean_slug,
-                    "PARENT_TEAM_DISPLAY": clean_parent or f"{PRIME_ID} (Layer 1 root)",
+                    "PARENT_TEAM_DISPLAY": parent_display,
                     "HIVE_PATH": hive_rel,
                     "TARGET_REPO_DISPLAY": target_repo_display,
                 },
             )
-            lead_role_md = render_template(
-                self._load_template("lead_role.md.tmpl"),
-                {
-                    "ROLE_TITLE": lead_title,
-                    "AGENT_ID": lead_id,
-                    "TEAM_NAME": clean_name,
-                    "TEAM_SLUG": clean_slug,
-                    "ROLE_WORKSPACE_PATH": lead_ws_rel,
-                    "RESPONSIBILITIES": lead_resp,
-                },
-            )
-
             team_agents_path = team_dir / "AGENTS.md"
             if not team_agents_path.exists():
                 team_agents_path.write_text(team_agents_md, encoding="utf-8")
 
-            lead_agents_path = lead_dir / "AGENTS.md"
-            if not lead_agents_path.exists():
-                lead_agents_path.write_text(lead_role_md, encoding="utf-8")
-
             team_manifest: Dict[str, Any] = {
+                "blueprint": clean_bp,
                 "created_at": iso,
                 "default_model": model,
                 "hive_path": hive_rel,
@@ -620,20 +793,97 @@ class UltronCore:
                 "updated_at": iso,
                 "workspace_mode": ws,
             }
-            role_manifest: Dict[str, Any] = {
-                "agent_id": lead_id,
-                "mcp_tools": True,
-                "model": model,
-                "registered_at": iso,
-                "responsibilities": lead_resp,
-                "role": "lead",
-                "role_path": lead_rel,
-                "team_slug": clean_slug,
-                "title": lead_title,
-                "write_tools": True,
-            }
             atomic_write_json(team_dir / "team.json", team_manifest)
-            atomic_write_json(lead_dir / "role.json", role_manifest)
+
+            if bp_obj:
+                bp_dir = Path(bp_obj["blueprint_path"])
+                for r_spec in bp_obj["roles"]:
+                    r_slug = r_spec["role"]
+                    r_dir = team_dir / "roles" / r_slug
+                    r_rel = self._rel_posix(r_dir)
+                    r_ws_rel = self._rel_posix(r_dir / "workspace")
+                    (r_dir / "workspace").mkdir(parents=True, exist_ok=True)
+                    (r_dir / "workspace" / ".gitkeep").touch(exist_ok=True)
+
+                    r_id = f"{clean_slug}/{r_slug}"
+                    r_title = r_spec["title"]
+                    if r_slug == "lead" and lead_responsibilities.strip():
+                        r_resp = lead_responsibilities.strip()
+                    else:
+                        r_resp = r_spec["responsibilities"]
+
+                    r_tmpl_text = (bp_dir / r_spec["template"]).read_text(encoding="utf-8")
+                    r_md = render_template(
+                        r_tmpl_text,
+                        {
+                            "ROLE_TITLE": r_title,
+                            "AGENT_ID": r_id,
+                            "TEAM_NAME": clean_name,
+                            "TEAM_SLUG": clean_slug,
+                            "ROLE_SLUG": r_slug,
+                            "ROLE_WORKSPACE_PATH": r_ws_rel,
+                            "RESPONSIBILITIES": r_resp,
+                        },
+                    )
+                    r_agents_path = r_dir / "AGENTS.md"
+                    if not r_agents_path.exists():
+                        r_agents_path.write_text(r_md, encoding="utf-8")
+
+                    r_model = model if default_model != "flash" else r_spec["default_model"]
+                    r_manifest: Dict[str, Any] = {
+                        "agent_id": r_id,
+                        "mcp_tools": bool(r_spec["mcp_tools"]),
+                        "model": r_model,
+                        "registered_at": iso,
+                        "responsibilities": r_resp,
+                        "role": r_slug,
+                        "role_path": r_rel,
+                        "team_slug": clean_slug,
+                        "title": r_title,
+                        "write_tools": bool(r_spec["write_tools"]),
+                    }
+                    atomic_write_json(r_dir / "role.json", r_manifest)
+            else:
+                lead_dir = team_dir / "roles" / "lead"
+                lead_rel = self._rel_posix(lead_dir)
+                lead_ws_rel = self._rel_posix(lead_dir / "workspace")
+                (lead_dir / "workspace").mkdir(parents=True, exist_ok=True)
+                (lead_dir / "workspace" / ".gitkeep").touch(exist_ok=True)
+
+                lead_id = f"{clean_slug}/lead"
+                lead_title = f"{clean_name} Team Leader"
+                lead_resp = (
+                    lead_responsibilities.strip()
+                    or f"Coordinate internal execution for '{clean_name}' ({clean_slug}) and serve as sole external communication bridge along the ULTRON hierarchy."
+                )
+                lead_role_md = render_template(
+                    self._load_template("lead_role.md.tmpl"),
+                    {
+                        "ROLE_TITLE": lead_title,
+                        "AGENT_ID": lead_id,
+                        "TEAM_NAME": clean_name,
+                        "TEAM_SLUG": clean_slug,
+                        "ROLE_WORKSPACE_PATH": lead_ws_rel,
+                        "RESPONSIBILITIES": lead_resp,
+                    },
+                )
+                lead_agents_path = lead_dir / "AGENTS.md"
+                if not lead_agents_path.exists():
+                    lead_agents_path.write_text(lead_role_md, encoding="utf-8")
+
+                role_manifest = {
+                    "agent_id": lead_id,
+                    "mcp_tools": True,
+                    "model": model,
+                    "registered_at": iso,
+                    "responsibilities": lead_resp,
+                    "role": "lead",
+                    "role_path": lead_rel,
+                    "team_slug": clean_slug,
+                    "title": lead_title,
+                    "write_tools": True,
+                }
+                atomic_write_json(lead_dir / "role.json", role_manifest)
 
             teams_after, _, _ = self._scan_state_unlocked()
             return teams_after[clean_slug]
@@ -876,14 +1126,19 @@ class UltronCore:
             layer = team["layer"]
 
             if agent["role"] != "lead":
+                team_peers = [r for r in team["roles"] if r["agent_id"] != aid]
                 return {
                     "agent_id": aid,
                     "team_slug": t_slug,
                     "layer": layer,
                     "role": agent["role"],
                     "reports_to": agents_by_id.get(f"{t_slug}/lead"),
-                    "direct_peers_allowed": False,
-                    "note": f"Coordinate and escalate strictly through your Team Lead ('{t_slug}/lead').",
+                    "direct_peers_allowed": True,
+                    "team_peers": team_peers,
+                    "note": (
+                        f"Collaborate directly with intra-team peers on '--visibility team --team {t_slug}' threads. "
+                        f"Escalate blockers and route all external communication strictly through your Team Lead ('{t_slug}/lead')."
+                    ),
                 }
 
             if team["parent_team"]:
@@ -992,10 +1247,19 @@ class UltronCore:
                     f"- **Cross-Team Board Rule:** Use `--visibility team --team {clean_team} --with-team <other-team>` for parent/child handoffs."
                 )
             else:
+                peer_ids = [
+                    m["agent_id"] for m in team["roles"] if m["agent_id"] != aid
+                ]
+                peers_str = (
+                    ", ".join(f"`{p}`" for p in peer_ids)
+                    if peer_ids
+                    else f"`{clean_team}/lead`"
+                )
                 routing_summary = (
                     f"- **Role Type:** Specialist (`{aid}`)\n"
-                    f"- **Report & Escalate ONLY to Your Team Lead:** `{clean_team}/lead`\n"
-                    f"- **Strict Boundary:** Never doorbell external teams or `{PRIME_ID}` directly."
+                    f"- **Collaborate Directly Within Your Team:** {peers_str} (post on `--visibility team --team {clean_team}` and doorbell the next peer in your workflow directly)\n"
+                    f"- **Escalate Blockers & Route External Comms Through Team Lead:** `{clean_team}/lead`\n"
+                    f"- **Strict External Boundary:** Never doorbell external teams or `{PRIME_ID}` directly."
                 )
 
             is_read_only = not bool(r["write_tools"])
@@ -2219,11 +2483,12 @@ def format_org_tree(core: UltronCore) -> str:
                 f"{r['role']}*" if r["status"] == "active" else r["role"]
                 for r in t["roles"]
             )
+            bp_suffix = f" blueprint={t['blueprint']}" if t.get("blueprint") else ""
             repo_suffix = f" repo={t['target_repo']}" if t.get("target_repo") else ""
             lines.append(
                 f"{prefix}{connector}[L{t['layer']}] {t['slug']} ({t['name']}) "
                 f"[{t['status'].upper()} | {active_roles}/{len(t['roles'])} active] "
-                f"roles: [{role_names}]{repo_suffix}"
+                f"roles: [{role_names}]{bp_suffix}{repo_suffix}"
             )
             next_prefix = prefix + ("    " if is_last else "│   ")
             render_branch(t["slug"], next_prefix)
@@ -2321,11 +2586,40 @@ def build_parser() -> argparse.ArgumentParser:
     # org-tree
     add_cmd("org-tree", "Display full N-layer Hive organization tree")
 
+    # blueprints
+    add_cmd("blueprints", "List available Team Blueprints in ultron/core/blueprints/")
+
+    # blueprint-info
+    p_bpi = add_cmd("blueprint-info", "Show full details, roster, and workflow of a Team Blueprint")
+    p_bpi.add_argument("slug", help="Blueprint slug (e.g. coding-light)")
+
+    # save-blueprint
+    p_sbp = add_cmd(
+        "save-blueprint",
+        "Export an existing Hive team's roster and charters into a reusable Team Blueprint",
+    )
+    p_sbp.add_argument("team", help="Source Hive team slug")
+    p_sbp.add_argument("--slug", required=True, help="New blueprint slug (kebab-case)")
+    p_sbp.add_argument("--name", required=True, help="Human-readable blueprint title")
+    p_sbp.add_argument("--description", required=True, help="Blueprint summary description")
+    p_sbp.add_argument("--when-to-use", default="", help="Guidance on when to select this blueprint")
+    p_sbp.add_argument("--workflow-summary", default="", help="One-line pipeline summary")
+    p_sbp.add_argument("--overwrite", action="store_true", help="Overwrite existing blueprint")
+
     # create-team
     p_ct = add_cmd("create-team", "Create a team folder in ultron/hive/ and register it")
     p_ct.add_argument("--slug", required=True, help="Unique team slug (kebab-case)")
-    p_ct.add_argument("--name", required=True, help="Human-readable team name")
+    p_ct.add_argument(
+        "--name",
+        default="",
+        help="Human-readable team name (optional when --blueprint is provided)",
+    )
     p_ct.add_argument("--mission", required=True, help="Team mission and scope boundaries")
+    p_ct.add_argument(
+        "--blueprint",
+        default=None,
+        help="Optional Team Blueprint slug (e.g. coding-light) to scaffold full roster and workflow",
+    )
     p_ct.add_argument(
         "--parent",
         default=None,
@@ -2687,6 +2981,58 @@ def main(argv: Optional[List[str]] = None) -> int:
             else:
                 print(format_org_tree(core))
 
+        elif cmd == "blueprints":
+            bps = core.list_blueprints()
+            if args.json:
+                print(json.dumps(bps, indent=2, sort_keys=True))
+            elif not bps:
+                print("[ULTRON] No blueprints found in ultron/core/blueprints/.")
+            else:
+                print(f"[ULTRON] Available Team Blueprints ({len(bps)}):\n")
+                for bp in bps:
+                    roles_str = ", ".join(bp["role_names"])
+                    print(f"  * {bp['slug']} — {bp['name']} ({len(bp['roles'])} roles: [{roles_str}])")
+                    print(f"    Description: {bp['description']}")
+                    if bp.get("workflow_summary"):
+                        print(f"    Workflow:    {bp['workflow_summary']}")
+                    if bp.get("when_to_use"):
+                        print(f"    When to Use: {bp['when_to_use']}")
+                    print()
+
+        elif cmd == "blueprint-info":
+            bp = core.get_blueprint(args.slug)
+            if args.json:
+                print(json.dumps(bp, indent=2, sort_keys=True))
+            else:
+                print(f"[ULTRON] Blueprint: {bp['slug']} ({bp['name']})")
+                print(f"  Description: {bp['description']}")
+                print(f"  When to Use: {bp['when_to_use']}")
+                print(f"  Workflow:    {bp['workflow_summary']}")
+                print(f"  Roles ({len(bp['roles'])}):")
+                for r in bp["roles"]:
+                    ro_tag = " [read-only]" if not r["write_tools"] else ""
+                    print(
+                        f"    - {r['role']:<14} ({r['title']}, model={r['default_model']}{ro_tag}): {r['responsibilities']}"
+                    )
+
+        elif cmd == "save-blueprint":
+            bp = core.save_blueprint(
+                team_slug=args.team,
+                blueprint_slug=args.slug,
+                name=args.name,
+                description=args.description,
+                when_to_use=args.when_to_use,
+                workflow_summary=args.workflow_summary,
+                overwrite=args.overwrite,
+            )
+            if args.json:
+                print(json.dumps(bp, indent=2, sort_keys=True))
+            else:
+                print(
+                    f"[ULTRON] Saved Blueprint '{bp['slug']}' ({bp['name']}) at {bp['blueprint_path']} "
+                    f"with roles {bp['role_names']}"
+                )
+
         elif cmd == "create-team":
             res = core.create_team(
                 slug=args.slug,
@@ -2697,14 +3043,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                 workspace_mode=args.workspace,
                 lead_responsibilities=args.lead_responsibilities,
                 target_repo=args.target_repo,
+                blueprint=args.blueprint,
             )
             if args.json:
                 print(json.dumps(res, indent=2, sort_keys=True))
             else:
+                bp_note = f" [blueprint={res['blueprint']}]" if res.get("blueprint") else ""
                 repo_note = f" [target_repo={res['target_repo']}]" if res.get("target_repo") else ""
+                roles_list = [r["agent_id"] for r in res["roles"]]
                 print(
                     f"[ULTRON] Created Team '{res['slug']}' (Layer {res['layer']}) at {res['hive_path']} "
-                    f"with role '{res['slug']}/lead' [status=disabled]{repo_note}"
+                    f"with roles {roles_list} [status=disabled]{bp_note}{repo_note}"
                 )
 
         elif cmd == "add-role":

@@ -640,6 +640,84 @@ class UltronCoreTestCase(unittest.TestCase):
         self.assertEqual(self.core.get_team("game-team")["target_repo"], "")
         self.assertEqual(self.core.get_team("game-ui")["target_repo"], "")
 
+    def test_team_blueprints_coding_light_direct_peers_and_save_blueprint(self) -> None:
+        bps = self.core.list_blueprints()
+        bp_slugs = [b["slug"] for b in bps]
+        self.assertIn("coding-light", bp_slugs)
+
+        bp_info = self.core.get_blueprint("coding-light")
+        self.assertEqual(bp_info["role_names"], ["lead", "spec", "dev", "qa"])
+
+        # Instantiate a team from coding-light blueprint via CLI without needing --name
+        res_ct = self.run_cli(
+            "create-team",
+            "--slug",
+            "alpha-code",
+            "--blueprint",
+            "coding-light",
+            "--mission",
+            "Build high-speed parser module",
+            "--target-repo",
+            "~/Dev/game_dev_trial",
+        )
+        self.assertEqual(res_ct.returncode, 0, msg=res_ct.stderr)
+
+        team = self.core.get_team("alpha-code")
+        assert team is not None
+        self.assertEqual(team["blueprint"], "coding-light")
+        self.assertEqual(team["name"], "Coding Team Light (alpha-code)")
+        self.assertEqual(
+            [r["agent_id"] for r in team["roles"]],
+            ["alpha-code/lead", "alpha-code/dev", "alpha-code/qa", "alpha-code/spec"],
+        )
+
+        # Verify direct intra-team peer contacts
+        dev_contacts = self.core.get_contacts("alpha-code/dev")
+        self.assertTrue(dev_contacts["direct_peers_allowed"])
+        self.assertEqual(
+            [p["agent_id"] for p in dev_contacts["team_peers"]],
+            ["alpha-code/lead", "alpha-code/qa", "alpha-code/spec"],
+        )
+
+        # Verify render-spawn includes blueprint workflow & role-specific protocols
+        specs = {s["role"]: s for s in self.core.render_spawn("alpha-code")}
+        self.assertIn(
+            "Formal Intra-Team Workflow (`coding-light` State Machine)",
+            specs["spec"]["define_subagent"]["SystemPrompt"],
+        )
+        self.assertIn(
+            "Phase 4 — Final Spec & Architectural Compliance Audit",
+            specs["spec"]["define_subagent"]["SystemPrompt"],
+        )
+        self.assertIn(
+            "Phase 3 — Rigorous Verification Against the Spec",
+            specs["qa"]["define_subagent"]["SystemPrompt"],
+        )
+        self.assertIn(
+            "Collaborate Directly Within Your Team:",
+            specs["dev"]["define_subagent"]["SystemPrompt"],
+        )
+
+        # Test user-extensible save-blueprint -> instantiate round-trip
+        saved_bp = self.core.save_blueprint(
+            team_slug="alpha-code",
+            blueprint_slug="custom-pod",
+            name="Custom Engineering Pod",
+            description="Exported from alpha-code",
+        )
+        self.assertEqual(saved_bp["slug"], "custom-pod")
+        cloned_team = self.core.create_team(
+            slug="beta-code",
+            blueprint="custom-pod",
+            mission="Build second module",
+        )
+        self.assertEqual(cloned_team["blueprint"], "custom-pod")
+        self.assertEqual(len(cloned_team["roles"]), 4)
+        self.assertIn(
+            "beta-code/spec",
+            (self.root / "ultron" / "hive" / "beta-code" / "AGENTS.md").read_text(encoding="utf-8"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

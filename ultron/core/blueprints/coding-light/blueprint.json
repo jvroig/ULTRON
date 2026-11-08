@@ -1,0 +1,45 @@
+{
+  "description": "4-agent structured software delivery pod (Team Lead, Spec & HLD Architect, Developer, QA Engineer) with a formal Spec -> Dev -> QA -> Spec Review -> Lead pipeline and direct peer-to-peer fix loops.",
+  "name": "Coding Team Light",
+  "roles": [
+    {
+      "default_model": "flash",
+      "mcp_tools": true,
+      "responsibilities": "Align with Spec Architect on scope and HLD, oversee the Spec -> Dev -> QA -> Spec Review workflow, unblock internal impediments, and serve as sole external communication bridge.",
+      "role": "lead",
+      "template": "roles/lead.md.tmpl",
+      "title": "Team Leader",
+      "write_tools": true
+    },
+    {
+      "default_model": "flash",
+      "mcp_tools": true,
+      "responsibilities": "Co-author the High-Level Design (HLD) and Technical Specification with Team Lead, hand off directly to Developer, and perform the final Spec & Architectural Compliance Audit after QA passes.",
+      "role": "spec",
+      "template": "roles/spec.md.tmpl",
+      "title": "Spec & HLD Architect",
+      "write_tools": true
+    },
+    {
+      "default_model": "flash",
+      "mcp_tools": true,
+      "responsibilities": "Implement production-grade code and unit tests strictly conforming to the approved HLD & Technical Spec, hand off directly to QA, and resolve QA/Spec bounce-back punchlists.",
+      "role": "dev",
+      "template": "roles/dev.md.tmpl",
+      "title": "Software Developer",
+      "write_tools": true
+    },
+    {
+      "default_model": "flash",
+      "mcp_tools": true,
+      "responsibilities": "Execute rigorous spec-driven testing, author missing edge-case/integration tests, bounce defects directly back to Developer, and hand off verified builds to Spec Architect for final review.",
+      "role": "qa",
+      "template": "roles/qa.md.tmpl",
+      "title": "QA & Verification Engineer",
+      "write_tools": true
+    }
+  ],
+  "slug": "coding-light",
+  "when_to_use": "Ideal for focused feature implementation, greenfield prototypes, bug-fix campaigns, and small-to-medium coding milestones where a single Spec/HLD architect and a single comprehensive QA gate provide the right balance of rigor and speed.",
+  "workflow_summary": "1. Lead <-> Spec (HLD & Spec alignment) -> 2. Spec -> Dev (Implementation) -> 3. Dev <-> QA (Spec-driven testing & fix loop) -> 4. QA -> Spec (Final Spec & Architectural Audit; bounces to Dev->QA if gaps found) -> 5. Spec -> Lead (Final Sign-Off)."
+}
