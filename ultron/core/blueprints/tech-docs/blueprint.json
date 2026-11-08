@@ -1,0 +1,45 @@
+{
+  "description": "4-agent technical documentation & visual architecture pod (Team Lead, Technical Writer, Diagram & Visual Showcase Specialist, Read-Only Technical/UX Auditor) with source-code-grounded authoring and skeptical two-tier verification loops.",
+  "name": "Technical Documentation & Visual Architecture Team",
+  "roles": [
+    {
+      "default_model": "flash",
+      "mcp_tools": true,
+      "responsibilities": "Align Information Architecture (IA) and deliverable scope across Writer and Visualizer, oversee the parallel authoring and Auditor verification loops, and serve as sole external communication bridge.",
+      "role": "lead",
+      "template": "roles/lead.md.tmpl",
+      "title": "Team Leader",
+      "write_tools": true
+    },
+    {
+      "default_model": "flash",
+      "mcp_tools": true,
+      "responsibilities": "Author publication-grade Markdown documentation (READMEs, architecture specs, CLI/API references, runbooks) grounded 100% in live source code, coordinate terminology with Visualizer, and resolve Auditor punchlists.",
+      "role": "writer",
+      "template": "roles/writer.md.tmpl",
+      "title": "Technical Writer",
+      "write_tools": true
+    },
+    {
+      "default_model": "flash",
+      "mcp_tools": true,
+      "responsibilities": "Author self-contained interactive HTML architecture showcases, inline SVG diagrams, and Mermaid diagrams aligned with Writer's specs and live source code, and resolve Auditor visual/technical punchlists.",
+      "role": "visualizer",
+      "template": "roles/visualizer.md.tmpl",
+      "title": "Diagram & Visual Showcase Specialist",
+      "write_tools": true
+    },
+    {
+      "default_model": "flash",
+      "mcp_tools": true,
+      "responsibilities": "Conduct skeptical Tier-1 (UX/readability/visual layout) and Tier-2 (source-code CLI/schema/invariant accuracy) audits of all documentation and visual deliverables; bounce defects directly to Writer/Visualizer before certifying approval to Lead.",
+      "role": "auditor",
+      "template": "roles/auditor.md.tmpl",
+      "title": "Technical Accuracy & UX Auditor",
+      "write_tools": false
+    }
+  ],
+  "slug": "tech-docs",
+  "when_to_use": "Ideal for authoring or overhauling project READMEs, deep-dive technical architecture specifications, API/CLI guides, and interactive HTML/SVG visual architecture showcases verified strictly against the as-implemented codebase.",
+  "workflow_summary": "1. Lead <-> Writer & Visualizer (Outline & source-of-truth alignment) -> 2. Writer & Visualizer (Parallel drafting + cross-sync) -> 3. Writer/Visualizer <-> Auditor (Two-tier UX & source-code accuracy audit + direct fix loops) -> 4. Auditor -> Lead (Final Sign-Off)."
+}

@@ -644,9 +644,31 @@ class UltronCoreTestCase(unittest.TestCase):
         bps = self.core.list_blueprints()
         bp_slugs = [b["slug"] for b in bps]
         self.assertIn("coding-light", bp_slugs)
+        self.assertIn("tech-docs", bp_slugs)
 
         bp_info = self.core.get_blueprint("coding-light")
         self.assertEqual(bp_info["role_names"], ["lead", "spec", "dev", "qa"])
+
+        td_info = self.core.get_blueprint("tech-docs")
+        self.assertEqual(td_info["role_names"], ["lead", "writer", "visualizer", "auditor"])
+
+        # Instantiate a tech-docs team and verify auditor is read-only
+        td_team = self.core.create_team(
+            slug="docs-pod",
+            blueprint="tech-docs",
+            mission="Document system architecture and visual showcase",
+        )
+        self.assertEqual(td_team["blueprint"], "tech-docs")
+        td_specs = {s["role"]: s for s in self.core.render_spawn("docs-pod")}
+        self.assertTrue(td_specs["auditor"]["read_only_mode"])
+        self.assertIn(
+            "[READ-ONLY ROLE MODE]",
+            td_specs["auditor"]["define_subagent"]["SystemPrompt"],
+        )
+        self.assertIn(
+            "Strict Inline SVG Markup Hygiene",
+            td_specs["visualizer"]["define_subagent"]["SystemPrompt"],
+        )
 
         # Instantiate a team from coding-light blueprint via CLI without needing --name
         res_ct = self.run_cli(

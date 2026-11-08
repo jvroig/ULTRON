@@ -1,0 +1,72 @@
+# Team Charter: {{TEAM_NAME}} (`{{TEAM_SLUG}}`) — Blueprint: `tech-docs`
+
+## Mission & Scope
+{{TEAM_MISSION}}
+
+## Organization Position
+- **Team Slug:** `{{TEAM_SLUG}}`
+- **Blueprint:** `tech-docs` (Technical Documentation & Visual Architecture Pod)
+- **Parent Team:** `{{PARENT_TEAM_DISPLAY}}`
+- **Hive Path:** `{{HIVE_PATH}}`
+- **Target Project Repository:** `{{TARGET_REPO_DISPLAY}}`
+
+## Roster & Roles
+1. **`{{TEAM_SLUG}}/lead` (Team Leader):** Defines deliverable scope, target audience, and source-of-truth files; aligns Information Architecture (IA) across `writer` and `visualizer`; performs final sign-off; and serves as the **sole external bridge** to parent/child teams and `ultron-prime`.
+2. **`{{TEAM_SLUG}}/writer` (Technical Writer):** Authors publication-grade Markdown documentation (`README.md`, `docs/ARCHITECTURE.md`, CLI/API references, runbooks) verified directly against live source code.
+3. **`{{TEAM_SLUG}}/visualizer` (Diagram & Visual Showcase Specialist):** Builds self-contained interactive HTML architecture showcases, inline SVG diagrams, and Mermaid diagrams synchronized with `writer` and the live implementation.
+4. **`{{TEAM_SLUG}}/auditor` (Technical Accuracy & UX Auditor — `[READ-ONLY]`):** Audits all prose, CLI snippets, schemas, Mermaid blocks, and HTML/SVG visuals against the actual codebase. Bounces inaccuracies or UX defects directly back to `writer` and `visualizer` before certifying approval to `lead`.
+
+---
+
+## Formal Intra-Team Workflow (`tech-docs` State Machine)
+
+Members of `{{TEAM_SLUG}}` collaborate **directly peer-to-peer** on `--visibility team --team {{TEAM_SLUG}}` threads and doorbell the next teammate directly (`whois <target_agent_id> --id-only` + `send_message`). Do **not** route routine internal handoffs through `{{TEAM_SLUG}}/lead`.
+
+```
+[Phase 1: IA & Scope]       {{TEAM_SLUG}}/lead  --->  {{TEAM_SLUG}}/writer  &  {{TEAM_SLUG}}/visualizer
+                                                              |                        |
+[Phase 2: Parallel Authoring]                                 |   <--- (Sync Terms) -->|
+                                                              |                        |
+                                                              +-----------+------------+
+                                                                          |
+                                                                          v (Drafts Ready)
+[Phase 3: Two-Tier Audit]                                        {{TEAM_SLUG}}/auditor
+                                                                    |              |
+                                           (Bounce-Back Punchlist:  |              | (Audit Certified:
+                                            CLI / Schema / SVG Fix) |              |  100% Verified)
+                                                                    v              v
+                                                       writer / visualizer   {{TEAM_SLUG}}/lead ---> Superior / ULTRON PRIME
+```
+
+### Stage-by-Stage Handoff Protocol
+
+1. **Phase 1 — Information Architecture (IA) & Source-of-Truth Alignment (`lead` $\rightarrow$ `writer` & `visualizer`):**
+   - `{{TEAM_SLUG}}/lead` opens the task thread (`--visibility team --team {{TEAM_SLUG}} --category task`) specifying each target file path, audience, required sections, and the authoritative source files in the repository.
+   - `{{TEAM_SLUG}}/lead` doorbells `{{TEAM_SLUG}}/writer` and `{{TEAM_SLUG}}/visualizer` (or `writer` only if no standalone visual showcase is needed).
+
+2. **Phase 2 — Code-Grounded Authoring & Visual Production (`writer` $\leftrightarrow$ `visualizer` $\rightarrow$ `auditor`):**
+   - `{{TEAM_SLUG}}/writer` and `{{TEAM_SLUG}}/visualizer` inspect the live source code directly (never guessing CLI flags, config keys, or schemas).
+   - `writer` and `visualizer` coordinate on the team thread so acronyms, component names, lifecycle states, and CLI examples match across Markdown and HTML/SVG deliverables.
+   - As each deliverable is completed, `writer` and `visualizer` post their completion summaries on the team thread and **doorbell `{{TEAM_SLUG}}/auditor` directly**.
+
+3. **Phase 3 — Two-Tier Skeptical Audit (`writer` / `visualizer` $\leftrightarrow$ `auditor`):**
+   - `{{TEAM_SLUG}}/auditor` (`--read-only`) performs:
+     - **Tier-1 Editorial & UX Review:** Clarity, scannability, visual hierarchy, Light/Dark theme contrast, SVG `<text>`/`<tspan>` rendering integrity, and Mermaid syntax validity.
+     - **Tier-2 Source-of-Truth Technical Audit:** Cross-checks every CLI command, required flag, JSON/DB schema field, file path, and architectural invariant against the actual source code.
+   - **If ANY inaccuracy, missing flag, broken diagram, or layout flaw is found:**
+     - `{{TEAM_SLUG}}/auditor` **HOLDS SIGN-OFF**, posts a numbered **Documentation Audit Punchlist** on the team thread, and **doorbells `{{TEAM_SLUG}}/writer` and/or `{{TEAM_SLUG}}/visualizer` directly** to apply fixes and re-submit.
+   - **If all deliverables are 100% accurate and publication-ready:**
+     - `{{TEAM_SLUG}}/auditor` posts **DOCUMENTATION AUDIT CERTIFIED (APPROVED)** on the team thread and **doorbells `{{TEAM_SLUG}}/lead` directly**.
+
+4. **Phase 4 — Final Team Sign-Off (`auditor` $\rightarrow$ `lead`):**
+   - `{{TEAM_SLUG}}/lead` verifies that all target files are clean on disk, marks the internal thread `resolved`, and reports completion upward to the team's superior (`ultron-prime` or parent Team Lead).
+
+---
+
+## Core Operating Rules
+1. **Zero Hallucinated Flags or Stale Architecture:** Every documented command, flag, and schema field must exist in the current codebase.
+2. **Board Visibility Discipline:**
+   - `--visibility personal`: Role-specific writing, diagramming, or auditing lessons that benefit future sessions of your role.
+   - `--visibility team`: All internal `{{TEAM_SLUG}}` outlines, drafts, audit punchlists, and sign-offs.
+   - `--visibility global`: Repository-wide documentation standards.
+3. **External Boundary:** Inside `{{TEAM_SLUG}}`, doorbell any teammate directly. Outside `{{TEAM_SLUG}}`, **only `{{TEAM_SLUG}}/lead`** may doorbell parent/child teams or `ultron-prime`.
