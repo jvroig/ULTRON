@@ -591,6 +591,55 @@ class UltronCoreTestCase(unittest.TestCase):
         self.assertEqual(healed["pruned_orphan_sessions"], ["orphan-team/lead"])
         self.assertTrue(self.core.verify(prune_orphans=False)["ok"])
 
+    def test_external_target_repo_inheritance_override_and_spawn(self) -> None:
+        ext_game = self.root.parent / "game_dev_trial"
+        ext_xcom = self.root.parent / "XCOMBench"
+
+        t_game = self.core.create_team(
+            slug="game-team",
+            name="Game Dev Team",
+            mission="Build game prototype",
+            target_repo=str(ext_game),
+        )
+        self.assertEqual(t_game["target_repo"], str(ext_game))
+        self.assertEqual(t_game["target_repo_abs"], str(ext_game.resolve()))
+
+        # Child team inherits parent target_repo automatically when omitted
+        t_child = self.core.create_team(
+            slug="game-ui",
+            name="Game UI Subteam",
+            mission="Build HUD",
+            parent_team="game-team",
+        )
+        self.assertEqual(t_child["target_repo"], str(ext_game))
+
+        # Role can optionally override target_repo
+        r_override = self.core.add_role(
+            team_slug="game-team",
+            role="benchmarker",
+            title="Benchmark Specialist",
+            responsibilities="Run XCOM benchmarks",
+            target_repo="~/Dev/XCOMBench",
+        )
+        self.assertEqual(r_override["target_repo"], "~/Dev/XCOMBench")
+        self.assertTrue(r_override["target_repo_abs"].endswith("XCOMBench"))
+
+        # render-spawn injects Dual-Directory Execution Rule
+        specs = {s["role"]: s for s in self.core.render_spawn("game-team")}
+        self.assertIn("Dual-Directory Execution Rule", specs["lead"]["define_subagent"]["SystemPrompt"])
+        self.assertIn(str(ext_game.resolve()), specs["lead"]["define_subagent"]["SystemPrompt"])
+        self.assertIn("XCOMBench", specs["benchmarker"]["define_subagent"]["SystemPrompt"])
+
+        # set-target-repo CLI updates and clears cleanly
+        res_set = self.run_cli("set-target-repo", "game-team", str(ext_xcom), "--cascade")
+        self.assertEqual(res_set.returncode, 0, msg=res.stderr if "res" in locals() else res_set.stderr)
+        self.assertEqual(self.core.get_team("game-ui")["target_repo"], str(ext_xcom))
+
+        res_clear = self.run_cli("set-target-repo", "game-team", "--clear", "--cascade")
+        self.assertEqual(res_clear.returncode, 0, msg=res_clear.stderr)
+        self.assertEqual(self.core.get_team("game-team")["target_repo"], "")
+        self.assertEqual(self.core.get_team("game-ui")["target_repo"], "")
+
 
 if __name__ == "__main__":
     unittest.main()

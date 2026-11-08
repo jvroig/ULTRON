@@ -208,6 +208,16 @@ class UltronCore:
             ) from exc
         return candidate
 
+    def _resolve_target_repo(self, raw_target: str) -> str:
+        """Resolve an optional external target repository path (~, relative, or absolute) to an absolute path string."""
+        cleaned = (raw_target or "").strip()
+        if not cleaned:
+            return ""
+        expanded = Path(cleaned).expanduser()
+        if expanded.is_absolute():
+            return str(expanded.resolve())
+        return str((self.repo_root / expanded).resolve())
+
     def _load_template(self, filename: str) -> str:
         tpath = self.templates_dir / filename
         if not tpath.is_file():
@@ -283,6 +293,8 @@ class UltronCore:
                 "role": "prime",
                 "role_path": "ultron/core",
                 "status": p_status,
+                "target_repo": "",
+                "target_repo_abs": "",
                 "team_slug": None,
                 "title": "ULTRON PRIME",
                 "write_tools": True,
@@ -324,6 +336,15 @@ class UltronCore:
             hive_rel = self._rel_posix(team_dir)
             created_at = str(raw_t.get("created_at") or now_iso())
             updated_at = str(raw_t.get("updated_at") or created_at)
+            inherited_target_repo = (
+                teams_by_slug[expected_parent]["target_repo"]
+                if expected_parent and expected_parent in teams_by_slug
+                else ""
+            )
+            team_target_repo = (
+                str(raw_t.get("target_repo", "")).strip() or inherited_target_repo
+            )
+            team_target_repo_abs = self._resolve_target_repo(team_target_repo)
 
             # Load flat intra-team roles under roles/*/role.json
             roles_root = team_dir / "roles"
@@ -357,6 +378,10 @@ class UltronCore:
                         "active" if cid and sess.get("status") == "active" else "disabled"
                     )
                     r_seen = str(sess.get("last_seen") or r_reg_at)
+                    r_target_repo = (
+                        str(raw_r.get("target_repo", "")).strip() or team_target_repo
+                    )
+                    r_target_repo_abs = self._resolve_target_repo(r_target_repo)
 
                     role_obj = {
                         "agent_id": aid,
@@ -369,6 +394,8 @@ class UltronCore:
                         "role": r_slug,
                         "role_path": self._rel_posix(role_dir),
                         "status": r_status,
+                        "target_repo": r_target_repo,
+                        "target_repo_abs": r_target_repo_abs,
                         "team_slug": slug,
                         "title": str(raw_r.get("title", "")).strip(),
                         "write_tools": bool(raw_r.get("write_tools", True)),
@@ -395,6 +422,8 @@ class UltronCore:
                 "roles": team_roles,
                 "slug": slug,
                 "status": team_status,
+                "target_repo": team_target_repo,
+                "target_repo_abs": team_target_repo_abs,
                 "updated_at": updated_at,
                 "workspace_mode": ws,
                 "child_teams": [],
@@ -474,6 +503,7 @@ class UltronCore:
         default_model: str = "flash",
         workspace_mode: str = "inherit",
         lead_responsibilities: str = "",
+        target_repo: str = "",
     ) -> Dict[str, Any]:
         clean_slug = validate_slug(slug, "team slug")
         clean_name = name.strip()
@@ -495,6 +525,7 @@ class UltronCore:
             )
 
         clean_parent = validate_slug(parent_team, "parent_team") if parent_team else None
+        clean_target_repo = (target_repo or "").strip()
         iso = now_iso()
 
         with self._lock(exclusive=True):
@@ -517,6 +548,8 @@ class UltronCore:
                 parent_abs = self._abs_from_rel(parent_obj["hive_path"])
                 team_dir = parent_abs / "teams" / clean_slug
                 layer = parent_obj["layer"] + 1
+                if not clean_target_repo and parent_obj.get("target_repo"):
+                    clean_target_repo = parent_obj["target_repo"]
             else:
                 team_dir = self.hive_dir / clean_slug
                 layer = 1
@@ -538,6 +571,11 @@ class UltronCore:
             (team_dir / "teams" / ".gitkeep").touch(exist_ok=True)
             (lead_dir / "workspace" / ".gitkeep").touch(exist_ok=True)
 
+            target_repo_display = (
+                clean_target_repo
+                if clean_target_repo
+                else "Local ULTRON Repository (default)"
+            )
             team_agents_md = render_template(
                 self._load_template("team_agents.md.tmpl"),
                 {
@@ -546,6 +584,7 @@ class UltronCore:
                     "TEAM_SLUG": clean_slug,
                     "PARENT_TEAM_DISPLAY": clean_parent or f"{PRIME_ID} (Layer 1 root)",
                     "HIVE_PATH": hive_rel,
+                    "TARGET_REPO_DISPLAY": target_repo_display,
                 },
             )
             lead_role_md = render_template(
@@ -568,7 +607,7 @@ class UltronCore:
             if not lead_agents_path.exists():
                 lead_agents_path.write_text(lead_role_md, encoding="utf-8")
 
-            team_manifest = {
+            team_manifest: Dict[str, Any] = {
                 "created_at": iso,
                 "default_model": model,
                 "hive_path": hive_rel,
@@ -577,10 +616,11 @@ class UltronCore:
                 "name": clean_name,
                 "parent_team": clean_parent,
                 "slug": clean_slug,
+                "target_repo": clean_target_repo,
                 "updated_at": iso,
                 "workspace_mode": ws,
             }
-            role_manifest = {
+            role_manifest: Dict[str, Any] = {
                 "agent_id": lead_id,
                 "mcp_tools": True,
                 "model": model,
@@ -607,6 +647,7 @@ class UltronCore:
         model: Optional[str] = None,
         write_tools: bool = True,
         mcp_tools: bool = True,
+        target_repo: str = "",
     ) -> Dict[str, Any]:
         clean_team = validate_slug(team_slug, "team slug")
         clean_role = validate_role_slug(role)
@@ -619,6 +660,7 @@ class UltronCore:
         if not clean_resp:
             raise ValueError("Role responsibilities cannot be empty.")
 
+        clean_target_repo = (target_repo or "").strip()
         aid = f"{clean_team}/{clean_role}"
         iso = now_iso()
 
@@ -664,7 +706,7 @@ class UltronCore:
             if not role_agents_path.exists():
                 role_agents_path.write_text(member_md, encoding="utf-8")
 
-            role_manifest = {
+            role_manifest: Dict[str, Any] = {
                 "agent_id": aid,
                 "mcp_tools": bool(mcp_tools),
                 "model": chosen_model,
@@ -676,6 +718,8 @@ class UltronCore:
                 "title": clean_title,
                 "write_tools": bool(write_tools),
             }
+            if clean_target_repo:
+                role_manifest["target_repo"] = clean_target_repo
             atomic_write_json(role_dir / "role.json", role_manifest)
 
             # Update team.json updated_at
@@ -686,6 +730,59 @@ class UltronCore:
 
             _, agents_after, _ = self._scan_state_unlocked()
             return agents_after[aid]
+
+    def set_target_repo(
+        self,
+        team_slug: str,
+        target_repo: str = "",
+        role: Optional[str] = None,
+        cascade: bool = False,
+    ) -> Dict[str, Any]:
+        """Set or clear the external target repository for a team (optionally cascading) or a specific role."""
+        clean_team = validate_slug(team_slug, "team slug")
+        clean_role = validate_role_slug(role) if role else None
+        clean_target = (target_repo or "").strip()
+        iso = now_iso()
+
+        with self._lock(exclusive=True):
+            teams_by_slug, agents_by_id, _ = self._scan_state_unlocked()
+            team_obj = teams_by_slug.get(clean_team)
+            if not team_obj:
+                raise ValueError(f"Team '{clean_team}' does not exist.")
+
+            if clean_role:
+                if cascade:
+                    raise ValueError("--cascade cannot be combined with --role.")
+                aid = f"{clean_team}/{clean_role}"
+                role_obj = agents_by_id.get(aid)
+                if not role_obj:
+                    raise ValueError(f"Role '{aid}' does not exist.")
+                role_dir = self._abs_from_rel(role_obj["role_path"])
+                r_manifest_path = role_dir / "role.json"
+                r_manifest = json.loads(r_manifest_path.read_text(encoding="utf-8"))
+                if clean_target:
+                    r_manifest["target_repo"] = clean_target
+                else:
+                    r_manifest.pop("target_repo", None)
+                atomic_write_json(r_manifest_path, r_manifest)
+                _, agents_after, _ = self._scan_state_unlocked()
+                return agents_after[aid]
+
+            target_slugs = (
+                [clean_team, *self._get_descendant_slugs(teams_by_slug, clean_team)]
+                if cascade
+                else [clean_team]
+            )
+            for t_slug in target_slugs:
+                t_dir = self._abs_from_rel(teams_by_slug[t_slug]["hive_path"])
+                t_manifest_path = t_dir / "team.json"
+                t_manifest = json.loads(t_manifest_path.read_text(encoding="utf-8"))
+                t_manifest["target_repo"] = clean_target
+                t_manifest["updated_at"] = iso
+                atomic_write_json(t_manifest_path, t_manifest)
+
+            teams_after, _, _ = self._scan_state_unlocked()
+            return teams_after[clean_team]
 
     def get_team(self, slug: str) -> Optional[Dict[str, Any]]:
         clean = validate_slug(slug, "team slug")
@@ -908,6 +1005,20 @@ class UltronCore:
                     "Use `run_command` strictly for `python3 ultron/core/core.py` board operations and non-mutating inspection/test commands."
                 )
 
+            r_target_repo = r.get("target_repo") or ""
+            r_target_repo_abs = r.get("target_repo_abs") or ""
+            ultron_root_str = str(self.repo_root)
+            if r_target_repo and r_target_repo_abs:
+                target_repo_summary = (
+                    f"`{r_target_repo_abs}` (configured as `{r_target_repo}`)\n"
+                    f"  - **Dual-Directory Execution Rule:** Your shell sessions (`run_command`) start in the ULTRON HQ root (`{ultron_root_str}`).\n"
+                    f"  - Run all `python3 ultron/core/core.py ...` board and doorbell commands directly from the default working directory.\n"
+                    f"  - Run all project build, test, and Git commands inside the target repository: `cd \"{r_target_repo_abs}\" && <command>`.\n"
+                    f"  - Pass absolute paths under `{r_target_repo_abs}/...` when calling `read_file`, `edit_file`, `write_file`, `grep_search`, or `find_by_name` on project files."
+                )
+            else:
+                target_repo_summary = f"Local ULTRON Repository (`{ultron_root_str}`)"
+
             system_prompt = render_template(
                 spawn_tmpl,
                 {
@@ -920,6 +1031,7 @@ class UltronCore:
                     "LINEAGE_DISPLAY": lineage_display,
                     "ROLE_PATH": r["role_path"],
                     "ROLE_WORKSPACE_PATH": role_ws_rel,
+                    "TARGET_REPO_SUMMARY": target_repo_summary,
                     "ROUTING_SUMMARY": routing_summary,
                     "INHERITED_CHARTERS": inherited_charters,
                     "ROLE_CHARTER": role_charter,
@@ -932,11 +1044,17 @@ class UltronCore:
                 f"1. Run your startup hydration commands (`list --as {aid} --visibility personal`, "
                 f"`list --as {aid} --visibility team`, and `contacts {aid}`).\n"
             )
+            if r_target_repo_abs:
+                initial_prompt += (
+                    f"2. Note your assigned target project repository at `{r_target_repo_abs}` "
+                    f"(shell commands start in ULTRON HQ `{ultron_root_str}`).\n"
+                )
+            step_num = 3 if r_target_repo_abs else 2
             if mission_brief.strip():
-                initial_prompt += f"2. Initial directive: {mission_brief.strip()}\n"
+                initial_prompt += f"{step_num}. Initial directive: {mission_brief.strip()}\n"
             else:
                 initial_prompt += (
-                    "2. Confirm readiness in a brief reply to ULTRON PRIME and await doorbelled tasks on the board."
+                    f"{step_num}. Confirm readiness in a brief reply to ULTRON PRIME and await doorbelled tasks on the board."
                 )
 
             specs.append(
@@ -945,6 +1063,8 @@ class UltronCore:
                     "team_slug": clean_team,
                     "role": r_slug,
                     "read_only_mode": is_read_only,
+                    "target_repo": r_target_repo,
+                    "target_repo_abs": r_target_repo_abs,
                     "define_subagent": {
                         "Name": subagent_type,
                         "Description": f"ULTRON [{clean_team}] {r['title']} ({aid})",
@@ -2099,10 +2219,11 @@ def format_org_tree(core: UltronCore) -> str:
                 f"{r['role']}*" if r["status"] == "active" else r["role"]
                 for r in t["roles"]
             )
+            repo_suffix = f" repo={t['target_repo']}" if t.get("target_repo") else ""
             lines.append(
                 f"{prefix}{connector}[L{t['layer']}] {t['slug']} ({t['name']}) "
                 f"[{t['status'].upper()} | {active_roles}/{len(t['roles'])} active] "
-                f"roles: [{role_names}]"
+                f"roles: [{role_names}]{repo_suffix}"
             )
             next_prefix = prefix + ("    " if is_last else "│   ")
             render_branch(t["slug"], next_prefix)
@@ -2227,6 +2348,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="Optional custom Team Lead responsibilities",
     )
+    p_ct.add_argument(
+        "--target-repo",
+        default="",
+        help="Optional external target repository path (e.g. ~/Dev/XCOMBench)",
+    )
 
     # add-role
     p_ar = add_cmd("add-role", "Add a specialist role to a team")
@@ -2251,6 +2377,37 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_ar.add_argument(
         "--no-mcp", action="store_true", help="Disable MCP tools (EnableMCPTools=False)"
+    )
+    p_ar.add_argument(
+        "--target-repo",
+        default="",
+        help="Optional role-level target repository override",
+    )
+
+    # set-target-repo
+    p_str = add_cmd(
+        "set-target-repo",
+        "Set or clear the external target repository for a team or role",
+    )
+    p_str.add_argument("team", help="Team slug")
+    p_str.add_argument(
+        "target_repo",
+        nargs="?",
+        default="",
+        help="Target repository path (e.g. ~/Dev/XCOMBench); omit with --clear",
+    )
+    p_str.add_argument(
+        "--role", default=None, help="Optional single role slug to override"
+    )
+    p_str.add_argument(
+        "--cascade",
+        action="store_true",
+        help="Apply target repository to all descendant child teams",
+    )
+    p_str.add_argument(
+        "--clear",
+        action="store_true",
+        help="Clear target repository back to local ULTRON repo",
     )
 
     # teams
@@ -2539,13 +2696,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                 default_model=args.model,
                 workspace_mode=args.workspace,
                 lead_responsibilities=args.lead_responsibilities,
+                target_repo=args.target_repo,
             )
             if args.json:
                 print(json.dumps(res, indent=2, sort_keys=True))
             else:
+                repo_note = f" [target_repo={res['target_repo']}]" if res.get("target_repo") else ""
                 print(
                     f"[ULTRON] Created Team '{res['slug']}' (Layer {res['layer']}) at {res['hive_path']} "
-                    f"with role '{res['slug']}/lead' [status=disabled]"
+                    f"with role '{res['slug']}/lead' [status=disabled]{repo_note}"
                 )
 
         elif cmd == "add-role":
@@ -2557,14 +2716,35 @@ def main(argv: Optional[List[str]] = None) -> int:
                 model=args.model,
                 write_tools=not args.read_only,
                 mcp_tools=not args.no_mcp,
+                target_repo=args.target_repo,
             )
             if args.json:
                 print(json.dumps(res, indent=2, sort_keys=True))
             else:
+                repo_note = f", target_repo={res['target_repo']}" if res.get("target_repo") else ""
                 print(
                     f"[ULTRON] Added Role '{res['agent_id']}' ({res['title']}) at {res['role_path']} "
-                    f"[model={res['model']}, write={res['write_tools']}, status=disabled]"
+                    f"[model={res['model']}, write={res['write_tools']}, status=disabled{repo_note}]"
                 )
+
+        elif cmd == "set-target-repo":
+            if not args.clear and not (args.target_repo or "").strip():
+                raise ValueError(
+                    "Provide a <target_repo> path or pass --clear to reset to local ULTRON repo."
+                )
+            chosen_repo = "" if args.clear else args.target_repo
+            res = core.set_target_repo(
+                team_slug=args.team,
+                target_repo=chosen_repo,
+                role=args.role,
+                cascade=args.cascade,
+            )
+            if args.json:
+                print(json.dumps(res, indent=2, sort_keys=True))
+            else:
+                target_label = f"{args.team}/{args.role}" if args.role else args.team
+                display_repo = res.get("target_repo") or "Local ULTRON Repository (default)"
+                print(f"[ULTRON] Updated target_repo for '{target_label}' -> {display_repo}")
 
         elif cmd == "teams":
             res = core.list_teams(status=args.status)
@@ -2574,9 +2754,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print("[ULTRON] No teams registered.")
             else:
                 for t in res:
+                    repo_suffix = f" repo={t['target_repo']}" if t.get("target_repo") else ""
                     print(
                         f"[L{t['layer']}] {t['slug']:<20} status={t['status']:<10} "
-                        f"parent={t['parent_team'] or PRIME_ID:<16} path={t['hive_path']}"
+                        f"parent={t['parent_team'] or PRIME_ID:<16} path={t['hive_path']}{repo_suffix}"
                     )
 
         elif cmd == "team-info":
