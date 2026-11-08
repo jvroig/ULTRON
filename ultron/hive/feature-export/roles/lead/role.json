@@ -1,0 +1,12 @@
+{
+  "agent_id": "feature-export/lead",
+  "mcp_tools": true,
+  "model": "flash",
+  "registered_at": "2026-11-08T09:46:21.090846Z",
+  "responsibilities": "Align with Spec Architect on scope and HLD, oversee the Spec -> Dev -> QA -> Spec Review workflow, unblock internal impediments, and serve as sole external communication bridge.",
+  "role": "lead",
+  "role_path": "ultron/hive/feature-export/roles/lead",
+  "team_slug": "feature-export",
+  "title": "Team Leader",
+  "write_tools": true
+}

@@ -1,0 +1,12 @@
+{
+  "agent_id": "feature-export/qa",
+  "mcp_tools": true,
+  "model": "flash",
+  "registered_at": "2026-11-08T09:46:21.090846Z",
+  "responsibilities": "Execute rigorous spec-driven testing, author missing edge-case/integration tests, bounce defects directly back to Developer, and hand off verified builds to Spec Architect for final review.",
+  "role": "qa",
+  "role_path": "ultron/hive/feature-export/roles/qa",
+  "team_slug": "feature-export",
+  "title": "QA & Verification Engineer",
+  "write_tools": true
+}

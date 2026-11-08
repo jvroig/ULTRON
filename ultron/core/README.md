@@ -131,10 +131,11 @@ python3 ultron/core/core.py new-thread \
   --title "JWT Claims Contract" \
   --content "Align on token payload fields before endpoint integration."
 
-# Reply, list, view, search, update status, and reclassify (accepts full ID or short suffix)
+# Reply, list, view, search, export, update status, and reclassify (accepts full ID or short suffix)
 python3 ultron/core/core.py reply a3f91c4e --author auth/lead --content "Validated claims schema."
 python3 ultron/core/core.py list --as api/coder
 python3 ultron/core/core.py view a3f91c4e --as auth/lead
+python3 ultron/core/core.py export-thread a3f91c4e --format md --output report.md --as auth/lead
 python3 ultron/core/core.py search "JWT" --as auth/lead
 python3 ultron/core/core.py set-status a3f91c4e resolved --as api/lead
 python3 ultron/core/core.py reclassify a3f91c4e --as ultron-prime --visibility global

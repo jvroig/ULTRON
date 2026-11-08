@@ -2151,6 +2151,58 @@ class UltronCore:
             )
         return t_obj
 
+    def export_thread(
+        self,
+        thread_id: str | int,
+        format: str = "md",
+        output_path: Optional[str | Path] = None,
+        as_agent: Optional[str] = None,
+        show_all: bool = False,
+    ) -> str:
+        """
+        Export an accessible thread to Markdown or JSON format.
+
+        Args:
+            thread_id: Full thread ID, short prefix/suffix, or '#'-prefixed ID.
+            format: Export format ('md' or 'json', case-insensitive, default: 'md').
+            output_path: Optional destination file path. If specified, writes content to
+                         path, creating parent directories if necessary.
+            as_agent: Requesting agent ID for visibility validation.
+            show_all: If True, bypass visibility restrictions.
+
+        Returns:
+            The exported string (Markdown or indented JSON).
+
+        Raises:
+            ValueError: If thread_id is not found, ambiguous, or format is unsupported.
+            PermissionError: If as_agent is not authorized to access the thread.
+        """
+        fmt = str(format).strip().lower()
+        if fmt not in ("md", "json"):
+            raise ValueError(
+                f"Invalid export format '{format}'. Supported formats: 'md', 'json'."
+            )
+
+        thread = self.get_thread(
+            thread_id=thread_id,
+            as_agent=as_agent,
+            show_all=show_all,
+        )
+        if not thread:
+            raise ValueError(f"Thread '{thread_id}' not found.")
+
+        if fmt == "json":
+            serialized = json.dumps(thread, indent=2, sort_keys=True)
+        else:
+            serialized = format_thread_markdown(thread)
+
+        if output_path is not None and str(output_path).strip():
+            out_path = Path(output_path).expanduser().resolve()
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(serialized, encoding="utf-8")
+
+        return serialized
+
     def search(
         self,
         query_str: str,
@@ -2550,6 +2602,61 @@ def format_thread_view(thread: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def format_thread_markdown(thread: Mapping[str, Any]) -> str:
+    scope = format_scope_badge(thread)
+    post_count = thread.get("post_count", len(thread.get("posts", [])))
+    t_id = thread.get("id", "")
+    t_title = thread.get("title", "")
+    t_cat = thread.get("category", "")
+    t_status = thread.get("status", "")
+    t_vis = thread.get("visibility", "")
+    t_author = thread.get("author", "")
+    t_created = thread.get("created_at", "")
+    t_updated = thread.get("updated_at", "")
+
+    parts: List[str] = []
+    header_lines = [
+        f"# Thread: {t_title} ({t_id})",
+        "",
+        f"- **Thread ID:** `{t_id}`",
+        f"- **Category:** `{t_cat}`",
+        f"- **Status:** `{t_status}`",
+        f"- **Visibility:** `{t_vis}`",
+        f"- **Scope:** `{scope}`",
+        f"- **Author:** `@{t_author}`",
+        f"- **Created At:** `{t_created}`",
+        f"- **Updated At:** `{t_updated}`",
+        f"- **Total Posts:** {post_count}",
+    ]
+    parts.append("\n".join(header_lines))
+
+    posts = thread.get("posts", [])
+    for idx, post in enumerate(posts):
+        p_id = post.get("id", "")
+        p_author = post.get("author", "")
+        p_created = post.get("created_at", "")
+        p_parent = post.get("parent_post_id")
+        p_tags = post.get("tags")
+        p_content = str(post.get("content", ""))
+
+        post_lines: List[str] = []
+        if idx == 0:
+            post_lines.append(f"## Root Post ({p_id})")
+        else:
+            post_lines.append(f"## Reply ({p_id})")
+        post_lines.append(f"- **Author:** `@{p_author}`")
+        post_lines.append(f"- **Created At:** `{p_created}`")
+        if idx > 0 and p_parent:
+            post_lines.append(f"- **In Reply To:** {p_parent}")
+        if p_tags:
+            post_lines.append(f"- **Tags:** [{p_tags}]")
+        post_lines.append("")
+        post_lines.append(p_content)
+        parts.append("\n".join(post_lines))
+
+    return "\n\n---\n\n".join(parts) + "\n"
+
+
 # ----------------------------------------------------------------------
 # CLI Entrypoint
 # ----------------------------------------------------------------------
@@ -2880,6 +2987,28 @@ def build_parser() -> argparse.ArgumentParser:
         dest="show_all",
         action="store_true",
         help="Unfiltered view (ULTRON PRIME / Curator)",
+    )
+
+    # export-thread
+    p_exp = add_cmd("export-thread", "Export thread to Markdown or JSON")
+    p_exp.add_argument("thread_id", help="Thread ID (full ID or unique short suffix/prefix)")
+    p_exp.add_argument(
+        "--format",
+        default="md",
+        choices=["md", "json"],
+        help="Export format (md or json, default: md)",
+    )
+    p_exp.add_argument(
+        "--output",
+        default=None,
+        help="Destination file path (stdout if omitted)",
+    )
+    p_exp.add_argument("--as", dest="as_agent", default=None, help="Caller agent ID")
+    p_exp.add_argument(
+        "--all",
+        dest="show_all",
+        action="store_true",
+        help="Unfiltered access (ULTRON PRIME / Curator)",
     )
 
     # search
@@ -3331,6 +3460,25 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(json.dumps(thread, indent=2, sort_keys=True))
             else:
                 print(format_thread_view(thread))
+
+        elif cmd == "export-thread":
+            fmt = "json" if getattr(args, "json", False) and args.format == "md" else args.format
+            res = core.export_thread(
+                thread_id=args.thread_id,
+                format=fmt,
+                output_path=args.output,
+                as_agent=args.as_agent,
+                show_all=args.show_all,
+            )
+            if args.output:
+                print(
+                    f"[ULTRON] Exported thread '{args.thread_id}' to {args.output} ({fmt})."
+                )
+            else:
+                if res.endswith("\n"):
+                    sys.stdout.write(res)
+                else:
+                    print(res)
 
         elif cmd == "search":
             results = core.search(

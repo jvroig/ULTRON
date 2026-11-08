@@ -1,0 +1,14 @@
+{
+  "blueprint": "coding-light",
+  "created_at": "2026-11-08T09:46:21.090846Z",
+  "default_model": "flash",
+  "hive_path": "ultron/hive/feature-export",
+  "layer": 1,
+  "mission": "Design, implement, test, and audit the export-thread CLI feature for ULTRON Core",
+  "name": "Coding Team Light (feature-export)",
+  "parent_team": null,
+  "slug": "feature-export",
+  "target_repo": "",
+  "updated_at": "2026-11-08T09:46:21.090846Z",
+  "workspace_mode": "inherit"
+}

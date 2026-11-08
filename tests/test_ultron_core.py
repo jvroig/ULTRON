@@ -762,6 +762,195 @@ class UltronCoreTestCase(unittest.TestCase):
             (self.root / "ultron" / "hive" / "beta-code" / "AGENTS.md").read_text(encoding="utf-8"),
         )
 
+    def test_export_thread_cli_and_api(self) -> None:
+        # Create team and roles for authorization testing
+        self.core.create_team(slug="eng", name="Engineering", mission="Engineering pod")
+        self.core.add_role("eng", "dev", "Developer", "Code features")
+        self.core.create_team(slug="ops", name="Operations", mission="Operations pod")
+
+        # Create a thread with tags and reply
+        t = self.core.create_thread(
+            title="Export Feature Architecture",
+            author="eng/lead",
+            visibility="team",
+            category="architecture",
+            tags="export,cli,api",
+            content="Initial proposal for export-thread capability.",
+        )
+        tid = t["thread_id"]
+        short_id = tid.rsplit("-", 1)[-1]
+        root_post_id = t["post_id"]
+
+        # Add reply with parent pointer
+        reply = self.core.add_post(
+            tid,
+            author="eng/dev",
+            content="Looks solid, proceeding to implement.",
+            parent_post_id=root_post_id,
+            tags="implementation",
+        )
+        reply_post_id = reply["post_id"]
+
+        # AC-1: CLI parser registration and help
+        res_help = self.run_cli("export-thread", "--help")
+        self.assertEqual(res_help.returncode, 0)
+        self.assertIn("--format", res_help.stdout)
+        self.assertIn("--output", res_help.stdout)
+        self.assertIn("--as", res_help.stdout)
+        self.assertIn("--all", res_help.stdout)
+
+        # AC-2: Core Python API signature and behavior (full, short, and '#' prefixed ID)
+        md_full = self.core.export_thread(tid, format="md", show_all=True)
+        md_short = self.core.export_thread(short_id, format="md", show_all=True)
+        md_hash = self.core.export_thread(f"#{tid}", format="md", show_all=True)
+        self.assertEqual(md_full, md_short)
+        self.assertEqual(md_full, md_hash)
+        self.assertIsInstance(md_full, str)
+
+        json_full = self.core.export_thread(tid, format="json", show_all=True)
+        json_short = self.core.export_thread(short_id, format="json", show_all=True)
+        self.assertEqual(json_full, json_short)
+
+        # Case-insensitivity check in API
+        self.assertEqual(self.core.export_thread(tid, format="MD", show_all=True), md_full)
+        self.assertEqual(self.core.export_thread(tid, format="JSON", show_all=True), json_full)
+
+        # Edge case: single-post thread with empty tags (no replies, tags omitted)
+        solo = self.core.create_thread(
+            title="Solo Note",
+            author="eng/lead",
+            visibility="team",
+            category="task",
+            content="Just a note without replies or tags.",
+        )
+        md_solo = self.core.export_thread(solo["thread_id"], show_all=True)
+        self.assertIn(f"# Thread: Solo Note ({solo['thread_id']})", md_solo)
+        self.assertIn("- **Total Posts:** 1", md_solo)
+        self.assertNotIn("- **Tags:**", md_solo)
+        self.assertIn("## Root Post", md_solo)
+        self.assertNotIn("## Reply", md_solo)
+
+        # AC-3: Markdown export formatting fidelity
+        self.assertTrue(md_full.startswith(f"# Thread: Export Feature Architecture ({tid})"))
+        self.assertIn(f"- **Thread ID:** `{tid}`", md_full)
+        self.assertIn("- **Category:** `architecture`", md_full)
+        self.assertIn("- **Status:** `open`", md_full)
+        self.assertIn("- **Visibility:** `team`", md_full)
+        self.assertIn("- **Scope:** `team:eng`", md_full)
+        self.assertIn("- **Author:** `@eng/lead`", md_full)
+        self.assertIn("- **Total Posts:** 2", md_full)
+        self.assertIn("---", md_full)
+        self.assertIn(f"## Root Post ({root_post_id})", md_full)
+        self.assertIn("- **Author:** `@eng/lead`", md_full)
+        self.assertIn("- **Tags:** [export,cli,api]", md_full)
+        self.assertIn("Initial proposal for export-thread capability.", md_full)
+        self.assertIn(f"## Reply ({reply_post_id})", md_full)
+        self.assertIn("- **Author:** `@eng/dev`", md_full)
+        self.assertIn(f"- **In Reply To:** {root_post_id}", md_full)
+        self.assertIn("- **Tags:** [implementation]", md_full)
+        self.assertIn("Looks solid, proceeding to implement.", md_full)
+
+        # AC-4: JSON export formatting fidelity
+        data = json.loads(json_full)
+        self.assertEqual(data["id"], tid)
+        self.assertEqual(data["title"], "Export Feature Architecture")
+        self.assertEqual(data["category"], "architecture")
+        self.assertEqual(data["status"], "open")
+        self.assertEqual(data["visibility"], "team")
+        self.assertEqual(data["team_slug"], "eng")
+        self.assertEqual(data["post_count"], 2)
+        self.assertEqual(len(data["posts"]), 2)
+        self.assertEqual(data["posts"][0]["id"], root_post_id)
+        self.assertEqual(data["posts"][0]["tags"], "export,cli,api")
+        self.assertEqual(data["posts"][1]["id"], reply_post_id)
+        self.assertEqual(data["posts"][1]["parent_post_id"], root_post_id)
+        self.assertEqual(data["posts"][1]["tags"], "implementation")
+        # Ensure indent=2 sort_keys=True
+        expected_json = json.dumps(data, indent=2, sort_keys=True)
+        self.assertEqual(json_full, expected_json)
+
+        # AC-5: CLI output routing - stdout (default md and explicit json)
+        res_cli_md = self.run_cli("export-thread", tid, "--as", "eng/lead")
+        self.assertEqual(res_cli_md.returncode, 0)
+        self.assertEqual(res_cli_md.stdout, md_full)
+
+        res_cli_json = self.run_cli("export-thread", tid, "--format", "json", "--as", "eng/lead")
+        self.assertEqual(res_cli_json.returncode, 0)
+        self.assertEqual(json.loads(res_cli_json.stdout), data)
+
+        # AC-6: CLI file output with nested directory creation and confirmation message
+        nested_out_md = self.root / "exports" / "nested" / "dirs" / "thread.md"
+        self.assertFalse(nested_out_md.parent.exists())
+        res_file_md = self.run_cli(
+            "export-thread", tid, "--output", str(nested_out_md), "--as", "eng/lead"
+        )
+        self.assertEqual(res_file_md.returncode, 0)
+        self.assertIn(
+            f"[ULTRON] Exported thread '{tid}' to {nested_out_md} (md).",
+            res_file_md.stdout,
+        )
+        self.assertTrue(nested_out_md.is_file())
+        self.assertEqual(nested_out_md.read_text(encoding="utf-8"), md_full)
+
+        # File export overwrite test via API and CLI
+        nested_out_json = self.root / "exports" / "nested" / "dirs" / "thread.json"
+        res_api_file = self.core.export_thread(
+            tid, format="json", output_path=nested_out_json, as_agent="eng/lead"
+        )
+        self.assertEqual(res_api_file, json_full)
+        self.assertEqual(nested_out_json.read_text(encoding="utf-8"), json_full)
+
+        # Overwrite with CLI
+        res_file_ovw = self.run_cli(
+            "export-thread",
+            tid,
+            "--format",
+            "json",
+            "--output",
+            str(nested_out_json),
+            "--as",
+            "eng/lead",
+        )
+        self.assertEqual(res_file_ovw.returncode, 0)
+        self.assertIn(
+            f"[ULTRON] Exported thread '{tid}' to {nested_out_json} (json).",
+            res_file_ovw.stdout,
+        )
+
+        # AC-7: Fail-loud missing thread handling
+        with self.assertRaises(ValueError) as ctx_missing:
+            self.core.export_thread("t-20261108-nonexistent", show_all=True)
+        self.assertIn("not found", str(ctx_missing.exception))
+
+        res_missing_cli = self.run_cli("export-thread", "t-20261108-nonexistent", "--all")
+        self.assertEqual(res_missing_cli.returncode, 1)
+        self.assertIn("[ULTRON Error]", res_missing_cli.stderr)
+        self.assertIn("not found", res_missing_cli.stderr)
+
+        # AC-8: Fail-loud visibility and permission enforcement
+        # ops/lead should NOT be able to view eng team-private thread
+        with self.assertRaises(PermissionError) as ctx_perm:
+            self.core.export_thread(tid, as_agent="ops/lead")
+        self.assertIn("not authorized", str(ctx_perm.exception))
+
+        res_perm_cli = self.run_cli("export-thread", tid, "--as", "ops/lead")
+        self.assertEqual(res_perm_cli.returncode, 1)
+        self.assertIn("[ULTRON Error]", res_perm_cli.stderr)
+        self.assertIn("not authorized", res_perm_cli.stderr)
+
+        # But with --all or show_all=True it succeeds
+        res_perm_all = self.run_cli("export-thread", tid, "--all")
+        self.assertEqual(res_perm_all.returncode, 0)
+
+        # AC-9: Fail-loud format validation
+        with self.assertRaises(ValueError) as ctx_fmt:
+            self.core.export_thread(tid, format="xml", show_all=True)
+        self.assertIn("Invalid export format 'xml'", str(ctx_fmt.exception))
+
+        res_bad_fmt = self.run_cli("export-thread", tid, "--format", "xml", "--all")
+        self.assertNotEqual(res_bad_fmt.returncode, 0)
+        self.assertIn("invalid choice", res_bad_fmt.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
