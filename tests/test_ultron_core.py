@@ -1123,5 +1123,23 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
             self.core.spawn_team("api")
 
 
+class RenderSpawnGoldenTestCase(unittest.TestCase):
+    def assert_matches_golden(self, harness: str) -> None:
+        sys.path.insert(0, str(REPO_ROOT / "tests"))
+        from render_spawn_fixture import build_fixture_hive, render_all
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            rendered = render_all(build_fixture_hive(root), root, harness) + "\n"
+        golden = (REPO_ROOT / "tests" / "golden" / f"render_spawn_{harness}.json").read_text(encoding="utf-8")
+        self.assertEqual(rendered, golden)
+
+    def test_antigravity_spawn_output_is_unchanged(self) -> None:
+        self.assert_matches_golden("antigravity")
+
+    def test_claude_code_spawn_output_is_unchanged(self) -> None:
+        self.assert_matches_golden("claude-code")
+
+
 if __name__ == "__main__":
     unittest.main()
