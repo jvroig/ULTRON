@@ -17,7 +17,7 @@
 ### 3. Safety Cron & Campaign Liveness
 * **Concept:** In long-running autonomous workflows or multi-stage campaigns, unexpected hangs, subshell deadlocks, or silent process terminations can stall progress indefinitely without triggering a reactive wake-up. A "Safety Cron" is a scheduled recurring heartbeat task that periodically wakes the agent to verify running background jobs, inspect process health, monitor log progress, and unblock stalled execution.
 * **Frequency:** Standard default is every 30 minutes (`*/30 * * * *`). Tune the interval to match workload tempo (e.g., every 10–15 minutes for active benchmark suites or deployments; 30–60 minutes for prolonged background builds or data transfers).
-* **Execution:** Initiate a recurring safety cron at the start of complex campaigns or background execution pipelines using the scheduler (`schedule` tool), and cancel it once the campaign objectives are achieved and verified.
+* **Execution:** Initiate a recurring safety cron at the start of complex campaigns or background execution pipelines using your harness's scheduler, and cancel it once the campaign objectives are achieved and verified.
 
 ### 4. Authentic Data & Fail-Loud Integrity (Zero Fake Fallbacks)
 * **No Silent Mock Fallbacks:** Never implement silent fake or deterministic fallbacks (e.g., hardcoded mock responses pretending a live service, model, or backend succeeded) when a critical subsystem or dependency is unavailable or uninitialized.
@@ -26,15 +26,15 @@
 * **Self-Healing Where Applicable:** When a recoverable dependency or service issue is detected, prefer explicit, observable recovery or repair flows over silent degradation.
 
 ### 5. Multi-Agent Collaboration via ULTRON Core & Reactive Doorbell
-* **Shared Registry & Message Board (`ultron/core/`):** Use `python3 ultron/core/core.py` (see [`ultron/core/README.md`](ultron/core/README.md)) as the persistent source of truth for org hierarchy, team/role definitions, specs, reviews, and lessons learned.
+* **Shared Registry & Message Board (`ultron/core/`):** Use the ULTRON core CLI, `ultron/core/core.py` (your role assignment gives the exact command; see [`ultron/core/README.md`](ultron/core/README.md)) as the persistent source of truth for org hierarchy, team/role definitions, specs, reviews, and lessons learned.
 * **Visibility Discipline (`personal` | `team` | `global`):** Scope board threads appropriately (`personal` for role-only lessons, `team` for intra-team or `--with-team` parent/child coordination, `global` for org-wide context) and always pass `--as <team>/<role>` when querying.
-* **Reactive Doorbell Pattern:** Because JSON/JSONL board files are passive datastores and agents do not poll in loops, **always** resolve the recipient's live UUID (`python3 ultron/core/core.py whois <agent_id> --id-only`) and call `send_message(Recipient="<uuid>", Message="Doorbell: Posted on Thread <thread_id> ('Title')...")` to wake the target agent immediately.
+* **Reactive Doorbell Pattern:** Because JSON/JSONL board files are passive datastores and agents do not poll in loops, **always** resolve the recipient's doorbell address (`whois <agent_id> --id-only`) and doorbell them immediately ("Doorbell: Posted on Thread <thread_id> ('Title')..."). [`docs/HARNESSES.md`](docs/HARNESSES.md) names the doorbell tool for each harness.
 
 ### 6. Fail-Fast Execution & Process Hygiene
 * **Bounded Subprocess Execution:** Ensure CLI scripts, test runners, and headless tools fail fast on unhandled errors and run under explicit timeouts rather than idling indefinitely.
 * **Execution Hygiene:**
-  - Use adequate synchronous wait times (`WaitMsBeforeAsync: 10000`) for test suites and builds to avoid needless backgrounding.
-  - When a long-running process must run in the background, actively inspect its status (`manage_task(Action="status")`) or pair it with a safety heartbeat rather than relying on unbounded silent execution.
+  - Give test suites and builds enough synchronous wait time to finish in the foreground instead of being backgrounded needlessly.
+  - When a long-running process must run in the background, actively inspect its status or pair it with a safety heartbeat rather than relying on unbounded silent execution.
 
 ### 7. Rigorous, Skeptical Reviews (Zero Rubber-Stamping)
 * **The Rubber-Stamping Anti-Pattern:** Never blindly accept or rubber-stamp work returned by peer agents solely because automated test suites report green. Automated tests only verify what the author thought to assert; they frequently miss state reset bugs, unhandled edge cases, resource/listener leaks, and broken lifecycle assumptions.
