@@ -217,6 +217,44 @@ class HarnessAdapter:
     ) -> Dict[str, Any]:
         raise NotImplementedError
 
+    def role_paths(self, core: "UltronCore", ctx: Mapping[str, Any]) -> Tuple[str, str, str]:
+        raise NotImplementedError
+
+    def doorbell_address(self, ctx: Mapping[str, Any]) -> str:
+        raise NotImplementedError
+
+    def doorbell_call(self) -> str:
+        raise NotImplementedError
+
+    def charters_block(self, ctx: Mapping[str, Any]) -> str:
+        raise NotImplementedError
+
+    def render_role_context(self, core: "UltronCore", ctx: Mapping[str, Any]) -> str:
+        r, team = ctx["role"], ctx["team"]
+        role_dir, workspace, shell_start = self.role_paths(core, ctx)
+        return render_template(
+            core._load_template("role_context.md.tmpl"),
+            {
+                "AGENT_ID": ctx["agent_id"],
+                "DOORBELL_ADDRESS": self.doorbell_address(ctx),
+                "TEAM_NAME": team["name"],
+                "TEAM_SLUG": ctx["team_slug"],
+                "LAYER": str(ctx["layer"]),
+                "ROLE_SLUG": r["role"],
+                "ROLE_TITLE": r["title"],
+                "LINEAGE_DISPLAY": ctx["lineage_display"],
+                "ROLE_DIR": role_dir,
+                "ROLE_WORKSPACE": workspace,
+                "SHELL_START_DIR": shell_start,
+                "TARGET_REPO_SUMMARY": self.target_repo_summary(core, ctx),
+                "CORE_CMD": self.core_cmd(core),
+                "ROUTING_SUMMARY": self.routing_summary(core, ctx),
+                "DOORBELL_CALL": self.doorbell_call(),
+                "TOOL_DOORBELL": self.tools["doorbell"],
+                "CHARTERS_BLOCK": self.charters_block(ctx),
+            },
+        )
+
     def read_only_note(self, core: "UltronCore") -> str:
         t = self.tools
         return (
@@ -264,6 +302,21 @@ class AntigravityAdapter(HarnessAdapter):
     def core_cmd(self, core: "UltronCore") -> str:
         return "python3 ultron/core/core.py"
 
+    def role_paths(self, core: "UltronCore", ctx: Mapping[str, Any]) -> Tuple[str, str, str]:
+        return ctx["role"]["role_path"], ctx["role_workspace_rel"], str(core.repo_root)
+
+    def doorbell_address(self, ctx: Mapping[str, Any]) -> str:
+        return "your conversation UUID, bound by `activate-team`"
+
+    def doorbell_call(self) -> str:
+        return 'call `send_message(Recipient="<address>", Message="Doorbell: Posted on Thread <thread_id> (\'Title\')...")`'
+
+    def charters_block(self, ctx: Mapping[str, Any]) -> str:
+        return (
+            f"\n---\n\n## Inherited Team & Ancestor Charters\n{ctx['inherited_charters']}\n\n---\n\n"
+            f"## Role Charter (`{ctx['role']['role_path']}/AGENTS.md`)\n{ctx['role_charter']}"
+        )
+
     def target_repo_summary(self, core: "UltronCore", ctx: Mapping[str, Any]) -> str:
         ultron_root_str = str(core.repo_root)
         repo, repo_abs = ctx["target_repo"], ctx["target_repo_abs"]
@@ -281,24 +334,7 @@ class AntigravityAdapter(HarnessAdapter):
         r, team, aid = ctx["role"], ctx["team"], ctx["agent_id"]
         clean_team, r_slug = ctx["team_slug"], r["role"]
         repo_abs = ctx["target_repo_abs"]
-        system_prompt = render_template(
-            core._load_template("spawn_prompt.md.tmpl"),
-            {
-                "AGENT_ID": aid,
-                "TEAM_NAME": team["name"],
-                "TEAM_SLUG": clean_team,
-                "LAYER": str(ctx["layer"]),
-                "ROLE_SLUG": r_slug,
-                "ROLE_TITLE": r["title"],
-                "LINEAGE_DISPLAY": ctx["lineage_display"],
-                "ROLE_PATH": r["role_path"],
-                "ROLE_WORKSPACE_PATH": ctx["role_workspace_rel"],
-                "TARGET_REPO_SUMMARY": self.target_repo_summary(core, ctx),
-                "ROUTING_SUMMARY": self.routing_summary(core, ctx),
-                "INHERITED_CHARTERS": ctx["inherited_charters"],
-                "ROLE_CHARTER": ctx["role_charter"],
-            },
-        )
+        system_prompt = self.render_role_context(core, ctx)
         initial_prompt = (
             f"Boot sequence for `{aid}` ({r['title']}):\n"
             f"1. Run your startup hydration commands (`list --as {aid} --visibility personal`, "
@@ -452,6 +488,19 @@ class ClaudeCodeAdapter(HarnessAdapter):
     def core_cmd(self, core: "UltronCore") -> str:
         return f'python3 "{core.repo_root / "ultron" / "core" / "core.py"}"'
 
+    def role_paths(self, core: "UltronCore", ctx: Mapping[str, Any]) -> Tuple[str, str, str]:
+        role_dir = ctx["role_dir"].resolve()
+        return str(role_dir), str(role_dir / "workspace"), str(role_dir)
+
+    def doorbell_address(self, ctx: Mapping[str, Any]) -> str:
+        return f"`{session_name_for(ctx['agent_id'])}` (your session name)"
+
+    def doorbell_call(self) -> str:
+        return "call `SendMessage` with that address as `to`"
+
+    def charters_block(self, ctx: Mapping[str, Any]) -> str:
+        return "\nYour team, ancestor and role charters are already loaded from the `AGENTS.md` files in your folder chain."
+
     def target_repo_summary(self, core: "UltronCore", ctx: Mapping[str, Any]) -> str:
         repo, repo_abs = ctx["target_repo"], ctx["target_repo_abs"]
         if not (repo and repo_abs):
@@ -468,24 +517,7 @@ class ClaudeCodeAdapter(HarnessAdapter):
         r, team, aid = ctx["role"], ctx["team"], ctx["agent_id"]
         role_dir = ctx["role_dir"]
         session_name = session_name_for(aid)
-        role_context = render_template(
-            core._load_template("role_context.md.tmpl"),
-            {
-                "AGENT_ID": aid,
-                "SESSION_NAME": session_name,
-                "TEAM_NAME": team["name"],
-                "TEAM_SLUG": ctx["team_slug"],
-                "LAYER": str(ctx["layer"]),
-                "ROLE_SLUG": r["role"],
-                "ROLE_TITLE": r["title"],
-                "LINEAGE_DISPLAY": ctx["lineage_display"],
-                "ROLE_DIR_ABS": str(role_dir.resolve()),
-                "ROLE_WORKSPACE_ABS": str((role_dir / "workspace").resolve()),
-                "TARGET_REPO_SUMMARY": self.target_repo_summary(core, ctx),
-                "ROUTING_SUMMARY": self.routing_summary(core, ctx),
-                "CORE_CMD": self.core_cmd(core),
-            },
-        )
+        role_context = self.render_role_context(core, ctx)
         boot_prompt = (
             f"Boot sequence for `{aid}` ({r['title']}): run the Mandatory Startup Hydration "
             f"commands from your role context.\n"
