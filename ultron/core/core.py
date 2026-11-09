@@ -63,6 +63,7 @@ HARNESS_TOOLS = {
 CLAUDE_BIN_ENV = "ULTRON_CLAUDE_BIN"
 BG_SESSION_ID_RE = re.compile(r"claude attach ([0-9a-f]{8})\b")
 SUPPRESSING_MEMORY_FILES = ("CLAUDE.md", "CLAUDE.local.md")
+ROLE_CLAUDE_SETTINGS = {"worktree": {"bgIsolation": "none"}}
 VALID_TEAM_STATUSES = {"active", "disabled"}
 VALID_AGENT_STATUSES = {"active", "disabled"}
 VALID_VISIBILITIES = {"personal", "team", "global"}
@@ -1626,7 +1627,9 @@ class UltronCore:
                 )
 
         for sp in specs:
-            (Path(sp["role_dir"]) / ROLE_CONTEXT_FILENAME).write_text(sp["role_context"], encoding="utf-8")
+            role_dir = Path(sp["role_dir"])
+            (role_dir / ROLE_CONTEXT_FILENAME).write_text(sp["role_context"], encoding="utf-8")
+            atomic_write_json(role_dir / ".claude" / "settings.json", ROLE_CLAUDE_SETTINGS)
 
         launched: Dict[str, str] = {}
         for sp in specs:

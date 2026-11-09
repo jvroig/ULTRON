@@ -1060,6 +1060,17 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
         )
         self.assertEqual(ignored.returncode, 0)
 
+    def test_spawn_lets_each_role_edit_the_shared_checkout_without_a_worktree(self) -> None:
+        self.core.spawn_team("api")
+        settings_path = self.role_dir("coder") / ".claude" / "settings.json"
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        self.assertEqual(settings["worktree"]["bgIsolation"], "none")
+
+        shutil.copy2(REPO_ROOT / ".gitignore", self.root / ".gitignore")
+        subprocess.run(["git", "init", "-q"], cwd=self.root, check=True)
+        ignored = subprocess.run(["git", "check-ignore", "-q", str(settings_path)], cwd=self.root)
+        self.assertEqual(ignored.returncode, 0)
+
     def test_target_repo_is_passed_as_add_dir_with_equals_so_it_cannot_swallow_the_prompt(self) -> None:
         target = self.root / "target"
         target.mkdir()

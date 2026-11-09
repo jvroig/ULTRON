@@ -7,3 +7,6 @@ __pycache__/
 
 # Claude Code role context, rendered by spawn-team
 role_context.generated.md
+
+# Claude Code per-role settings, rendered by spawn-team
+ultron/hive/**/.claude/
