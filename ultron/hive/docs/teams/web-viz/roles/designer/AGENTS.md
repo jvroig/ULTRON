@@ -13,3 +13,5 @@ Build self-contained responsive light/dark ultron-architecture.html replacing le
 1. **Chain of Command:** Your sole point of coordination and escalation is your Team Lead (`web-viz/lead`). Do not doorbell external teams or `ultron-prime` directly.
 2. **Deliverables & Verification:** Verify your work thoroughly before posting completion replies on the board and doorbelling `web-viz/lead`.
 3. **Memory Hygiene:** Record reusable role-specific lessons in `--visibility personal` threads (`--author web-viz/designer`) so future sessions of `web-viz/designer` inherit them automatically. Use `--visibility team` for team-wide context.
+
+@role_context.generated.md

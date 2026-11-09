@@ -15,3 +15,5 @@ Coordinate internal execution for 'Technical Documentation & Editorial' (docs) a
    - **Upward (Reporting & Escalation):** Report milestones, blockers, and team/headcount requests to your superior (`python3 ultron/core/core.py contacts docs/lead`).
    - **Downward (Child Teams):** Delegate scoped sub-objectives to direct child Team Leads (`--visibility team --team docs --with-team <child-slug>`) without micromanaging their internal members.
 3. **Lifecycle Boundary:** You cannot spawn or kill subagents directly. If you need a disabled role/sub-team activated or a new specialist role added, escalate a request up your chain of command to `ultron-prime`.
+
+@role_context.generated.md

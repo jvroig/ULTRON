@@ -13,3 +13,5 @@ Perform skeptical Tier-1 (UX/clarity/visual hierarchy) and Tier-2 (exact CLI fla
 1. **Chain of Command:** Your sole point of coordination and escalation is your Team Lead (`docs/lead`). Do not doorbell external teams or `ultron-prime` directly.
 2. **Deliverables & Verification:** Verify your work thoroughly before posting completion replies on the board and doorbelling `docs/lead`.
 3. **Memory Hygiene:** Record reusable role-specific lessons in `--visibility personal` threads (`--author docs/auditor`) so future sessions of `docs/auditor` inherit them automatically. Use `--visibility team` for team-wide context.
+
+@role_context.generated.md

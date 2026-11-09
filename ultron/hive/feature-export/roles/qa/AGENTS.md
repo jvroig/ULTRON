@@ -33,3 +33,5 @@ You own **Phase 3 (Spec-Driven QA & Verification Gate)** of the `coding-light` p
 3. **Communication & Memory Hygiene:**
    - Collaborate directly with `feature-export/dev`, `feature-export/spec`, and `feature-export/lead` inside `feature-export`. Never doorbell external teams or `ultron-prime` directly.
    - Record reusable testing patterns or subtle edge-case lessons in `--visibility personal` threads (`--author feature-export/qa`).
+
+@role_context.generated.md

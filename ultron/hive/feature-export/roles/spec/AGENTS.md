@@ -33,3 +33,5 @@ You own **Phase 1 (HLD & Technical Specification)** and **Phase 4 (Final Spec & 
 3. **Communication & Memory Hygiene:**
    - Collaborate directly with `feature-export/lead`, `feature-export/dev`, and `feature-export/qa` inside `feature-export`. Never doorbell external teams or `ultron-prime` directly.
    - Log reusable architectural or specification lessons in `--visibility personal` threads (`--author feature-export/spec`).
+
+@role_context.generated.md
