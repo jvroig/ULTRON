@@ -1006,10 +1006,12 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
         self.fake_bin.write_text(FAKE_CLAUDE, encoding="utf-8")
         self.fake_bin.chmod(0o755)
         self.call_log = self.root / "claude_calls.jsonl"
-        env = {"ULTRON_CLAUDE_BIN": str(self.fake_bin), "FAKE_CLAUDE_LOG": str(self.call_log)}
+        env = {"ULTRON_CLAUDE_BIN": str(self.fake_bin), "FAKE_CLAUDE_LOG": str(self.call_log),
+               "ULTRON_HARNESS": "claude-code"}
         patcher = mock.patch.dict(os.environ, env)
         patcher.start()
         self.addCleanup(patcher.stop)
+        os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
         self.core.create_team(slug="api", name="API", mission="m", default_model="large")
         self.core.add_role(team_slug="api", role="coder", title="Coder", responsibilities="r", model="small")
 
@@ -1116,6 +1118,47 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
         self.assertEqual(res.returncode, 1)
         self.assertIn("api/coder", res.stderr)
         self.assertEqual(self.core.get_team("api")["status"], "disabled")
+
+    def test_harness_comes_from_flag_then_env_then_claude_code_detection(self) -> None:
+        from ultron.core.core import resolve_harness
+
+        self.assertEqual(resolve_harness("antigravity"), "antigravity")
+        self.assertEqual(resolve_harness(), "claude-code")
+        with mock.patch.dict(os.environ, {"ULTRON_HARNESS": "", "CLAUDE_CODE_SESSION_ID": "x"}):
+            self.assertEqual(resolve_harness(), "claude-code")
+        with mock.patch.dict(os.environ, {"ULTRON_HARNESS": ""}):
+            os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+            with self.assertRaisesRegex(ValueError, "--harness"):
+                resolve_harness()
+        with self.assertRaisesRegex(ValueError, "Unknown harness"):
+            resolve_harness("cursor")
+
+    def test_antigravity_spawn_returns_a_plan_for_prime_and_launches_nothing(self) -> None:
+        res = self.core.spawn_team("api", harness="antigravity")
+        self.assertEqual(res["status"], "awaiting_prime")
+        self.assertEqual({sp["agent_id"] for sp in res["specs"]}, {"api/lead", "api/coder"})
+        self.assertTrue(any("activate-team api" in step for step in res["next_steps"]))
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(self.core.get_team("api")["status"], "disabled")
+
+    def test_antigravity_stop_returns_a_kill_plan_and_leaves_the_team_active(self) -> None:
+        self.core.activate_team("api", {"lead": "uuid-lead", "coder": "uuid-coder"})
+        res = self.core.stop_team("api", harness="antigravity")
+        self.assertEqual(res["status"], "awaiting_prime")
+        self.assertIn("uuid-coder", res["next_steps"][0])
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(self.core.get_team("api")["status"], "active")
+
+    def test_spawn_refuses_a_harness_other_than_prime_runs_on(self) -> None:
+        self.core.register_prime("prime-session", harness="antigravity")
+        with self.assertRaisesRegex(ValueError, "cannot doorbell each other"):
+            self.core.spawn_team("api", harness="claude-code")
+        self.assertEqual(self.calls(), [])
+
+    def test_register_prime_records_the_detected_harness(self) -> None:
+        res = self.run_cli("register-prime", "--id", "prime-session")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.core.get_prime_harness(), "claude-code")
 
     def test_spawn_refuses_an_already_active_team(self) -> None:
         self.core.spawn_team("api")
