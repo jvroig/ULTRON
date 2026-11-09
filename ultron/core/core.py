@@ -194,6 +194,195 @@ def append_jsonl_event(target_path: Path, event: Mapping[str, Any]) -> None:
         os.fsync(f.fileno())
 
 
+class HarnessAdapter:
+    name = ""
+    tools: Mapping[str, str] = {}
+    model_for_tier: Mapping[str, str] = {}
+
+    def core_cmd(self, core: "UltronCore") -> str:
+        raise NotImplementedError
+
+    def target_repo_summary(self, core: "UltronCore", ctx: Mapping[str, Any]) -> str:
+        raise NotImplementedError
+
+    def build_spec(self, core: "UltronCore", ctx: Mapping[str, Any]) -> Dict[str, Any]:
+        raise NotImplementedError
+
+    def read_only_note(self, core: "UltronCore") -> str:
+        t = self.tools
+        return (
+            f"\n- **[READ-ONLY ROLE MODE]:** Do NOT call `{t['write']}` or `{t['edit']}` on repository source code. "
+            f"Use `{t['shell']}` strictly for `{self.core_cmd(core)}` board operations and non-mutating inspection/test commands."
+        )
+
+    def routing_summary(self, core: "UltronCore", ctx: Mapping[str, Any]) -> str:
+        return ctx["routing_summary"] + (self.read_only_note(core) if ctx["read_only"] else "")
+
+
+class AntigravityAdapter(HarnessAdapter):
+    name = "antigravity"
+    tools = HARNESS_TOOLS["antigravity"]
+    model_for_tier = ANTIGRAVITY_MODEL_FOR_TIER
+
+    def core_cmd(self, core: "UltronCore") -> str:
+        return "python3 ultron/core/core.py"
+
+    def target_repo_summary(self, core: "UltronCore", ctx: Mapping[str, Any]) -> str:
+        ultron_root_str = str(core.repo_root)
+        repo, repo_abs = ctx["target_repo"], ctx["target_repo_abs"]
+        if not (repo and repo_abs):
+            return f"Local ULTRON Repository (`{ultron_root_str}`)"
+        return (
+            f"`{repo_abs}` (configured as `{repo}`)\n"
+            f"  - **Dual-Directory Execution Rule:** Your shell sessions (`run_command`) start in the ULTRON HQ root (`{ultron_root_str}`).\n"
+            f"  - Run all `python3 ultron/core/core.py ...` board and doorbell commands directly from the default working directory.\n"
+            f"  - Run all project build, test, and Git commands inside the target repository: `cd \"{repo_abs}\" && <command>`.\n"
+            f"  - Pass absolute paths under `{repo_abs}/...` when calling `read_file`, `edit_file`, `write_file`, `grep_search`, or `find_by_name` on project files."
+        )
+
+    def build_spec(self, core: "UltronCore", ctx: Mapping[str, Any]) -> Dict[str, Any]:
+        r, team, aid = ctx["role"], ctx["team"], ctx["agent_id"]
+        clean_team, r_slug = ctx["team_slug"], r["role"]
+        repo_abs = ctx["target_repo_abs"]
+        system_prompt = render_template(
+            core._load_template("spawn_prompt.md.tmpl"),
+            {
+                "AGENT_ID": aid,
+                "TEAM_NAME": team["name"],
+                "TEAM_SLUG": clean_team,
+                "LAYER": str(ctx["layer"]),
+                "ROLE_SLUG": r_slug,
+                "ROLE_TITLE": r["title"],
+                "LINEAGE_DISPLAY": ctx["lineage_display"],
+                "ROLE_PATH": r["role_path"],
+                "ROLE_WORKSPACE_PATH": ctx["role_workspace_rel"],
+                "TARGET_REPO_SUMMARY": self.target_repo_summary(core, ctx),
+                "ROUTING_SUMMARY": self.routing_summary(core, ctx),
+                "INHERITED_CHARTERS": ctx["inherited_charters"],
+                "ROLE_CHARTER": ctx["role_charter"],
+            },
+        )
+        initial_prompt = (
+            f"Boot sequence for `{aid}` ({r['title']}):\n"
+            f"1. Run your startup hydration commands (`list --as {aid} --visibility personal`, "
+            f"`list --as {aid} --visibility team`, and `contacts {aid}`).\n"
+        )
+        if repo_abs:
+            initial_prompt += (
+                f"2. Note your assigned target project repository at `{repo_abs}` "
+                f"(shell commands start in ULTRON HQ `{core.repo_root}`).\n"
+            )
+        step_num = 3 if repo_abs else 2
+        if ctx["mission_brief"]:
+            initial_prompt += f"{step_num}. Initial directive: {ctx['mission_brief']}\n"
+        else:
+            initial_prompt += (
+                f"{step_num}. Confirm readiness in a brief reply to ULTRON PRIME and await doorbelled tasks on the board."
+            )
+        subagent_type = f"ultron--{clean_team}--{r_slug}"
+        return {
+            "agent_id": aid,
+            "team_slug": clean_team,
+            "role": r_slug,
+            "read_only_mode": ctx["read_only"],
+            "target_repo": ctx["target_repo"],
+            "target_repo_abs": repo_abs,
+            "define_subagent": {
+                "Name": subagent_type,
+                "Description": f"ULTRON [{clean_team}] {r['title']} ({aid})",
+                "SystemPrompt": system_prompt,
+                # Antigravity gates `run_command` under EnableWriteTools; keep True so
+                # every Hive role can execute `python3 ultron/core/core.py` CLI commands.
+                "EnableWriteTools": True,
+                "EnableSubagentTools": False,  # Hard invariant: only ULTRON PRIME spawns agents
+                "EnableMCPTools": bool(r["mcp_tools"]),
+            },
+            "invoke_subagent": {
+                "TypeName": subagent_type,
+                "Role": f"{team['name']} - {r['title']}"[:60],
+                "Model": self.model_for_tier.get(r["model"], r["model"]),
+                "Workspace": team["workspace_mode"],
+                "Prompt": initial_prompt,
+            },
+        }
+
+
+class ClaudeCodeAdapter(HarnessAdapter):
+    name = "claude-code"
+    tools = HARNESS_TOOLS["claude-code"]
+    model_for_tier = CLAUDE_MODEL_FOR_TIER
+
+    def core_cmd(self, core: "UltronCore") -> str:
+        return f'python3 "{core.repo_root / "ultron" / "core" / "core.py"}"'
+
+    def target_repo_summary(self, core: "UltronCore", ctx: Mapping[str, Any]) -> str:
+        repo, repo_abs = ctx["target_repo"], ctx["target_repo_abs"]
+        if not (repo and repo_abs):
+            return f"Local ULTRON Repository (`{core.repo_root}`)"
+        t = self.tools
+        return (
+            f"`{repo_abs}` (configured as `{repo}`)\n"
+            f"  - **Dual-Directory Execution Rule:** Your shell sessions start in your role folder (`{ctx['role_dir'].resolve()}`).\n"
+            f"  - Run all project build, test, and Git commands inside the target repository: `cd \"{repo_abs}\" && <command>`.\n"
+            f"  - Pass absolute paths under `{repo_abs}/...` to `{t['read']}`, `{t['edit']}`, `{t['write']}`, `{t['grep']}` and `{t['find']}`."
+        )
+
+    def build_spec(self, core: "UltronCore", ctx: Mapping[str, Any]) -> Dict[str, Any]:
+        r, team, aid = ctx["role"], ctx["team"], ctx["agent_id"]
+        role_dir = ctx["role_dir"]
+        session_name = session_name_for(aid)
+        role_context = render_template(
+            core._load_template("role_context.md.tmpl"),
+            {
+                "AGENT_ID": aid,
+                "SESSION_NAME": session_name,
+                "TEAM_NAME": team["name"],
+                "TEAM_SLUG": ctx["team_slug"],
+                "LAYER": str(ctx["layer"]),
+                "ROLE_SLUG": r["role"],
+                "ROLE_TITLE": r["title"],
+                "LINEAGE_DISPLAY": ctx["lineage_display"],
+                "ROLE_DIR_ABS": str(role_dir.resolve()),
+                "ROLE_WORKSPACE_ABS": str((role_dir / "workspace").resolve()),
+                "TARGET_REPO_SUMMARY": self.target_repo_summary(core, ctx),
+                "ROUTING_SUMMARY": self.routing_summary(core, ctx),
+                "CORE_CMD": self.core_cmd(core),
+            },
+        )
+        boot_prompt = (
+            f"Boot sequence for `{aid}` ({r['title']}): run the Mandatory Startup Hydration "
+            f"commands from your role context.\n"
+        )
+        if ctx["mission_brief"]:
+            boot_prompt += f"Initial directive: {ctx['mission_brief']}\n"
+        else:
+            boot_prompt += "Then await doorbelled tasks on the board; end your turn without polling."
+        return {
+            "agent_id": aid,
+            "team_slug": ctx["team_slug"],
+            "role": r["role"],
+            "read_only_mode": ctx["read_only"],
+            "target_repo": ctx["target_repo"],
+            "target_repo_abs": ctx["target_repo_abs"],
+            "role_dir": str(role_dir.resolve()),
+            "session_name": session_name,
+            "model_tier": r["model"],
+            "claude_model": self.model_for_tier.get(r["model"], ""),
+            "workspace_mode": team["workspace_mode"],
+            "role_context": role_context,
+            "initial_prompt": boot_prompt,
+        }
+
+
+HARNESS_ADAPTERS = {a.name: a for a in (AntigravityAdapter(), ClaudeCodeAdapter())}
+
+
+def harness_adapter(harness: str) -> HarnessAdapter:
+    if harness not in HARNESS_ADAPTERS:
+        raise ValueError(f"Unknown harness '{harness}'. Must be one of {sorted(HARNESS_ADAPTERS)}.")
+    return HARNESS_ADAPTERS[harness]
+
+
 class UltronCore:
     def __init__(
         self,
@@ -1206,11 +1395,7 @@ class UltronCore:
         mission_brief: str = "",
         harness: str = "antigravity",
     ) -> List[Dict[str, Any]]:
-        if harness not in HARNESS_TOOLS:
-            raise ValueError(f"Unknown harness '{harness}'. Must be one of {sorted(HARNESS_TOOLS)}.")
-        tools = HARNESS_TOOLS[harness]
-        claude_code = harness == "claude-code"
-        core_cmd = f'python3 "{self.repo_root / "ultron" / "core" / "core.py"}"'
+        adapter = harness_adapter(harness)
         clean_team = validate_slug(team_slug, "team slug")
         clean_role = validate_role_slug(role) if role else None
 
@@ -1250,7 +1435,6 @@ class UltronCore:
             teammate_ids = [r["agent_id"] for r in team["roles"] if r["role"] != "lead"]
             child_lead_ids = [f"{ct['slug']}/lead" for ct in team["child_teams"]]
 
-        spawn_tmpl = self._load_template("spawn_prompt.md.tmpl")
         specs: List[Dict[str, Any]] = []
 
         for r in role_objs:
@@ -1302,150 +1486,27 @@ class UltronCore:
                     f"- **Strict External Boundary:** Never doorbell external teams or `{PRIME_ID}` directly."
                 )
 
-            is_read_only = not bool(r["write_tools"])
-            if is_read_only:
-                routing_summary += (
-                    f"\n- **[READ-ONLY ROLE MODE]:** Do NOT call `{tools['write']}` or `{tools['edit']}` on repository source code. "
-                    f"Use `{tools['shell']}` strictly for `{core_cmd if claude_code else 'python3 ultron/core/core.py'}` board operations and non-mutating inspection/test commands."
-                )
-
-            r_target_repo = r.get("target_repo") or ""
-            r_target_repo_abs = r.get("target_repo_abs") or ""
-            ultron_root_str = str(self.repo_root)
-            role_dir_abs = str(role_dir.resolve())
-            if claude_code and r_target_repo and r_target_repo_abs:
-                target_repo_summary = (
-                    f"`{r_target_repo_abs}` (configured as `{r_target_repo}`)\n"
-                    f"  - **Dual-Directory Execution Rule:** Your shell sessions start in your role folder (`{role_dir_abs}`).\n"
-                    f"  - Run all project build, test, and Git commands inside the target repository: `cd \"{r_target_repo_abs}\" && <command>`.\n"
-                    f"  - Pass absolute paths under `{r_target_repo_abs}/...` to `{tools['read']}`, `{tools['edit']}`, `{tools['write']}`, `{tools['grep']}` and `{tools['find']}`."
-                )
-            elif claude_code:
-                target_repo_summary = f"Local ULTRON Repository (`{ultron_root_str}`)"
-            elif r_target_repo and r_target_repo_abs:
-                target_repo_summary = (
-                    f"`{r_target_repo_abs}` (configured as `{r_target_repo}`)\n"
-                    f"  - **Dual-Directory Execution Rule:** Your shell sessions (`run_command`) start in the ULTRON HQ root (`{ultron_root_str}`).\n"
-                    f"  - Run all `python3 ultron/core/core.py ...` board and doorbell commands directly from the default working directory.\n"
-                    f"  - Run all project build, test, and Git commands inside the target repository: `cd \"{r_target_repo_abs}\" && <command>`.\n"
-                    f"  - Pass absolute paths under `{r_target_repo_abs}/...` when calling `read_file`, `edit_file`, `write_file`, `grep_search`, or `find_by_name` on project files."
-                )
-            else:
-                target_repo_summary = f"Local ULTRON Repository (`{ultron_root_str}`)"
-
-            system_prompt = render_template(
-                spawn_tmpl,
-                {
-                    "AGENT_ID": aid,
-                    "TEAM_NAME": team["name"],
-                    "TEAM_SLUG": clean_team,
-                    "LAYER": str(layer),
-                    "ROLE_SLUG": r_slug,
-                    "ROLE_TITLE": r["title"],
-                    "LINEAGE_DISPLAY": lineage_display,
-                    "ROLE_PATH": r["role_path"],
-                    "ROLE_WORKSPACE_PATH": role_ws_rel,
-                    "TARGET_REPO_SUMMARY": target_repo_summary,
-                    "ROUTING_SUMMARY": routing_summary,
-                    "INHERITED_CHARTERS": inherited_charters,
-                    "ROLE_CHARTER": role_charter,
-                },
-            )
-
-            subagent_type = f"ultron--{clean_team}--{r_slug}"
-            initial_prompt = (
-                f"Boot sequence for `{aid}` ({r['title']}):\n"
-                f"1. Run your startup hydration commands (`list --as {aid} --visibility personal`, "
-                f"`list --as {aid} --visibility team`, and `contacts {aid}`).\n"
-            )
-            if r_target_repo_abs:
-                initial_prompt += (
-                    f"2. Note your assigned target project repository at `{r_target_repo_abs}` "
-                    f"(shell commands start in ULTRON HQ `{ultron_root_str}`).\n"
-                )
-            step_num = 3 if r_target_repo_abs else 2
-            if mission_brief.strip():
-                initial_prompt += f"{step_num}. Initial directive: {mission_brief.strip()}\n"
-            else:
-                initial_prompt += (
-                    f"{step_num}. Confirm readiness in a brief reply to ULTRON PRIME and await doorbelled tasks on the board."
-                )
-
-            if claude_code:
-                session_name = session_name_for(aid)
-                role_context = render_template(
-                    self._load_template("role_context.md.tmpl"),
-                    {
-                        "AGENT_ID": aid,
-                        "SESSION_NAME": session_name,
-                        "TEAM_NAME": team["name"],
-                        "TEAM_SLUG": clean_team,
-                        "LAYER": str(layer),
-                        "ROLE_SLUG": r_slug,
-                        "ROLE_TITLE": r["title"],
-                        "LINEAGE_DISPLAY": lineage_display,
-                        "ROLE_DIR_ABS": role_dir_abs,
-                        "ROLE_WORKSPACE_ABS": str((role_dir / "workspace").resolve()),
-                        "TARGET_REPO_SUMMARY": target_repo_summary,
-                        "ROUTING_SUMMARY": routing_summary,
-                        "CORE_CMD": core_cmd,
-                    },
-                )
-                boot_prompt = (
-                    f"Boot sequence for `{aid}` ({r['title']}): run the Mandatory Startup Hydration "
-                    f"commands from your role context.\n"
-                )
-                if mission_brief.strip():
-                    boot_prompt += f"Initial directive: {mission_brief.strip()}\n"
-                else:
-                    boot_prompt += (
-                        "Then await doorbelled tasks on the board; end your turn without polling."
-                    )
-                specs.append(
+            specs.append(
+                adapter.build_spec(
+                    self,
                     {
                         "agent_id": aid,
+                        "role": r,
+                        "team": team,
                         "team_slug": clean_team,
-                        "role": r_slug,
-                        "read_only_mode": is_read_only,
-                        "target_repo": r_target_repo,
-                        "target_repo_abs": r_target_repo_abs,
-                        "role_dir": role_dir_abs,
-                        "session_name": session_name,
-                        "model_tier": r["model"],
-                        "claude_model": CLAUDE_MODEL_FOR_TIER.get(r["model"], ""),
-                        "workspace_mode": team["workspace_mode"],
-                        "role_context": role_context,
-                        "initial_prompt": boot_prompt,
-                    }
+                        "layer": layer,
+                        "lineage_display": lineage_display,
+                        "role_dir": role_dir,
+                        "role_workspace_rel": role_ws_rel,
+                        "role_charter": role_charter,
+                        "inherited_charters": inherited_charters,
+                        "routing_summary": routing_summary,
+                        "read_only": not bool(r["write_tools"]),
+                        "target_repo": r.get("target_repo") or "",
+                        "target_repo_abs": r.get("target_repo_abs") or "",
+                        "mission_brief": mission_brief.strip(),
+                    },
                 )
-                continue
-
-            specs.append(
-                {
-                    "agent_id": aid,
-                    "team_slug": clean_team,
-                    "role": r_slug,
-                    "read_only_mode": is_read_only,
-                    "target_repo": r_target_repo,
-                    "target_repo_abs": r_target_repo_abs,
-                    "define_subagent": {
-                        "Name": subagent_type,
-                        "Description": f"ULTRON [{clean_team}] {r['title']} ({aid})",
-                        "SystemPrompt": system_prompt,
-                        # Antigravity gates `run_command` under EnableWriteTools; keep True so
-                        # every Hive role can execute `python3 ultron/core/core.py` CLI commands.
-                        "EnableWriteTools": True,
-                        "EnableSubagentTools": False,  # Hard invariant: only ULTRON PRIME spawns agents
-                        "EnableMCPTools": bool(r["mcp_tools"]),
-                    },
-                    "invoke_subagent": {
-                        "TypeName": subagent_type,
-                        "Role": f"{team['name']} - {r['title']}"[:60],
-                        "Model": ANTIGRAVITY_MODEL_FOR_TIER.get(r["model"], r["model"]),
-                        "Workspace": team["workspace_mode"],
-                        "Prompt": initial_prompt,
-                    },
-                }
             )
         return specs
 
