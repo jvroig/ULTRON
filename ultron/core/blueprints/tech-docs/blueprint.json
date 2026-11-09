@@ -3,7 +3,7 @@
   "name": "Technical Documentation & Visual Architecture Team",
   "roles": [
     {
-      "default_model": "flash",
+      "default_model": "medium",
       "mcp_tools": true,
       "responsibilities": "Align Information Architecture (IA) and deliverable scope across Writer and Visualizer, oversee the parallel authoring and Auditor verification loops, and serve as sole external communication bridge.",
       "role": "lead",
@@ -12,7 +12,7 @@
       "write_tools": true
     },
     {
-      "default_model": "flash",
+      "default_model": "medium",
       "mcp_tools": true,
       "responsibilities": "Author publication-grade Markdown documentation (READMEs, architecture specs, CLI/API references, runbooks) grounded 100% in live source code, coordinate terminology with Visualizer, and resolve Auditor punchlists.",
       "role": "writer",
@@ -21,7 +21,7 @@
       "write_tools": true
     },
     {
-      "default_model": "flash",
+      "default_model": "medium",
       "mcp_tools": true,
       "responsibilities": "Author self-contained interactive HTML architecture showcases, inline SVG diagrams, and Mermaid diagrams aligned with Writer's specs and live source code, and resolve Auditor visual/technical punchlists.",
       "role": "visualizer",
@@ -30,7 +30,7 @@
       "write_tools": true
     },
     {
-      "default_model": "flash",
+      "default_model": "medium",
       "mcp_tools": true,
       "responsibilities": "Conduct skeptical Tier-1 (UX/readability/visual layout) and Tier-2 (source-code CLI/schema/invariant accuracy) audits of all documentation and visual deliverables; bounce defects directly to Writer/Visualizer before certifying approval to Lead.",
       "role": "auditor",

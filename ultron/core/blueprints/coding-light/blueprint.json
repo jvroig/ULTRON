@@ -3,7 +3,7 @@
   "name": "Coding Team Light",
   "roles": [
     {
-      "default_model": "flash",
+      "default_model": "medium",
       "mcp_tools": true,
       "responsibilities": "Align with Spec Architect on scope and HLD, oversee the Spec -> Dev -> QA -> Spec Review workflow, unblock internal impediments, and serve as sole external communication bridge.",
       "role": "lead",
@@ -12,7 +12,7 @@
       "write_tools": true
     },
     {
-      "default_model": "flash",
+      "default_model": "medium",
       "mcp_tools": true,
       "responsibilities": "Co-author the High-Level Design (HLD) and Technical Specification with Team Lead, hand off directly to Developer, and perform the final Spec & Architectural Compliance Audit after QA passes.",
       "role": "spec",
@@ -21,7 +21,7 @@
       "write_tools": true
     },
     {
-      "default_model": "flash",
+      "default_model": "medium",
       "mcp_tools": true,
       "responsibilities": "Implement production-grade code and unit tests strictly conforming to the approved HLD & Technical Spec, hand off directly to QA, and resolve QA/Spec bounce-back punchlists.",
       "role": "dev",
@@ -30,7 +30,7 @@
       "write_tools": true
     },
     {
-      "default_model": "flash",
+      "default_model": "medium",
       "mcp_tools": true,
       "responsibilities": "Execute rigorous spec-driven testing, author missing edge-case/integration tests, bounce defects directly back to Developer, and hand off verified builds to Spec Architect for final review.",
       "role": "qa",

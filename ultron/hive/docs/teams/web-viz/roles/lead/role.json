@@ -1,7 +1,7 @@
 {
   "agent_id": "web-viz/lead",
   "mcp_tools": true,
-  "model": "flash",
+  "model": "medium",
   "registered_at": "2026-11-07T10:08:13.723735Z",
   "responsibilities": "Coordinate internal execution for 'Visual Architecture Showcase' (web-viz) and serve as sole external communication bridge along the ULTRON hierarchy.",
   "role": "lead",

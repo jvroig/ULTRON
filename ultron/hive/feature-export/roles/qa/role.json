@@ -1,7 +1,7 @@
 {
   "agent_id": "feature-export/qa",
   "mcp_tools": true,
-  "model": "flash",
+  "model": "medium",
   "registered_at": "2026-11-08T09:46:21.090846Z",
   "responsibilities": "Execute rigorous spec-driven testing, author missing edge-case/integration tests, bounce defects directly back to Developer, and hand off verified builds to Spec Architect for final review.",
   "role": "qa",

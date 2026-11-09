@@ -1,7 +1,7 @@
 {
   "agent_id": "docs/writer",
   "mcp_tools": true,
-  "model": "flash",
+  "model": "medium",
   "registered_at": "2026-11-07T10:08:13.557939Z",
   "responsibilities": "Author public-ready README.md and comprehensive as-implemented docs/ARCHITECTURE.md grounded strictly in ultron/core/core.py, ultron/core/ULTRON_PRIME.md, and templates.",
   "role": "writer",

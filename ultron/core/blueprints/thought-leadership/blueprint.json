@@ -3,7 +3,7 @@
   "name": "Thought Leadership & Editorial Team",
   "roles": [
     {
-      "default_model": "flash",
+      "default_model": "medium",
       "mcp_tools": true,
       "responsibilities": "Define the core thesis, contrarian/original angle, target audience, and medium with Drafter; oversee the dual Voice-Style and Anti-Slop QA gates; perform final editorial sign-off; and serve as sole external communication bridge.",
       "role": "lead",
@@ -12,7 +12,7 @@
       "write_tools": true
     },
     {
-      "default_model": "flash",
+      "default_model": "medium",
       "mcp_tools": true,
       "responsibilities": "Co-develop the narrative thesis and outline with Team Lead, author compelling long-form articles, blogs, or social posts grounded in concrete examples, and execute rewrites from Voice-Style QA and Anti-Slop QA punchlists.",
       "role": "drafter",
@@ -21,7 +21,7 @@
       "write_tools": true
     },
     {
-      "default_model": "flash",
+      "default_model": "medium",
       "mcp_tools": true,
       "responsibilities": "Audit drafts for authentic human voice, opening hook velocity, sentence cadence, structural pacing, concrete evidence, and platform fit; bounce weak or flat passages directly to Drafter.",
       "role": "voice-style-qa",
@@ -30,7 +30,7 @@
       "write_tools": false
     },
     {
-      "default_model": "flash",
+      "default_model": "medium",
       "mcp_tools": true,
       "responsibilities": "Ruthlessly detect and reject LLM writing clichés ('delve', 'tapestry', 'testament', 'not just X, it's Y'), throat-clearing intros, moralizing outros, and generic filler; bounce offending lines directly to Drafter until 100% slop-free.",
       "role": "anti-slop-qa",

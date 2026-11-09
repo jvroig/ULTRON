@@ -1,6 +1,6 @@
 {
   "created_at": "2026-11-07T10:08:13.723735Z",
-  "default_model": "flash",
+  "default_model": "medium",
   "hive_path": "ultron/hive/docs/teams/web-viz",
   "layer": 2,
   "mission": "Design and build a polished, responsive light/dark self-contained ultron-architecture.html accurately depicting ULTRON's as-implemented architecture.",
