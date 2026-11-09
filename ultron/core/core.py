@@ -24,6 +24,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import sys
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Set, Tuple
 
@@ -46,6 +47,21 @@ VALID_MODELS = {"inherit", *MODEL_TIERS}
 DEFAULT_MODEL_TIER = "medium"
 CLAUDE_MODEL_FOR_TIER = {"small": "haiku", "medium": "sonnet", "large": "opus"}
 VALID_WORKSPACES = {"inherit", "share", "branch"}
+ROLE_CONTEXT_FILENAME = "role_context.generated.md"
+ROLE_CONTEXT_IMPORT = f"@{ROLE_CONTEXT_FILENAME}"
+HARNESS_TOOLS = {
+    "antigravity": {
+        "shell": "run_command", "read": "read_file", "write": "write_file", "edit": "edit_file",
+        "grep": "grep_search", "find": "find_by_name", "doorbell": "send_message",
+    },
+    "claude-code": {
+        "shell": "Bash", "read": "Read", "write": "Write", "edit": "Edit",
+        "grep": "Grep", "find": "Glob", "doorbell": "SendMessage",
+    },
+}
+CLAUDE_BIN_ENV = "ULTRON_CLAUDE_BIN"
+BG_SESSION_ID_RE = re.compile(r"claude attach ([0-9a-f]{8})\b")
+SUPPRESSING_MEMORY_FILES = ("CLAUDE.md", "CLAUDE.local.md")
 VALID_TEAM_STATUSES = {"active", "disabled"}
 VALID_AGENT_STATUSES = {"active", "disabled"}
 VALID_VISIBILITIES = {"personal", "team", "global"}
@@ -94,6 +110,17 @@ def normalize_model(value: str, source: str = "") -> str:
             f"(legacy aliases: {sorted(LEGACY_MODEL_ALIASES)})."
         )
     return cleaned
+
+
+def with_role_context_import(charter_md: str) -> str:
+    if ROLE_CONTEXT_IMPORT in charter_md.splitlines():
+        return charter_md
+    return charter_md.rstrip("\n") + f"\n\n{ROLE_CONTEXT_IMPORT}\n"
+
+
+def session_name_for(agent_id: str) -> str:
+    team_slug, role_slug = agent_id.split("/", 1)
+    return f"ultron--{team_slug}--{role_slug}"
 
 
 def validate_slug(value: str, label: str = "slug") -> str:
@@ -836,7 +863,7 @@ class UltronCore:
                     )
                     r_agents_path = r_dir / "AGENTS.md"
                     if not r_agents_path.exists():
-                        r_agents_path.write_text(r_md, encoding="utf-8")
+                        r_agents_path.write_text(with_role_context_import(r_md), encoding="utf-8")
 
                     r_model = model if model != DEFAULT_MODEL_TIER else r_spec["default_model"]
                     r_manifest: Dict[str, Any] = {
@@ -878,7 +905,7 @@ class UltronCore:
                 )
                 lead_agents_path = lead_dir / "AGENTS.md"
                 if not lead_agents_path.exists():
-                    lead_agents_path.write_text(lead_role_md, encoding="utf-8")
+                    lead_agents_path.write_text(with_role_context_import(lead_role_md), encoding="utf-8")
 
                 role_manifest = {
                     "agent_id": lead_id,
@@ -959,7 +986,7 @@ class UltronCore:
             )
             role_agents_path = role_dir / "AGENTS.md"
             if not role_agents_path.exists():
-                role_agents_path.write_text(member_md, encoding="utf-8")
+                role_agents_path.write_text(with_role_context_import(member_md), encoding="utf-8")
 
             role_manifest: Dict[str, Any] = {
                 "agent_id": aid,
@@ -1175,7 +1202,13 @@ class UltronCore:
         team_slug: str,
         role: Optional[str] = None,
         mission_brief: str = "",
+        harness: str = "antigravity",
     ) -> List[Dict[str, Any]]:
+        if harness not in HARNESS_TOOLS:
+            raise ValueError(f"Unknown harness '{harness}'. Must be one of {sorted(HARNESS_TOOLS)}.")
+        tools = HARNESS_TOOLS[harness]
+        claude_code = harness == "claude-code"
+        core_cmd = f'python3 "{self.repo_root / "ultron" / "core" / "core.py"}"'
         clean_team = validate_slug(team_slug, "team slug")
         clean_role = validate_role_slug(role) if role else None
 
@@ -1270,14 +1303,24 @@ class UltronCore:
             is_read_only = not bool(r["write_tools"])
             if is_read_only:
                 routing_summary += (
-                    "\n- **[READ-ONLY ROLE MODE]:** Do NOT call `write_file` or `edit_file` on repository source code. "
-                    "Use `run_command` strictly for `python3 ultron/core/core.py` board operations and non-mutating inspection/test commands."
+                    f"\n- **[READ-ONLY ROLE MODE]:** Do NOT call `{tools['write']}` or `{tools['edit']}` on repository source code. "
+                    f"Use `{tools['shell']}` strictly for `{core_cmd if claude_code else 'python3 ultron/core/core.py'}` board operations and non-mutating inspection/test commands."
                 )
 
             r_target_repo = r.get("target_repo") or ""
             r_target_repo_abs = r.get("target_repo_abs") or ""
             ultron_root_str = str(self.repo_root)
-            if r_target_repo and r_target_repo_abs:
+            role_dir_abs = str(role_dir.resolve())
+            if claude_code and r_target_repo and r_target_repo_abs:
+                target_repo_summary = (
+                    f"`{r_target_repo_abs}` (configured as `{r_target_repo}`)\n"
+                    f"  - **Dual-Directory Execution Rule:** Your shell sessions start in your role folder (`{role_dir_abs}`).\n"
+                    f"  - Run all project build, test, and Git commands inside the target repository: `cd \"{r_target_repo_abs}\" && <command>`.\n"
+                    f"  - Pass absolute paths under `{r_target_repo_abs}/...` to `{tools['read']}`, `{tools['edit']}`, `{tools['write']}`, `{tools['grep']}` and `{tools['find']}`."
+                )
+            elif claude_code:
+                target_repo_summary = f"Local ULTRON Repository (`{ultron_root_str}`)"
+            elif r_target_repo and r_target_repo_abs:
                 target_repo_summary = (
                     f"`{r_target_repo_abs}` (configured as `{r_target_repo}`)\n"
                     f"  - **Dual-Directory Execution Rule:** Your shell sessions (`run_command`) start in the ULTRON HQ root (`{ultron_root_str}`).\n"
@@ -1325,6 +1368,55 @@ class UltronCore:
                 initial_prompt += (
                     f"{step_num}. Confirm readiness in a brief reply to ULTRON PRIME and await doorbelled tasks on the board."
                 )
+
+            if claude_code:
+                session_name = session_name_for(aid)
+                role_context = render_template(
+                    self._load_template("role_context.md.tmpl"),
+                    {
+                        "AGENT_ID": aid,
+                        "SESSION_NAME": session_name,
+                        "TEAM_NAME": team["name"],
+                        "TEAM_SLUG": clean_team,
+                        "LAYER": str(layer),
+                        "ROLE_SLUG": r_slug,
+                        "ROLE_TITLE": r["title"],
+                        "LINEAGE_DISPLAY": lineage_display,
+                        "ROLE_DIR_ABS": role_dir_abs,
+                        "ROLE_WORKSPACE_ABS": str((role_dir / "workspace").resolve()),
+                        "TARGET_REPO_SUMMARY": target_repo_summary,
+                        "ROUTING_SUMMARY": routing_summary,
+                        "CORE_CMD": core_cmd,
+                    },
+                )
+                boot_prompt = (
+                    f"Boot sequence for `{aid}` ({r['title']}): run the Mandatory Startup Hydration "
+                    f"commands from your role context.\n"
+                )
+                if mission_brief.strip():
+                    boot_prompt += f"Initial directive: {mission_brief.strip()}\n"
+                else:
+                    boot_prompt += (
+                        "Then await doorbelled tasks on the board; end your turn without polling."
+                    )
+                specs.append(
+                    {
+                        "agent_id": aid,
+                        "team_slug": clean_team,
+                        "role": r_slug,
+                        "read_only_mode": is_read_only,
+                        "target_repo": r_target_repo,
+                        "target_repo_abs": r_target_repo_abs,
+                        "role_dir": role_dir_abs,
+                        "session_name": session_name,
+                        "model_tier": r["model"],
+                        "claude_model": CLAUDE_MODEL_FOR_TIER.get(r["model"], ""),
+                        "workspace_mode": team["workspace_mode"],
+                        "role_context": role_context,
+                        "initial_prompt": boot_prompt,
+                    }
+                )
+                continue
 
             specs.append(
                 {
@@ -1408,6 +1500,7 @@ class UltronCore:
         role_uuids: Mapping[str, str],
         allow_detached: bool = False,
         partial: bool = False,
+        session_ids: Optional[Mapping[str, str]] = None,
     ) -> Dict[str, Any]:
         clean_team = validate_slug(team_slug, "team slug")
         if not role_uuids:
@@ -1470,14 +1563,126 @@ class UltronCore:
                 )
 
             for r_slug, cid in normalized_map.items():
-                sessions["agents"][f"{clean_team}/{r_slug}"] = {
+                entry = {
                     "conversation_id": cid,
                     "last_seen": iso,
                     "status": "active",
                 }
+                if session_ids and session_ids.get(r_slug):
+                    entry["session_id"] = session_ids[r_slug]
+                sessions["agents"][f"{clean_team}/{r_slug}"] = entry
             self._write_sessions_unlocked(sessions)
             teams_after, _, _ = self._scan_state_unlocked()
             return teams_after[clean_team]
+
+    def _claude_bin(self) -> str:
+        return os.environ.get(CLAUDE_BIN_ENV, "claude")
+
+    def _refuse_suppressing_memory_files(self, role_dir: Path) -> None:
+        for folder in [role_dir, *role_dir.parents]:
+            for name in SUPPRESSING_MEMORY_FILES:
+                if (folder / name).is_file():
+                    raise ValueError(
+                        f"'{folder / name}' exists above role folder '{role_dir}'. Claude Code then ignores "
+                        f"every AGENTS.md in the chain, so the role would boot without its charters. Remove it."
+                    )
+
+    def _stop_claude_session(self, session_id: str) -> Optional[str]:
+        res = subprocess.run(
+            [self._claude_bin(), "stop", session_id],
+            capture_output=True, text=True, timeout=60,
+        )
+        if res.returncode != 0:
+            return (res.stderr or res.stdout).strip() or f"exit code {res.returncode}"
+        return None
+
+    def spawn_team(self, team_slug: str, mission_brief: str = "") -> Dict[str, Any]:
+        clean_team = validate_slug(team_slug, "team slug")
+        team = self.get_team(clean_team)
+        if not team:
+            raise ValueError(f"Team '{clean_team}' does not exist.")
+        if team["status"] == "active":
+            raise ValueError(f"Team '{clean_team}' is already active. Run stop-team first.")
+        if team["workspace_mode"] == "branch":
+            raise ValueError(
+                f"Team '{clean_team}' uses workspace_mode 'branch', which spawn-team does not support yet."
+            )
+        if team["parent_team"]:
+            parent = self.get_team(team["parent_team"])
+            if not parent or parent["status"] != "active":
+                raise ValueError(
+                    f"Cannot spawn team '{clean_team}': parent team '{team['parent_team']}' is not active."
+                )
+
+        specs = self.render_spawn(clean_team, mission_brief=mission_brief, harness="claude-code")
+        for sp in specs:
+            role_dir = Path(sp["role_dir"])
+            self._refuse_suppressing_memory_files(role_dir)
+            charter = role_dir / "AGENTS.md"
+            if not charter.is_file() or ROLE_CONTEXT_IMPORT not in charter.read_text(encoding="utf-8").splitlines():
+                raise ValueError(
+                    f"'{charter}' must contain the line '{ROLE_CONTEXT_IMPORT}' so the role loads its context."
+                )
+
+        for sp in specs:
+            (Path(sp["role_dir"]) / ROLE_CONTEXT_FILENAME).write_text(sp["role_context"], encoding="utf-8")
+
+        launched: Dict[str, str] = {}
+        for sp in specs:
+            cmd = [self._claude_bin(), "--bg", sp["initial_prompt"], "-n", sp["session_name"],
+                   "--dangerously-skip-permissions"]
+            if sp["claude_model"]:
+                cmd += ["--model", sp["claude_model"]]
+            if sp["target_repo_abs"]:
+                cmd.append(f"--add-dir={sp['target_repo_abs']}")
+            res = subprocess.run(cmd, cwd=sp["role_dir"], capture_output=True, text=True, timeout=120)
+            match = BG_SESSION_ID_RE.search(res.stdout)
+            if res.returncode != 0 or not match:
+                cleanup_errors = {
+                    role: err for role, sid in launched.items()
+                    if (err := self._stop_claude_session(sid))
+                }
+                raise RuntimeError(
+                    f"Launching '{sp['agent_id']}' failed (exit {res.returncode}): "
+                    f"{(res.stderr or res.stdout).strip()}. Stopped already-launched roles {sorted(launched)}"
+                    + (f"; stop failures: {cleanup_errors}" if cleanup_errors else ".")
+                )
+            launched[sp["role"]] = match.group(1)
+
+        team_after = self.activate_team(
+            clean_team,
+            {sp["role"]: sp["session_name"] for sp in specs},
+            session_ids=launched,
+        )
+        return {
+            "team_slug": clean_team,
+            "sessions": [
+                {"agent_id": sp["agent_id"], "session_name": sp["session_name"],
+                 "session_id": launched[sp["role"]], "model": sp["claude_model"] or "inherit"}
+                for sp in specs
+            ],
+            "status": team_after["status"],
+        }
+
+    def stop_team(self, team_slug: str, cascade: bool = False) -> Dict[str, Any]:
+        clean_team = validate_slug(team_slug, "team slug")
+        plan = self.prepare_disable(clean_team, cascade=cascade)
+        with self._lock(exclusive=False):
+            sessions = self._read_sessions_unlocked()
+        stop_failures: Dict[str, str] = {}
+        missing_session_ids: List[str] = []
+        for agent in plan["agents_to_kill"]:
+            sid = str(sessions["agents"].get(agent["agent_id"], {}).get("session_id", "")).strip()
+            if not sid:
+                missing_session_ids.append(agent["agent_id"])
+                continue
+            err = self._stop_claude_session(sid)
+            if err:
+                stop_failures[agent["agent_id"]] = err
+        result = self.disable_team(clean_team, cascade=cascade)
+        result["stop_failures"] = stop_failures
+        result["missing_session_ids"] = missing_session_ids
+        return result
 
     def _prepare_disable_unlocked(
         self,
@@ -2838,6 +3043,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--brief", default="", help="Optional initial directive appended to startup prompt"
     )
 
+    # spawn-team
+    p_sp = add_cmd("spawn-team", "Launch one Claude Code background session per role and bind them")
+    p_sp.add_argument("team", help="Team slug")
+    p_sp.add_argument("--brief", default="", help="Optional initial directive for every role")
+
+    # stop-team
+    p_st = add_cmd("stop-team", "Stop a team's Claude Code sessions, then mark it disabled")
+    p_st.add_argument("team", help="Team slug")
+    p_st.add_argument("--cascade", action="store_true", help="Include all descendant child teams")
+
     # activate-team
     p_at = add_cmd("activate-team", "Bind live Antigravity UUIDs and mark a team active")
     p_at.add_argument("team", help="Team slug")
@@ -3270,6 +3485,28 @@ def main(argv: Optional[List[str]] = None) -> int:
                     )
                     print("-" * 80)
                     print(s["define_subagent"]["SystemPrompt"])
+
+        elif cmd == "spawn-team":
+            res = core.spawn_team(team_slug=args.team, mission_brief=args.brief)
+            if args.json:
+                print(json.dumps(res, indent=2, sort_keys=True))
+            else:
+                print(f"[ULTRON] Spawned team '{res['team_slug']}':")
+                for sess in res["sessions"]:
+                    print(f"  {sess['agent_id']:<28} {sess['session_name']:<36} id={sess['session_id']} model={sess['model']}")
+
+        elif cmd == "stop-team":
+            res = core.stop_team(team_slug=args.team, cascade=args.cascade)
+            if args.json:
+                print(json.dumps(res, indent=2, sort_keys=True))
+            else:
+                print(f"[ULTRON] Disabled team(s) {res['teams_affected']}.")
+                for aid, err in sorted(res["stop_failures"].items()):
+                    print(f"[ULTRON] Stop failed for {aid}: {err}", file=sys.stderr)
+                for aid in res["missing_session_ids"]:
+                    print(f"[ULTRON] No Claude Code session id recorded for {aid}; stop it by hand.", file=sys.stderr)
+            if res["stop_failures"] or res["missing_session_ids"]:
+                return 1
 
         elif cmd == "activate-team":
             try:

@@ -16,11 +16,12 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from ultron.core.core import PRIME_ID, UltronCore  # noqa: E402
+from ultron.core.core import PRIME_ID, ROLE_CONTEXT_FILENAME, ROLE_CONTEXT_IMPORT, UltronCore  # noqa: E402
 
 
 class UltronCoreTestCase(unittest.TestCase):
@@ -973,6 +974,142 @@ class UltronCoreTestCase(unittest.TestCase):
         res = self.run_cli("create-team", "--slug", "api", "--name", "API", "--mission", "m", "--model", "pro")
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(self.core.get_team("api")["default_model"], "large")
+
+
+FAKE_CLAUDE = """#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ["FAKE_CLAUDE_LOG"], "a") as log:
+    log.write(json.dumps({"args": args, "cwd": os.getcwd()}) + "\\n")
+if args[0] == "--bg":
+    name = args[args.index("-n") + 1]
+    if name == os.environ.get("FAKE_CLAUDE_FAIL_NAME"):
+        print("launch refused", file=sys.stderr)
+        sys.exit(1)
+    count = sum(1 for _ in open(os.environ["FAKE_CLAUDE_LOG"]))
+    print(f"  claude attach {count:08x}    open in this terminal")
+elif args[0] == "stop":
+    if args[1] == os.environ.get("FAKE_CLAUDE_FAIL_STOP"):
+        print("No job matching", file=sys.stderr)
+        sys.exit(1)
+    print(f"stopped {args[1]}")
+"""
+
+
+class ClaudeCodeLifecycleTestCase(unittest.TestCase):
+    tearDown = UltronCoreTestCase.tearDown
+    run_cli = UltronCoreTestCase.run_cli
+
+    def setUp(self) -> None:
+        UltronCoreTestCase.setUp(self)
+        self.fake_bin = self.root / "fake_claude"
+        self.fake_bin.write_text(FAKE_CLAUDE, encoding="utf-8")
+        self.fake_bin.chmod(0o755)
+        self.call_log = self.root / "claude_calls.jsonl"
+        env = {"ULTRON_CLAUDE_BIN": str(self.fake_bin), "FAKE_CLAUDE_LOG": str(self.call_log)}
+        patcher = mock.patch.dict(os.environ, env)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.core.create_team(slug="api", name="API", mission="m", default_model="large")
+        self.core.add_role(team_slug="api", role="coder", title="Coder", responsibilities="r", model="small")
+
+    def calls(self) -> list[dict]:
+        if not self.call_log.exists():
+            return []
+        return [json.loads(line) for line in self.call_log.read_text(encoding="utf-8").splitlines()]
+
+    def role_dir(self, role: str) -> Path:
+        return self.root / "ultron" / "hive" / "api" / "roles" / role
+
+    def test_scaffolded_role_charters_import_the_generated_context(self) -> None:
+        for role in ("lead", "coder"):
+            lines = (self.role_dir(role) / "AGENTS.md").read_text(encoding="utf-8").splitlines()
+            self.assertIn(ROLE_CONTEXT_IMPORT, lines)
+
+    def test_spawn_launches_each_role_in_its_own_folder_lead_first_and_binds_names(self) -> None:
+        res = self.core.spawn_team("api", mission_brief="Build it")
+        bg_calls = [c for c in self.calls() if c["args"][0] == "--bg"]
+        self.assertEqual([Path(c["cwd"]).resolve() for c in bg_calls],
+                         [self.role_dir("lead").resolve(), self.role_dir("coder").resolve()])
+        lead_args = bg_calls[0]["args"]
+        self.assertIn("Build it", lead_args[1])
+        self.assertEqual(lead_args[lead_args.index("-n") + 1], "ultron--api--lead")
+        self.assertEqual(lead_args[lead_args.index("--model") + 1], "opus")
+        self.assertIn("--dangerously-skip-permissions", lead_args)
+        coder_args = bg_calls[1]["args"]
+        self.assertEqual(coder_args[coder_args.index("--model") + 1], "haiku")
+
+        self.assertEqual(self.core.get_team("api")["status"], "active")
+        whois = self.run_cli("whois", "api/coder", "--id-only")
+        self.assertEqual(whois.stdout.strip(), "ultron--api--coder")
+        self.assertEqual({s["agent_id"] for s in res["sessions"]}, {"api/lead", "api/coder"})
+
+    def test_generated_context_uses_absolute_core_path_and_is_gitignored(self) -> None:
+        self.core.spawn_team("api")
+        ctx = (self.role_dir("coder") / ROLE_CONTEXT_FILENAME).read_text(encoding="utf-8")
+        self.assertIn(str(self.root / "ultron" / "core" / "core.py"), ctx)
+        self.assertNotIn("python3 ultron/core/core.py", ctx)
+        self.assertIn("ultron--api--coder", ctx)
+        self.assertNotIn("{{", ctx)
+
+        shutil.copy2(REPO_ROOT / ".gitignore", self.root / ".gitignore")
+        subprocess.run(["git", "init", "-q"], cwd=self.root, check=True)
+        ignored = subprocess.run(
+            ["git", "check-ignore", "-q", str(self.role_dir("coder") / ROLE_CONTEXT_FILENAME)],
+            cwd=self.root,
+        )
+        self.assertEqual(ignored.returncode, 0)
+
+    def test_target_repo_is_passed_as_add_dir_with_equals_so_it_cannot_swallow_the_prompt(self) -> None:
+        target = self.root / "target"
+        target.mkdir()
+        self.core.set_target_repo(team_slug="api", target_repo=str(target))
+        self.core.spawn_team("api")
+        for call in (c for c in self.calls() if c["args"][0] == "--bg"):
+            self.assertEqual(call["args"][0:1], ["--bg"])
+            self.assertNotIn("--add-dir", call["args"])
+            self.assertIn(f"--add-dir={target.resolve()}", call["args"])
+
+    def test_spawn_refuses_a_claude_md_above_the_role_folder(self) -> None:
+        (self.root / "ultron" / "CLAUDE.md").write_text("x", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "CLAUDE.md"):
+            self.core.spawn_team("api")
+        self.assertEqual(self.calls(), [])
+
+    def test_spawn_refuses_a_role_charter_without_the_context_import(self) -> None:
+        charter = self.role_dir("coder") / "AGENTS.md"
+        charter.write_text("# charter only\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, ROLE_CONTEXT_IMPORT):
+            self.core.spawn_team("api")
+        self.assertEqual(self.calls(), [])
+
+    def test_a_failed_launch_stops_the_roles_already_launched_and_leaves_team_disabled(self) -> None:
+        with mock.patch.dict(os.environ, {"FAKE_CLAUDE_FAIL_NAME": "ultron--api--coder"}):
+            with self.assertRaisesRegex(RuntimeError, "launch refused"):
+                self.core.spawn_team("api")
+        stops = [c["args"] for c in self.calls() if c["args"][0] == "stop"]
+        self.assertEqual(stops, [["stop", "00000001"]])
+        self.assertEqual(self.core.get_team("api")["status"], "disabled")
+
+    def test_stop_team_stops_by_session_id_not_name_then_disables(self) -> None:
+        self.core.spawn_team("api")
+        res = self.core.stop_team("api")
+        stops = sorted(c["args"][1] for c in self.calls() if c["args"][0] == "stop")
+        self.assertEqual(stops, ["00000001", "00000002"])
+        self.assertEqual(res["stop_failures"], {})
+        self.assertEqual(self.core.get_team("api")["status"], "disabled")
+
+    def test_stop_team_cli_exits_nonzero_when_a_session_will_not_stop(self) -> None:
+        self.core.spawn_team("api")
+        res = self.run_cli("stop-team", "api", env_extra={"FAKE_CLAUDE_FAIL_STOP": "00000002"})
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("api/coder", res.stderr)
+        self.assertEqual(self.core.get_team("api")["status"], "disabled")
+
+    def test_spawn_refuses_an_already_active_team(self) -> None:
+        self.core.spawn_team("api")
+        with self.assertRaisesRegex(ValueError, "already active"):
+            self.core.spawn_team("api")
 
 
 if __name__ == "__main__":
