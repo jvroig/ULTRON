@@ -64,7 +64,10 @@ CLAUDE_BIN_ENV = "ULTRON_CLAUDE_BIN"
 HARNESS_ENV = "ULTRON_HARNESS"
 BG_SESSION_ID_RE = re.compile(r"claude attach ([0-9a-f]{8})\b")
 SUPPRESSING_MEMORY_FILES = ("CLAUDE.md", "CLAUDE.local.md")
-ROLE_CLAUDE_SETTINGS = {"worktree": {"bgIsolation": "none"}}
+ROLE_CLAUDE_SETTINGS = {
+    "worktree": {"bgIsolation": "none"},
+    "permissions": {"deny": ["Agent", "Bash(claude:*)", "Bash(claude *)"]},
+}
 VALID_TEAM_STATUSES = {"active", "disabled"}
 VALID_AGENT_STATUSES = {"active", "disabled"}
 VALID_VISIBILITIES = {"personal", "team", "global"}

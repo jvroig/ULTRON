@@ -1067,6 +1067,8 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
         settings_path = self.role_dir("coder") / ".claude" / "settings.json"
         settings = json.loads(settings_path.read_text(encoding="utf-8"))
         self.assertEqual(settings["worktree"]["bgIsolation"], "none")
+        self.assertIn("Agent", settings["permissions"]["deny"])
+        self.assertIn("Bash(claude *)", settings["permissions"]["deny"])
 
         shutil.copy2(REPO_ROOT / ".gitignore", self.root / ".gitignore")
         subprocess.run(["git", "init", "-q"], cwd=self.root, check=True)
