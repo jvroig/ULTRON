@@ -1160,6 +1160,13 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(self.core.get_prime_harness(), "claude-code")
 
+    def test_render_spawn_cli_prints_each_harness_without_crashing(self) -> None:
+        for harness, marker in (("claude-code", "ultron--api--coder"), ("antigravity", "TypeName=ultron--api--coder")):
+            with self.subTest(harness=harness):
+                res = self.run_cli("render-spawn", "api", "--harness", harness)
+                self.assertEqual(res.returncode, 0, res.stderr)
+                self.assertIn(marker, res.stdout)
+
     def test_spawn_refuses_an_already_active_team(self) -> None:
         self.core.spawn_team("api")
         with self.assertRaisesRegex(ValueError, "already active"):

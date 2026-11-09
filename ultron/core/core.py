@@ -3219,7 +3219,7 @@ def build_parser() -> argparse.ArgumentParser:
     # render-spawn (alias: prepare-spawn)
     p_rs = add_cmd(
         "render-spawn",
-        "Generate Antigravity define_subagent + invoke_subagent payloads",
+        "Render per-harness spawn specs for a team's roles",
         aliases=["prepare-spawn"],
     )
     p_rs.add_argument("team", help="Team slug")
@@ -3227,6 +3227,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_rs.add_argument(
         "--brief", default="", help="Optional initial directive appended to startup prompt"
     )
+    p_rs.add_argument("--harness", default=None, help=f"Harness to render for (default: ${HARNESS_ENV}, then auto-detect)")
 
     # spawn-team
     p_sp = add_cmd("spawn-team", "Spawn one live session per role (or emit the harness's launch plan)")
@@ -3659,11 +3660,19 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(json.dumps(res, indent=2, sort_keys=True))
 
         elif cmd in ("render-spawn", "prepare-spawn"):
+            harness = resolve_harness(args.harness)
             specs = core.render_spawn(
-                team_slug=args.team, role=args.role, mission_brief=args.brief
+                team_slug=args.team, role=args.role, mission_brief=args.brief, harness=harness
             )
             if args.json:
                 print(json.dumps(specs, indent=2, sort_keys=True))
+            elif harness == "claude-code":
+                for s in specs:
+                    print("=" * 80)
+                    print(f"SPAWN SPEC FOR: {s['agent_id']} (session {s['session_name']})")
+                    print(f"  Model={s['claude_model'] or 'inherit'} | Dir={s['role_dir']}")
+                    print("-" * 80)
+                    print(s["role_context"])
             else:
                 for s in specs:
                     print("=" * 80)

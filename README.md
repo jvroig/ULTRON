@@ -2,7 +2,7 @@
 
 **Universal Layered Team and Role Orchestration Network (ULTRON)** is an open-source, pure Git-native multi-agent orchestration framework engineered for high-autonomy software engineering and complex operational campaigns.
 
-ULTRON operates directly on top of modern agentic harnesses—primarily Google's **Antigravity CLI** (`agy`) and IDE, while remaining fundamentally portable to **Claude Code** and other CLI-driven agent runtimes.
+ULTRON runs on top of an agentic harness. **Claude Code** and **Google Antigravity** are supported today through harness adapters; [`docs/HARNESSES.md`](docs/HARNESSES.md) maps every ULTRON action to each harness's tools and explains how to add another.
 
 ---
 
@@ -15,7 +15,7 @@ ULTRON solves this by introducing a formal corporate-style hierarchy:
 - **Structured Teams as the Unit of Work**: Capabilities are partitioned into specialized teams organized in an arbitrary-depth organizational tree (`Layer 1..N`) under [`ultron/hive/`](ultron/hive/).
 - **Flat Intra-Team Peer Roles**: Inside each team, specialist roles collaborate as flat peers under a mandatory Team Lead (`<team>/lead`), who coordinates internal execution and acts as the sole external communication bridge.
 - **Pure Git-Native Datastore**: Zero external databases (no SQLite, no Redis, no Postgres). Org charts and role manifests are versioned in Git. Message board threads are append-only JSONL files (`*.jsonl`) that merge conflict-free across Git branches using `merge=union`.
-- **Reactive, Zero-Polling Execution**: Passive on-disk storage paired with a reactive doorbell protocol (`whois --id-only` + `send_message`) eliminates costly polling loops while ensuring instantaneous wakeup across agent sessions.
+- **Reactive, Zero-Polling Execution**: Passive on-disk storage paired with a reactive doorbell protocol (`whois --id-only`, then the harness's messaging tool) eliminates costly polling loops while ensuring instantaneous wakeup across agent sessions.
 
 ---
 
@@ -31,9 +31,9 @@ Furthermore, workspace sessions maintain a **neutral engineering baseline**:
 
 ### 2. Sole Lifecycle & Provisioning Authority on ULTRON PRIME
 To prevent runaway agent proliferation and cascading costs, provisioning authority is strictly centralized:
-- **Hard Harness Privilege Invariant**: All spawned Team Leads and Specialists are provisioned with `EnableSubagentTools=False`. Only ULTRON PRIME possesses the authority to create teams, add roles, spawn sessions (`invoke_subagent`), or terminate sessions (`manage_subagents`).
-- **Token Efficiency & Model Tiering**: Spawned roles default to lightweight, cost-effective models (**Gemini Flash** via `--model flash`) for all internal team execution. Heavier models (`pro` or `inherit`) are reserved for ULTRON PRIME or explicit User-authorized analytical deep dives.
-- **Dynamic Lifecycle Conservation**: Teams are not kept running indefinitely. When a team finishes its assigned milestone, ULTRON PRIME cleanly stands it down (`prepare-disable` -> kill live session UUIDs -> `disable-team`). Charters, code, and persistent memory remain intact on disk, ready to be reactivated on demand in milliseconds.
+- **Centralized Spawning**: Only ULTRON PRIME creates teams, adds roles, and spawns or stops sessions (`spawn-team`, `stop-team`). Spawned Team Leads and Specialists never spawn agents.
+- **Token Efficiency & Model Tiering**: Roles take a neutral tier (`small`, `medium`, `large`, or `inherit`) that each harness maps to its own models. Roles default to `medium`; heavier tiers are reserved for ULTRON PRIME or explicit User-authorized deep dives.
+- **Dynamic Lifecycle Conservation**: Teams are not kept running indefinitely. When a team finishes its assigned milestone, ULTRON PRIME stands it down (`stop-team`). Charters, code, and persistent memory remain intact on disk, ready to be reactivated on demand in milliseconds.
 
 ### 3. Arbitrary `N`-Layer Hive Tree (`ultron/hive/`) & Flat Intra-Team Roles
 ULTRON rejects rigid two-tier architectures in favor of an arbitrary-depth organization tree (`Layer 1..N`):
@@ -47,7 +47,7 @@ ULTRON rejects rigid two-tier architectures in favor of an arbitrary-depth organ
 ### 4. Pure Git-Native Zero-SQLite Storage & Conflict-Free Merges
 ULTRON stores all organizational definitions, role configurations, and coordination history directly in the Git working tree with zero third-party database dependencies:
 - **Persistent Git-Tracked Manifests**: Each team owns a [`team.json`](ultron/hive/) manifest; each role owns a [`role.json`](ultron/hive/) manifest. Paths are stored strictly as relative POSIX paths, ensuring the repository can be moved, cloned, or renamed across filesystems without broken references.
-- **Clean Working Trees via Ephemeral Separation**: Live Antigravity session bindings (`conversation_id` UUIDs) are stored in gitignored [`ultron/core/.runtime/sessions.json`](ultron/core/.gitignore). Spawning, waking, or standing down teams creates zero dirty `git status` modifications.
+- **Clean Working Trees via Ephemeral Separation**: Live session bindings (each role's doorbell address and session ID) are stored in gitignored [`ultron/core/.runtime/sessions.json`](ultron/core/.gitignore). Spawning, waking, or standing down teams creates zero dirty `git status` modifications.
 - **Conflict-Free Branch Merges (`*.jsonl merge=union`)**: All communication threads live in [`ultron/core/threads/t-YYYYMMDD-xxxxxxxx.jsonl`](ultron/core/threads/). Every message, status change, or reclassification is an append-only JSON event. Configured with `*.jsonl merge=union` in [`ultron/core/threads/.gitattributes`](ultron/core/threads/.gitattributes), multiple developers or agents working on separate Git branches can append posts concurrently; running `git merge` succeeds with zero merge conflicts, deterministically folding events by `(created_at, event_id)`.
 
 ### 5. Three-Tier Visibility Scoping & Reactive Doorbell Protocol
@@ -57,8 +57,8 @@ To prevent context dilution across large multi-agent networks, communication is 
 - **`global`**: Visible to every agent across the entire Hive for network-wide architectural standards, breaking API notices, or universal policies.
 - **Reactive Doorbell Protocol**: Because JSONL files are passive on-disk logs and agents never poll in loops, collaboration follows a strict 3-step reactive protocol:
   1. Post message to thread via `python3 ultron/core/core.py new-thread` or `reply`.
-  2. Resolve recipient's live session UUID: `python3 ultron/core/core.py whois <target-agent> --id-only`.
-  3. Wake recipient immediately via harness messaging: `send_message(Recipient="<uuid>", Message="...")`.
+  2. Resolve the recipient's doorbell address: `python3 ultron/core/core.py whois <target-agent> --id-only`.
+  3. Wake the recipient immediately with the harness's messaging tool ([`docs/HARNESSES.md`](docs/HARNESSES.md)).
 
 ---
 
@@ -70,7 +70,8 @@ ULTRON/
 ├── README.md                          # This public framework guide
 ├── ultron-architecture.html           # Interactive visual architecture diagram & showcase
 ├── docs/
-│   └── ARCHITECTURE.md                # Deep-dive as-implemented technical specification
+│   ├── ARCHITECTURE.md                # Deep-dive as-implemented technical specification
+│   └── HARNESSES.md                   # Per-harness actions, requirements & adapter contract
 ├── tests/
 │   └── test_ultron_core.py            # Comprehensive unit, lifecycle & Git union-merge test suite
 └── ultron/                            # Portable drop-in ULTRON orchestration engine
@@ -79,13 +80,13 @@ ULTRON/
     │   ├── README.md                  # CLI reference & data model summary
     │   ├── core.py                    # Pure Git-native registry, scaffolder & JSONL board CLI
     │   ├── .gitignore                 # Ignores ephemeral .runtime/ sessions & file locks
-    │   ├── templates/                 # Code generation templates for teams, roles & spawn prompts
+    │   ├── templates/                 # Code generation templates for teams, roles & role context
     │   │   ├── team_agents.md.tmpl    # Team charter template
     │   │   ├── lead_role.md.tmpl      # Team Leader charter template
     │   │   ├── member_role.md.tmpl    # Specialist role charter template
-    │   │   └── spawn_prompt.md.tmpl   # Full agent hydration & prompt injection template
+    │   │   └── role_context.md.tmpl   # Per-role identity, routing & hydration (rendered per harness)
     │   ├── .runtime/                  # GITIGNORED runtime directory
-    │   │   ├── sessions.json          # Live conversation UUID bindings & agent statuses
+    │   │   ├── sessions.json          # Live doorbell addresses, session IDs & agent statuses
     │   │   └── .lock                  # POSIX fcntl shared/exclusive file lock
     │   └── threads/                   # Git-tracked append-only JSONL message board
     │       ├── .gitattributes         # Enforces `*.jsonl merge=union` for zero-conflict merges
@@ -114,7 +115,7 @@ ULTRON/
 ### Prerequisites
 - Python 3.10+ (standard library only; zero pip installations required).
 - Git 2.20+ (supports union merge driver).
-- An agentic runtime harness: Google Antigravity CLI (`agy`) or Claude Code.
+- A supported agent harness: Claude Code or Google Antigravity. Check its requirements in [`docs/HARNESSES.md`](docs/HARNESSES.md).
 
 ---
 
@@ -125,9 +126,9 @@ Launch your agent session in this repository. Instruct the session to assume roo
 load ultron/core/ULTRON_PRIME.md
 ```
 
-Upon loading, ULTRON PRIME registers its session UUID, inspects the current Hive hierarchy, and reports status:
+Upon loading, ULTRON PRIME registers its doorbell address, inspects the current Hive hierarchy, and reports status:
 ```bash
-python3 ultron/core/core.py register-prime --id "<your-session-uuid>"
+python3 ultron/core/core.py register-prime --id "<your-doorbell-address>"
 python3 ultron/core/core.py org-tree
 python3 ultron/core/core.py stats
 ```
@@ -143,7 +144,7 @@ python3 ultron/core/core.py create-team \
   --slug backend \
   --name "Backend Engineering" \
   --mission "Implement core service APIs and database access layers" \
-  --model flash
+  --model medium
 
 # 2. Add specialist roles to the team
 python3 ultron/core/core.py add-role \
@@ -170,16 +171,13 @@ python3 ultron/core/core.py create-team \
 ---
 
 ### Step 3: Waking / Activating a Team
-ULTRON PRIME renders the subagent spawn specifications, invokes the sessions via the harness, and binds the returned session UUIDs:
+ULTRON PRIME spawns one live session per role and binds their doorbell addresses:
 
 ```bash
-# Render JSON spawn definitions (includes hydrated prompts, inherited charters, and permissions)
-python3 ultron/core/core.py render-spawn backend --json
-
-# Bind live session UUIDs in ephemeral .runtime/sessions.json (zero git diff)
-python3 ultron/core/core.py activate-team backend \
-  --uuids '{"lead":"<lead-uuid>","coder":"<coder-uuid>","reviewer":"<reviewer-uuid>"}'
+python3 ultron/core/core.py spawn-team backend
 ```
+
+On Claude Code this launches and binds every role. On Antigravity it prints a launch plan that PRIME carries out, ending with `activate-team`.
 
 ---
 
@@ -196,9 +194,8 @@ python3 ultron/core/core.py new-thread \
   --title "Feature: Implement Health Check Endpoint" \
   --content "Deliver GET /health endpoint with uptime and DB status checks."
 
-# Wake backend/lead reactively
+# Resolve backend/lead's doorbell address, then doorbell it with the harness's messaging tool
 python3 ultron/core/core.py whois backend/lead --id-only
-# Send doorbell message via harness: send_message(Recipient="<lead-uuid>", Message="Doorbell: Assigned Thread ...")
 ```
 
 The Team Lead hydrates its startup context, decomposes tasks for `backend/coder`, reviews results with `backend/reviewer`, updates the thread status (`set-status resolved`), and reports back up to ULTRON PRIME.
@@ -209,15 +206,10 @@ The Team Lead hydrates its startup context, decomposes tasks for `backend/coder`
 When milestones are complete and no immediate tasks remain, ULTRON PRIME cleanly terminates the live agent sessions to conserve tokens and system resources:
 
 ```bash
-# 1. Inspect and prepare UUIDs to terminate (optionally pass --cascade for child subtrees)
-python3 ultron/core/core.py prepare-disable backend --cascade --json
-
-# 2. Kill sessions via harness tool:
-# manage_subagents(Action="kill", ConversationIds=[...])
-
-# 3. Mark team disabled in runtime registry
-python3 ultron/core/core.py disable-team backend --cascade
+python3 ultron/core/core.py stop-team backend --cascade
 ```
+
+On Claude Code this stops every session and marks the team disabled. On Antigravity it prints a stop plan that PRIME carries out, ending with `disable-team`.
 
 *Note: All files under `ultron/hive/` and all append-only thread histories in `ultron/core/threads/` remain completely intact. Reactivating the team later immediately restores each agent's identity and personal memory.*
 
@@ -241,6 +233,7 @@ python3 -W error -m unittest discover -s tests -v
 | Document | Description |
 | :--- | :--- |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | **Deep-Dive Architecture Specification:** Comprehensive treatise covering trust models, data schemas, locking mechanisms, deterministic event folding, lifecycle invariants, and Mermaid sequence diagrams. |
+| [`docs/HARNESSES.md`](docs/HARNESSES.md) | **Harness Reference:** How ULTRON picks a harness, each action mapped to Claude Code and Antigravity tools, harness requirements, and the adapter contract for adding one. |
 | [`ultron/core/README.md`](ultron/core/README.md) | **CLI & Storage Reference:** Command-line syntax, flag definitions, and schema details for `ultron/core/core.py`. |
 | [`ultron/core/ULTRON_PRIME.md`](ultron/core/ULTRON_PRIME.md) | **Operational Manual for ULTRON PRIME:** Boot persona, hierarchy management, lifecycle workflows, and safety crons. |
 | [`ultron-architecture.html`](ultron-architecture.html) | **Visual Architecture Showcase:** Single-page interactive HTML overview illustrating hierarchy and message board design. |
