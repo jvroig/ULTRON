@@ -1141,5 +1141,53 @@ class RenderSpawnGoldenTestCase(unittest.TestCase):
         self.assert_matches_golden("claude-code")
 
 
+class HarnessAdapterContractTestCase(unittest.TestCase):
+    FOREIGN_TOOL_NAMES = {
+        "claude-code": ["run_command", "write_file", "edit_file", "read_file", "grep_search",
+                        "find_by_name", "send_message", "manage_task", "WaitMsBeforeAsync"],
+        "antigravity": ["SendMessage", "EnterWorktree", "`Bash`", "`Write`", "`Edit`"],
+    }
+    SHARED_SPEC_KEYS = {"agent_id", "team_slug", "role", "read_only_mode", "target_repo", "target_repo_abs"}
+
+    def setUp(self) -> None:
+        sys.path.insert(0, str(REPO_ROOT / "tests"))
+        from render_spawn_fixture import build_fixture_hive
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.core = build_fixture_hive(Path(tmp.name).resolve())
+
+    def render(self, harness: str) -> list[dict]:
+        return [sp for team in ("api", "auth") for sp in self.core.render_spawn(team, harness=harness)]
+
+    def test_no_adapter_leaks_another_harness_tool_names(self) -> None:
+        for harness, foreign in self.FOREIGN_TOOL_NAMES.items():
+            text = json.dumps(self.render(harness))
+            for name in foreign:
+                with self.subTest(harness=harness, tool=name):
+                    self.assertNotIn(name, text)
+
+    def test_every_adapter_maps_every_model_tier(self) -> None:
+        from ultron.core.core import HARNESS_ADAPTERS, MODEL_TIERS
+
+        for adapter in HARNESS_ADAPTERS.values():
+            for tier in MODEL_TIERS:
+                with self.subTest(harness=adapter.name, tier=tier):
+                    self.assertTrue(adapter.model_for_tier.get(tier))
+
+    def test_every_adapter_reports_the_same_role_identity_fields(self) -> None:
+        by_harness = {h: self.render(h) for h in self.FOREIGN_TOOL_NAMES}
+        for harness, specs in by_harness.items():
+            for sp in specs:
+                with self.subTest(harness=harness, agent=sp["agent_id"]):
+                    self.assertLessEqual(self.SHARED_SPEC_KEYS, set(sp))
+        identity = {h: [{k: sp[k] for k in self.SHARED_SPEC_KEYS} for sp in specs] for h, specs in by_harness.items()}
+        self.assertEqual(identity["antigravity"], identity["claude-code"])
+
+    def test_unknown_harness_is_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Unknown harness"):
+            self.render("cursor")
+
+
 if __name__ == "__main__":
     unittest.main()
