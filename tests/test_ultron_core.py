@@ -177,7 +177,7 @@ class UltronCoreTestCase(unittest.TestCase):
         self.assertEqual(lead_spec["agent_id"], "core-eng/lead")
         self.assertFalse(lead_spec["define_subagent"]["EnableSubagentTools"])
         self.assertTrue(lead_spec["define_subagent"]["EnableWriteTools"])
-        self.assertEqual(lead_spec["invoke_subagent"]["Model"], "medium")
+        self.assertEqual(lead_spec["invoke_subagent"]["Model"], "flash")
         self.assertIn('{"strict": true, "retries": 3}', lead_spec["define_subagent"]["SystemPrompt"])
         self.assertIn("--visibility personal", lead_spec["define_subagent"]["SystemPrompt"])
 
@@ -186,7 +186,7 @@ class UltronCoreTestCase(unittest.TestCase):
         self.assertFalse(auditor_spec["define_subagent"]["EnableSubagentTools"])
         self.assertTrue(auditor_spec["define_subagent"]["EnableWriteTools"])
         self.assertIn("[READ-ONLY ROLE MODE]", auditor_spec["define_subagent"]["SystemPrompt"])
-        self.assertEqual(auditor_spec["invoke_subagent"]["Model"], "small")
+        self.assertEqual(auditor_spec["invoke_subagent"]["Model"], "flash_lite")
 
     def test_lifecycle_guards_whois_and_clean_git_working_tree(self) -> None:
         self.core.create_team(slug="parent-t", name="Parent", mission="Parent team")

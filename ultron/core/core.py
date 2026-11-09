@@ -46,6 +46,7 @@ LEGACY_MODEL_ALIASES = {"flash_lite": "small", "flash": "medium", "pro": "large"
 VALID_MODELS = {"inherit", *MODEL_TIERS}
 DEFAULT_MODEL_TIER = "medium"
 CLAUDE_MODEL_FOR_TIER = {"small": "haiku", "medium": "sonnet", "large": "opus"}
+ANTIGRAVITY_MODEL_FOR_TIER = {"small": "flash_lite", "medium": "flash", "large": "pro"}
 VALID_WORKSPACES = {"inherit", "share", "branch"}
 ROLE_CONTEXT_FILENAME = "role_context.generated.md"
 ROLE_CONTEXT_IMPORT = f"@{ROLE_CONTEXT_FILENAME}"
@@ -1439,7 +1440,7 @@ class UltronCore:
                     "invoke_subagent": {
                         "TypeName": subagent_type,
                         "Role": f"{team['name']} - {r['title']}"[:60],
-                        "Model": r["model"],
+                        "Model": ANTIGRAVITY_MODEL_FOR_TIER.get(r["model"], r["model"]),
                         "Workspace": team["workspace_mode"],
                         "Prompt": initial_prompt,
                     },
