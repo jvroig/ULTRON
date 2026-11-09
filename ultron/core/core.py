@@ -8,7 +8,7 @@ Storage Architecture (Zero SQLite / Zero External Dependencies):
 - Org & Role Definitions (Git-tracked):
     ultron/hive/.../<team-slug>/team.json
     ultron/hive/.../<team-slug>/roles/<role-slug>/role.json
-- Live Session UUID Bindings (Gitignored ephemeral runtime state):
+- Live Session Bindings: doorbell address, session ID, harness (Gitignored ephemeral runtime state):
     ultron/core/.runtime/sessions.json
 - Message Board Threads (Git-tracked, conflict-free via *.jsonl merge=union):
     ultron/core/threads/<thread_id>.jsonl  (1 append-only JSON event per line)
@@ -689,7 +689,7 @@ class UltronCore:
     ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
         """
         Walk ultron/hive/ recursively to load all persistent teams and roles,
-        and overlay ephemeral session UUIDs/statuses from .runtime/sessions.json.
+        and overlay ephemeral session bindings/statuses from .runtime/sessions.json.
         Returns (teams_by_slug, agents_by_id, sessions_data).
         """
         sessions = self._read_sessions_unlocked()
@@ -1763,7 +1763,7 @@ class UltronCore:
         for key, uuid_val in role_uuids.items():
             cid = str(uuid_val).strip()
             if not cid:
-                raise ValueError(f"Empty UUID provided for '{key}'.")
+                raise ValueError(f"Empty doorbell address provided for '{key}'.")
             if "/" in key:
                 norm_id = normalize_agent_id(key)
                 if norm_id.split("/", 1)[0] != clean_team:
@@ -1800,7 +1800,7 @@ class UltronCore:
             )
             if not lead_will_be_active and not allow_detached:
                 raise ValueError(
-                    f"Team activation for '{clean_team}' must include 'lead' UUID (or 'lead' must already be active), "
+                    f"Team activation for '{clean_team}' must include a 'lead' doorbell address (or 'lead' must already be active), "
                     f"or pass --allow-detached."
                 )
 
@@ -1811,8 +1811,8 @@ class UltronCore:
             )
             if missing_roles and not partial:
                 raise ValueError(
-                    f"Missing UUID(s) for role(s) {missing_roles} in team '{clean_team}'. "
-                    f"Provide all role UUIDs or pass --partial."
+                    f"Missing doorbell address(es) for role(s) {missing_roles} in team '{clean_team}'. "
+                    f"Provide every role's address or pass --partial."
                 )
 
             for r_slug, cid in normalized_map.items():
@@ -2952,7 +2952,7 @@ def format_agent_table(agents: List[Dict[str, Any]]) -> str:
     lines = [f"[ULTRON] Registered Roles & Sessions ({len(agents)}):\n"]
     header = (
         f"{'AGENT ID':<28} {'STATUS':<10} {'MODEL':<10} "
-        f"{'CONVERSATION ID (UUID)':<38} {'TITLE'}"
+        f"{'DOORBELL ADDRESS':<38} {'TITLE'}"
     )
     lines.append(header)
     lines.append("-" * 110)
@@ -3084,7 +3084,7 @@ def build_parser() -> argparse.ArgumentParser:
         return sub.add_parser(name, aliases=aliases or [], help=help_text, parents=[common])
 
     # register-prime
-    p_prime = add_cmd("register-prime", "Register/update ULTRON PRIME session UUID")
+    p_prime = add_cmd("register-prime", "Register/update ULTRON PRIME's doorbell address")
     p_prime.add_argument("--id", required=True, help="ULTRON PRIME doorbell address (conversation UUID or session name)")
     p_prime.add_argument("--harness", default=None, help=f"Harness running PRIME (default: ${HARNESS_ENV}, then auto-detect)")
 
@@ -3245,12 +3245,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_st.add_argument("--harness", default=None, help=f"Harness running ULTRON (default: ${HARNESS_ENV}, then auto-detect)")
 
     # activate-team
-    p_at = add_cmd("activate-team", "Bind live Antigravity UUIDs and mark a team active")
+    p_at = add_cmd("activate-team", "Bind live doorbell addresses and mark a team active (spawn-team does this on Claude Code)")
     p_at.add_argument("team", help="Team slug")
     p_at.add_argument(
         "--uuids",
         required=True,
-        help='JSON object mapping role -> UUID (e.g. \'{"lead":"...","coder":"..."}\')',
+        help='JSON object mapping role -> doorbell address (e.g. \'{"lead":"...","coder":"..."}\')',
     )
     p_at.add_argument(
         "--allow-detached",
@@ -3260,9 +3260,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_at.add_argument("--partial", action="store_true", help="Allow partial role activation")
 
     # activate-agent
-    p_aa = add_cmd("activate-agent", "Bind a live Antigravity UUID to a single role")
+    p_aa = add_cmd("activate-agent", "Bind a live doorbell address to a single role")
     p_aa.add_argument("agent_id", help="Agent ID (<team>/<role> or ultron-prime)")
-    p_aa.add_argument("--id", required=True, help="Conversation UUID")
+    p_aa.add_argument("--id", required=True, help="Doorbell address (conversation UUID or session name)")
     p_aa.add_argument(
         "--allow-detached",
         action="store_true",
@@ -3270,7 +3270,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # prepare-disable
-    p_pd = add_cmd("prepare-disable", "List live UUIDs to kill before disabling a team")
+    p_pd = add_cmd("prepare-disable", "List live sessions to stop before disabling a team")
     p_pd.add_argument("team", help="Team slug")
     p_pd.add_argument(
         "--cascade", action="store_true", help="Include all descendant child teams"
@@ -3278,7 +3278,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # disable-team
     p_dt = add_cmd(
-        "disable-team", "Clear UUIDs and mark a team disabled after killing sessions"
+        "disable-team", "Clear bindings and mark a team disabled after its sessions are stopped"
     )
     p_dt.add_argument("team", help="Team slug")
     p_dt.add_argument(
@@ -3304,24 +3304,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # agents
-    p_ag = add_cmd("agents", "List registered roles and live session UUIDs")
+    p_ag = add_cmd("agents", "List registered roles and their doorbell addresses")
     p_ag.add_argument("--team", default=None, help="Filter by team slug")
     p_ag.add_argument(
         "--status", default=None, choices=sorted(VALID_AGENT_STATUSES), help="Filter by status"
     )
 
     # whois
-    p_who = add_cmd("whois", "Resolve <team>/<role> or ultron-prime to live session UUID")
+    p_who = add_cmd("whois", "Resolve <team>/<role> or ultron-prime to its doorbell address")
     p_who.add_argument("agent_id", help="Agent ID (e.g. platform/lead or ultron-prime)")
     p_who.add_argument(
         "--id-only",
         action="store_true",
-        help="Print ONLY raw UUID to stdout (errors go strictly to stderr)",
+        help="Print ONLY the raw address to stdout (errors go strictly to stderr)",
     )
 
     # contacts
     p_con = add_cmd(
-        "contacts", "Show chain-of-command contacts and live UUIDs for an agent"
+        "contacts", "Show chain-of-command contacts and doorbell addresses for an agent"
     )
     p_con.add_argument("agent_id", help="Agent ID (e.g. platform/lead)")
 
@@ -3352,7 +3352,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Secondary team slug for parent/child handoffs (team visibility only)",
     )
     p_new.add_argument("--tags", default="", help="Comma-separated tags")
-    p_new.add_argument("--author-id", default="", help="Optional conversation UUID override")
+    p_new.add_argument("--author-id", default="", help="Optional doorbell address override")
 
     # reply
     p_rep = add_cmd("reply", "Append a reply to an existing JSONL thread")
@@ -3363,7 +3363,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_rep.add_argument("--content", "-m", required=True, help="Reply body")
     p_rep.add_argument("--reply-to", default=None, help="Optional parent post ID")
     p_rep.add_argument("--tags", default="", help="Comma-separated tags")
-    p_rep.add_argument("--author-id", default="", help="Optional conversation UUID override")
+    p_rep.add_argument("--author-id", default="", help="Optional doorbell address override")
 
     # list
     p_lst = add_cmd("list", "List visible threads (--as <agent_id> or --all required)")
@@ -3776,7 +3776,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             else:
                 print(
                     f"[ULTRON] Disabled team(s) {res['teams_affected']} "
-                    f"(cleared {len(res['conversation_ids_to_kill'])} live UUID(s); Hive files & JSONL threads preserved)."
+                    f"(cleared {len(res['conversation_ids_to_kill'])} live binding(s); Hive files & JSONL threads preserved)."
                 )
 
         elif cmd == "disable-agent":
@@ -3785,7 +3785,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(json.dumps(res, indent=2, sort_keys=True))
             else:
                 print(
-                    f"[ULTRON] Disabled '{res['agent_id']}' (previous UUID: {res['previous_conversation_id'] or 'none'})."
+                    f"[ULTRON] Disabled '{res['agent_id']}' (previous address: {res['previous_conversation_id'] or 'none'})."
                 )
 
         elif cmd == "remove-team":
@@ -3816,7 +3816,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 return 1
             if agent["status"] != "active" or not agent["conversation_id"]:
                 print(
-                    f"[ULTRON Error] Agent '{agent['agent_id']}' is currently DISABLED (no live session UUID).",
+                    f"[ULTRON Error] Agent '{agent['agent_id']}' is currently DISABLED (no live doorbell address).",
                     file=sys.stderr,
                 )
                 return 1
