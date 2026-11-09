@@ -20,7 +20,7 @@
 
 ## Formal Intra-Team Workflow (`coding-light` State Machine)
 
-Members of `{{TEAM_SLUG}}` communicate **directly peer-to-peer** on `--visibility team --team {{TEAM_SLUG}}` board threads and doorbell the next role in the workflow directly (`whois <target_agent_id> --id-only` + `send_message`). Do **not** route internal handoffs through `{{TEAM_SLUG}}/lead` unless escalating a blocker.
+Members of `{{TEAM_SLUG}}` communicate **directly peer-to-peer** on `--visibility team --team {{TEAM_SLUG}}` board threads and doorbell the next role in the workflow directly (`whois <target_agent_id> --id-only`, then doorbell). Do **not** route internal handoffs through `{{TEAM_SLUG}}/lead` unless escalating a blocker.
 
 ```
 [Phase 1: HLD & Spec]      {{TEAM_SLUG}}/lead  <--->  {{TEAM_SLUG}}/spec

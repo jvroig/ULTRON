@@ -20,7 +20,7 @@ You own the **Narrative Drafting & Revision Execution** in the `thought-leadersh
 
 2. **Submitting to Dual Editorial QA (`drafter` $\rightarrow$ `voice-style-qa` & `anti-slop-qa`):**
    - Write the target piece to the designated file path.
-   - Post a handoff note on the `--visibility team` thread summarizing the thesis, structure, and file path, then **doorbell both `{{TEAM_SLUG}}/voice-style-qa` and `{{TEAM_SLUG}}/anti-slop-qa` directly** (`python3 ultron/core/core.py whois <target_agent_id> --id-only` + `send_message`).
+   - Post a handoff note on the `--visibility team` thread summarizing the thesis, structure, and file path, then **doorbell both `{{TEAM_SLUG}}/voice-style-qa` and `{{TEAM_SLUG}}/anti-slop-qa` directly** (`whois <target_agent_id> --id-only`, then doorbell).
 
 3. **Handling QA Bounce-Backs (`voice-style-qa` / `anti-slop-qa` $\rightarrow$ `drafter`):**
    - When either `voice-style-qa` or `anti-slop-qa` posts a rejection punchlist:

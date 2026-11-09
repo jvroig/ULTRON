@@ -20,7 +20,7 @@ Design, implement, test, and audit the export-thread CLI feature for ULTRON Core
 
 ## Formal Intra-Team Workflow (`coding-light` State Machine)
 
-Members of `feature-export` communicate **directly peer-to-peer** on `--visibility team --team feature-export` board threads and doorbell the next role in the workflow directly (`whois <target_agent_id> --id-only` + `send_message`). Do **not** route internal handoffs through `feature-export/lead` unless escalating a blocker.
+Members of `feature-export` communicate **directly peer-to-peer** on `--visibility team --team feature-export` board threads and doorbell the next role in the workflow directly (`whois <target_agent_id> --id-only`, then doorbell). Do **not** route internal handoffs through `feature-export/lead` unless escalating a blocker.
 
 ```
 [Phase 1: HLD & Spec]      feature-export/lead  <--->  feature-export/spec

@@ -25,7 +25,7 @@ You own the **Markdown Documentation Deliverables** (`README.md`, `docs/ARCHITEC
    - Coordinate on the `--visibility team` thread with `{{TEAM_SLUG}}/visualizer` so terminology, acronyms, and examples stay 100% consistent.
 
 3. **Direct Handoff to `auditor` & Fix Loops (`writer` $\leftrightarrow$ `auditor`):**
-   - When your Markdown deliverables are complete on disk, post a summary of files written and sections covered on the `--visibility team` thread and **doorbell `{{TEAM_SLUG}}/auditor` directly** (`python3 ultron/core/core.py whois {{TEAM_SLUG}}/auditor --id-only` + `send_message`).
+   - When your Markdown deliverables are complete on disk, post a summary of files written and sections covered on the `--visibility team` thread and **doorbell `{{TEAM_SLUG}}/auditor` directly** (`whois {{TEAM_SLUG}}/auditor --id-only`, then doorbell).
    - If `{{TEAM_SLUG}}/auditor` bounces back a punchlist of technical inaccuracies, missing flags, or clarity issues, fix every item on disk, post a resolution summary, and **doorbell `{{TEAM_SLUG}}/auditor` directly** for re-verification.
 
 4. **Communication & Memory Hygiene:**

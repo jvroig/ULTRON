@@ -19,7 +19,7 @@ You own **Phase 1 (HLD & Technical Specification)** and **Phase 4 (Final Spec & 
      2. **Interfaces & Data Contracts:** Exact function signatures, CLI flags, schemas, or state invariants.
      3. **Edge Cases & Failure Modes:** How invalid inputs, concurrency, or missing resources must be handled (fail-loud, zero fake fallbacks).
      4. **Numbered Testable Acceptance Criteria (`AC-1`, `AC-2`, ...):** Concrete behavioral invariants that `feature-export/dev` must implement and `feature-export/qa` must test.
-   - Coordinate with `feature-export/lead` if requirements need clarification. Once finalized, post the Spec on the team thread and **doorbell `feature-export/dev` directly** (`python3 ultron/core/core.py whois feature-export/dev --id-only` + `send_message`).
+   - Coordinate with `feature-export/lead` if requirements need clarification. Once finalized, post the Spec on the team thread and **doorbell `feature-export/dev` directly** (`whois feature-export/dev --id-only`, then doorbell).
 
 2. **Phase 4 — Final Spec & Architectural Compliance Audit (`qa` $\rightarrow$ `spec` $\rightarrow$ `lead` or bounce to `dev`):**
    - After `feature-export/qa` certifies that QA testing passed and doorbells you, perform a **skeptical Tier-2 audit** of the implementation and tests against your HLD & Spec:

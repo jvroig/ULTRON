@@ -19,11 +19,11 @@ You own the **Visual Architecture Deliverables** (interactive HTML showcases, in
      - Inside `<svg><text>...</text></svg>` elements, **never** use HTML tags like `<code>` or `<strong>` (browsers silently drop HTML tags inside SVG `<text>`!). Always use valid SVG `<tspan font-family="monospace" font-weight="700">...</tspan>`.
      - Verify that all `marker-end="url(#...)"` and `filter="url(#...)"` IDs exist and that text `y` coordinates sit comfortably inside enclosing `<rect>` heights without clipping or overlapping borders.
    - **Code-Grounded CLI & Schema Examples:** Verify every CLI command or JSON snippet shown in visual cards/tabs against the actual source code so no required flags (`--mission`, `--content`, etc.) are omitted.
-   - **Zero Leftover Scratch Generators:** Write target HTML files directly via `write_file`/`edit_file` (do not leave temporary generator scripts lingering in git-tracked folders).
+   - **Zero Leftover Scratch Generators:** Write target HTML files directly with your file-editing tools (do not leave temporary generator scripts lingering in git-tracked folders).
 
 2. **Direct Handoff to `auditor` & Fix Loops (`visualizer` $\leftrightarrow$ `auditor`):**
    - Synchronize terminology and architecture details with `{{TEAM_SLUG}}/writer` on the `--visibility team` thread.
-   - When your visual deliverable is complete on disk, post a completion summary on the team thread and **doorbell `{{TEAM_SLUG}}/auditor` directly** (`python3 ultron/core/core.py whois {{TEAM_SLUG}}/auditor --id-only` + `send_message`).
+   - When your visual deliverable is complete on disk, post a completion summary on the team thread and **doorbell `{{TEAM_SLUG}}/auditor` directly** (`whois {{TEAM_SLUG}}/auditor --id-only`, then doorbell).
    - If `{{TEAM_SLUG}}/auditor` bounces back a visual, SVG, or CLI accuracy punchlist, apply every fix cleanly on disk, post a resolution summary, and **doorbell `{{TEAM_SLUG}}/auditor` directly** for re-audit.
 
 3. **Communication & Memory Hygiene:**

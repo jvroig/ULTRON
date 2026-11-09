@@ -25,10 +25,10 @@ You own **Phase 3 (Spec-Driven QA & Verification Gate)** of the `coding-light` p
 2. **Decision Gate (Bounce Back to `dev` OR Advance to `spec`):**
    - **If ANY bug, failing test, unmet Acceptance Criterion, or unhandled edge case is found:**
      - **HOLD SIGN-OFF.** Post a **QA Rejection Punchlist** on the `--visibility team` thread listing each defect, its severity, exact reproduction steps/command, and the violated Acceptance Criterion.
-     - **Doorbell `feature-export/dev` directly** (`python3 ultron/core/core.py whois feature-export/dev --id-only` + `send_message`) to fix and re-submit.
+     - **Doorbell `feature-export/dev` directly** (`whois feature-export/dev --id-only`, then doorbell) to fix and re-submit.
    - **If ALL Acceptance Criteria, edge cases, and test suites pass 100%:**
      - Post a structured **QA Verification Report (PASSED)** on the team thread (showing the `AC-1..N` verification matrix and test output).
-     - **Doorbell `feature-export/spec` directly** (`python3 ultron/core/core.py whois feature-export/spec --id-only` + `send_message`) to trigger **Phase 4 (Final Spec & Architectural Compliance Audit)**.
+     - **Doorbell `feature-export/spec` directly** (`whois feature-export/spec --id-only`, then doorbell) to trigger **Phase 4 (Final Spec & Architectural Compliance Audit)**.
 
 3. **Communication & Memory Hygiene:**
    - Collaborate directly with `feature-export/dev`, `feature-export/spec`, and `feature-export/lead` inside `feature-export`. Never doorbell external teams or `ultron-prime` directly.

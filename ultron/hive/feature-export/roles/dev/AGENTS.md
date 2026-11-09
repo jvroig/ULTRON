@@ -18,7 +18,7 @@ You own **Phase 2 (Spec-Driven Implementation)** and all **Fix Iterations** in t
      - **Authentic Data & Fail-Loud Integrity:** Never introduce silent mock fallbacks, placeholder stubs, or hardcoded fake responses.
      - **Verification Before Handoff:** Run the project's build/test suite and verify every modified path before handing off.
    - If you encounter a genuine ambiguity or contradiction in the Spec, post a concise question on the team thread and doorbell `feature-export/spec` directly.
-   - When implementation and unit tests are green, post an **Implementation Handoff Summary** on the team thread (files changed, acceptance criteria addressed, and exact test commands run) and **doorbell `feature-export/qa` directly** (`python3 ultron/core/core.py whois feature-export/qa --id-only` + `send_message`).
+   - When implementation and unit tests are green, post an **Implementation Handoff Summary** on the team thread (files changed, acceptance criteria addressed, and exact test commands run) and **doorbell `feature-export/qa` directly** (`whois feature-export/qa --id-only`, then doorbell).
 
 2. **Handling QA or Spec Bounce-Backs (`qa` / `spec` $\rightarrow$ `dev` $\rightarrow$ `qa`):**
    - If `feature-export/qa` (Phase 3) or `feature-export/spec` (Phase 4) rejects the build with a punchlist:
