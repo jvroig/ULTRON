@@ -40,7 +40,11 @@ TEMPLATES_DIR = CORE_DIR / "templates"
 SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 PLACEHOLDER_RE = re.compile(r"\{\{([A-Z0-9_]+)\}\}")
 
-VALID_MODELS = {"inherit", "flash_lite", "flash", "pro"}
+MODEL_TIERS = ("small", "medium", "large")
+LEGACY_MODEL_ALIASES = {"flash_lite": "small", "flash": "medium", "pro": "large"}
+VALID_MODELS = {"inherit", *MODEL_TIERS}
+DEFAULT_MODEL_TIER = "medium"
+CLAUDE_MODEL_FOR_TIER = {"small": "haiku", "medium": "sonnet", "large": "opus"}
 VALID_WORKSPACES = {"inherit", "share", "branch"}
 VALID_TEAM_STATUSES = {"active", "disabled"}
 VALID_AGENT_STATUSES = {"active", "disabled"}
@@ -78,6 +82,18 @@ def render_template(template_text: str, values: Mapping[str, Any]) -> str:
         return str(values[key])
 
     return PLACEHOLDER_RE.sub(_replace, template_text)
+
+
+def normalize_model(value: str, source: str = "") -> str:
+    cleaned = str(value).strip().lower()
+    cleaned = LEGACY_MODEL_ALIASES.get(cleaned, cleaned)
+    if cleaned not in VALID_MODELS:
+        where = f" in {source}" if source else ""
+        raise ValueError(
+            f"Invalid model '{value}'{where}. Must be one of {sorted(VALID_MODELS)} "
+            f"(legacy aliases: {sorted(LEGACY_MODEL_ALIASES)})."
+        )
+    return cleaned
 
 
 def validate_slug(value: str, label: str = "slug") -> str:
@@ -329,9 +345,9 @@ class UltronCore:
                     f"Team '{slug}' parent_team '{stored_parent}' mismatches directory parent '{expected_parent}'."
                 )
 
-            model = str(raw_t.get("default_model", "flash")).strip().lower()
-            if model not in VALID_MODELS:
-                raise ValueError(f"Invalid default_model '{model}' in '{t_manifest}'.")
+            model = normalize_model(
+                raw_t.get("default_model", DEFAULT_MODEL_TIER), f"'{t_manifest}'"
+            )
             ws = str(raw_t.get("workspace_mode", "inherit")).strip().lower()
             if ws not in VALID_WORKSPACES:
                 raise ValueError(f"Invalid workspace_mode '{ws}' in '{t_manifest}'.")
@@ -371,9 +387,7 @@ class UltronCore:
                             f"Role directory '{role_dir.name}' mismatches role.json role '{r_slug}'."
                         )
                     aid = f"{slug}/{r_slug}"
-                    r_model = str(raw_r.get("model", model)).strip().lower()
-                    if r_model not in VALID_MODELS:
-                        raise ValueError(f"Invalid model '{r_model}' in '{r_manifest}'.")
+                    r_model = normalize_model(raw_r.get("model", model), f"'{r_manifest}'")
 
                     r_reg_at = str(raw_r.get("registered_at") or created_at)
                     sess = live_agents.get(aid, {})
@@ -506,11 +520,10 @@ class UltronCore:
             if r_slug in seen_roles:
                 raise ValueError(f"Duplicate role '{r_slug}' in blueprint '{slug}'.")
             seen_roles.add(r_slug)
-            r_model = str(r.get("default_model", "flash")).strip().lower()
-            if r_model not in VALID_MODELS:
-                raise ValueError(
-                    f"Invalid default_model '{r_model}' for role '{r_slug}' in blueprint '{slug}'."
-                )
+            r_model = normalize_model(
+                r.get("default_model", DEFAULT_MODEL_TIER),
+                f"role '{r_slug}' of blueprint '{slug}'",
+            )
             tmpl_rel = str(r.get("template", f"roles/{r_slug}.md.tmpl")).strip()
             tmpl_path = (bp_dir / tmpl_rel).resolve()
             if not tmpl_path.is_file():
@@ -689,7 +702,7 @@ class UltronCore:
         name: str = "",
         mission: str = "",
         parent_team: Optional[str] = None,
-        default_model: str = "flash",
+        default_model: str = DEFAULT_MODEL_TIER,
         workspace_mode: str = "inherit",
         lead_responsibilities: str = "",
         target_repo: str = "",
@@ -706,11 +719,7 @@ class UltronCore:
         if not clean_mission:
             raise ValueError("Team mission cannot be empty.")
 
-        model = default_model.strip().lower()
-        if model not in VALID_MODELS:
-            raise ValueError(
-                f"Invalid model '{default_model}'. Must be one of {sorted(VALID_MODELS)}."
-            )
+        model = normalize_model(default_model)
         ws = workspace_mode.strip().lower()
         if ws not in VALID_WORKSPACES:
             raise ValueError(
@@ -829,7 +838,7 @@ class UltronCore:
                     if not r_agents_path.exists():
                         r_agents_path.write_text(r_md, encoding="utf-8")
 
-                    r_model = model if default_model != "flash" else r_spec["default_model"]
+                    r_model = model if model != DEFAULT_MODEL_TIER else r_spec["default_model"]
                     r_manifest: Dict[str, Any] = {
                         "agent_id": r_id,
                         "mcp_tools": bool(r_spec["mcp_tools"]),
@@ -926,11 +935,7 @@ class UltronCore:
                 sessions["agents"].pop(aid, None)
                 self._write_sessions_unlocked(sessions)
 
-            chosen_model = (model or team_obj["default_model"]).strip().lower()
-            if chosen_model not in VALID_MODELS:
-                raise ValueError(
-                    f"Invalid model '{chosen_model}'. Must be one of {sorted(VALID_MODELS)}."
-                )
+            chosen_model = normalize_model(model or team_obj["default_model"])
 
             team_dir = self._abs_from_rel(team_obj["hive_path"])
             role_dir = team_dir / "roles" / clean_role
@@ -2734,9 +2739,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_ct.add_argument(
         "--model",
-        default="flash",
-        choices=sorted(VALID_MODELS),
-        help="Default model tier (default: flash)",
+        default=DEFAULT_MODEL_TIER,
+        type=normalize_model,
+        help=f"Default model tier: {', '.join(sorted(VALID_MODELS))} (default: {DEFAULT_MODEL_TIER})",
     )
     p_ct.add_argument(
         "--workspace",
@@ -2768,8 +2773,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ar.add_argument(
         "--model",
         default=None,
-        choices=sorted(VALID_MODELS),
-        help="Override model for this role",
+        type=normalize_model,
+        help=f"Override model tier for this role: {', '.join(sorted(VALID_MODELS))}",
     )
     p_ar.add_argument(
         "--read-only",

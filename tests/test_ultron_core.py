@@ -176,7 +176,7 @@ class UltronCoreTestCase(unittest.TestCase):
         self.assertEqual(lead_spec["agent_id"], "core-eng/lead")
         self.assertFalse(lead_spec["define_subagent"]["EnableSubagentTools"])
         self.assertTrue(lead_spec["define_subagent"]["EnableWriteTools"])
-        self.assertEqual(lead_spec["invoke_subagent"]["Model"], "flash")
+        self.assertEqual(lead_spec["invoke_subagent"]["Model"], "medium")
         self.assertIn('{"strict": true, "retries": 3}', lead_spec["define_subagent"]["SystemPrompt"])
         self.assertIn("--visibility personal", lead_spec["define_subagent"]["SystemPrompt"])
 
@@ -185,7 +185,7 @@ class UltronCoreTestCase(unittest.TestCase):
         self.assertFalse(auditor_spec["define_subagent"]["EnableSubagentTools"])
         self.assertTrue(auditor_spec["define_subagent"]["EnableWriteTools"])
         self.assertIn("[READ-ONLY ROLE MODE]", auditor_spec["define_subagent"]["SystemPrompt"])
-        self.assertEqual(auditor_spec["invoke_subagent"]["Model"], "flash_lite")
+        self.assertEqual(auditor_spec["invoke_subagent"]["Model"], "small")
 
     def test_lifecycle_guards_whois_and_clean_git_working_tree(self) -> None:
         self.core.create_team(slug="parent-t", name="Parent", mission="Parent team")
@@ -950,6 +950,29 @@ class UltronCoreTestCase(unittest.TestCase):
         res_bad_fmt = self.run_cli("export-thread", tid, "--format", "xml", "--all")
         self.assertNotEqual(res_bad_fmt.returncode, 0)
         self.assertIn("invalid choice", res_bad_fmt.stderr)
+
+    def test_legacy_model_names_load_as_neutral_tiers(self) -> None:
+        self.core.create_team(slug="api", name="API", mission="m", default_model="pro")
+        self.core.add_role(team_slug="api", role="coder", title="Coder", responsibilities="r", model="flash_lite")
+        agents = {a["agent_id"]: a for a in self.core.list_agents(team_slug="api")}
+        self.assertEqual(agents["api/lead"]["model"], "large")
+        self.assertEqual(agents["api/coder"]["model"], "small")
+
+        role_json = self.root / "ultron/hive/api/roles/coder/role.json"
+        raw = json.loads(role_json.read_text(encoding="utf-8"))
+        raw["model"] = "flash"
+        role_json.write_text(json.dumps(raw), encoding="utf-8")
+        agents = {a["agent_id"]: a for a in self.core.list_agents(team_slug="api")}
+        self.assertEqual(agents["api/coder"]["model"], "medium")
+
+    def test_unknown_model_tier_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            self.core.create_team(slug="api", name="API", mission="m", default_model="gpt")
+        res = self.run_cli("create-team", "--slug", "api", "--name", "API", "--mission", "m", "--model", "gpt")
+        self.assertNotEqual(res.returncode, 0)
+        res = self.run_cli("create-team", "--slug", "api", "--name", "API", "--mission", "m", "--model", "pro")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.core.get_team("api")["default_model"], "large")
 
 
 if __name__ == "__main__":
