@@ -18,7 +18,7 @@ Autonomous agent systems operating in complex software engineering repositories 
 - **Arbitrary N-Layer Hive:** A hierarchical organization tree (`ultron/hive/`) where teams are the fundamental unit of work, structured into flat peer roles governed by a dedicated Team Lead.
 - **Log-Structured Git-Native Storage:** Zero SQLite. Git-tracked JSON manifests (`team.json`, `role.json`), gitignored ephemeral session bindings (`.runtime/sessions.json`), and append-only JSONL thread event logs (`ultron/core/threads/*.jsonl`) configured with `*.jsonl merge=union` for conflict-free cross-branch merges.
 - **Strict Three-Tier Visibility:** Scoped visibility (`personal`, `team` / `--with-team`, `global`) enforced with mandatory caller identification (`--as <agent_id>`).
-- **Reactive Doorbell Protocol:** Event-driven waking (`whois --id-only` + `send_message`) completely eliminating polling loops.
+- **Reactive Doorbell Protocol:** Event-driven waking (`whois --id-only`, then the harness's messaging tool) completely eliminating polling loops.
 
 ---
 
@@ -74,49 +74,34 @@ The organizational graph enforces strict routing invariants verified by `python3
    - **Downward:** Delegates tasks to direct child team leads using `--visibility team --team <team-slug> --with-team <child-slug>`.
 3. **Escalation Protocol:** If an unresolvable technical conflict, schema incompatibility, or lifecycle need arises, it escalates strictly upward along the chain of command until it reaches `ultron-prime`.
 
-### 2.3 Harness Privilege Invariants & Sandboxing Nuance
+### 2.3 Harness Privilege Invariants
 
+Each invariant is stated once here; [`HARNESSES.md`](HARNESSES.md) lists the harness tools involved.
+
+#### Invariant 1: Centralized Provisioning
+Only `ultron-prime` spawns or stops agent sessions. Every spawned Team Lead and Specialist is denied
+the ability to spawn agents, enforced by the harness rather than by instruction alone:
+- **Antigravity:** every role payload sets `"EnableSubagentTools": false`.
+- **Claude Code:** every role folder gets a generated `.claude/settings.json` with
+  `permissions.deny` on the `Agent` tool and on running `claude` through Bash. Deny rules hold even
+  though roles run with permissions bypassed. A role could still reach the CLI through an indirect
+  shell (for example `sh -c`), so this blocks the direct routes only.
+
+#### Invariant 2: Read-Only Roles Keep Board Access
+Roles registered with `--read-only` record `"write_tools": false`. They must still run the core CLI
+to hydrate memory and reply on the board, so their shell stays available and `render_spawn` adds a
+behavioural boundary to their role context, naming the harness's own tools:
+```text
+- [READ-ONLY ROLE MODE]: Do NOT call <write tool> or <edit tool> on repository source code.
+  Use <shell tool> strictly for <core CLI> board operations and non-mutating inspection/test commands.
 ```
-                      +------------------------------------------+
-                      |               ULTRON PRIME               |
-                      |  EnableSubagentTools: True               |
-                      |  EnableWriteTools:    True               |
-                      |  Model Policy:        User Authorized    |
-                      +--------------------+---------------------+
-                                           |
-                                           v Spawns Subagents
-                      +------------------------------------------+
-                      |         Team Leads & Specialists         |
-                      |  EnableSubagentTools: False  <-- LOCKED   |
-                      |  EnableWriteTools:    True   <-- NUANCE   |
-                      |  Model Policy:        Default 'flash'    |
-                      +------------------------------------------+
-```
-
-#### Invariant 1: Centralized Provisioning (`EnableSubagentTools = False`)
-In the runtime harness (Google Antigravity), `EnableSubagentTools` allows an agent to call `define_subagent`, `invoke_subagent`, and `manage_subagents`. In ULTRON, **all** spawned agents (both Team Leads and Specialists) are generated with:
-```json
-"EnableSubagentTools": false
-```
-This hard invariant ensures that only `ultron-prime` can spawn or kill agent processes, eliminating runaway agent recursion and unbounded token consumption.
-
-#### Invariant 2: Antigravity `EnableWriteTools` vs. `run_command` Nuance
-In Google Antigravity, the headless bash tool `run_command` is permission-gated under `EnableWriteTools`. If a subagent is provisioned with `EnableWriteTools = False`, the harness strips `run_command` entirely.
-
-However, all ULTRON agents—including read-only auditors—must be able to run `python3 ultron/core/core.py` to hydrate memory, list board threads, view specs, and append replies.
-
-Therefore, ULTRON implements the following mechanism:
-1. All rendered subagents specify `EnableWriteTools = True` in their Antigravity payload to preserve access to `run_command`.
-2. For roles registered with `--read-only` (such as `reviewer` or `auditor`), the manifest records `"write_tools": false`.
-3. The prompt compiler (`render_spawn`) injects a mandatory behavioural boundary into the subagent's system prompt:
-   ```text
-   - [READ-ONLY ROLE MODE]: Do NOT call write_file or edit_file on repository source code.
-     Use run_command strictly for python3 ultron/core/core.py board operations and non-mutating inspection/test commands.
-   ```
-4. This guarantees that read-only auditors retain board and inspection capabilities while strictly barring repository source code mutations.
+On Antigravity the shell (`run_command`) is gated under `EnableWriteTools`, so every payload sets
+`EnableWriteTools = True` and relies on this boundary.
 
 #### Invariant 3: Model Tiering & Cost Conservation
-Spawned subagents default to **Gemini Flash** (`--model flash` or `"flash_lite"`). Flash provides high throughput and token economy for routine implementation, testing, and reviews. Heavyweight frontier models (`pro` or `inherit`) are strictly restricted to `ultron-prime` or granted only when explicitly authorized by the User for intricate architectural problems.
+Roles take a neutral tier: `small`, `medium`, `large` or `inherit` (legacy `flash_lite`, `flash`,
+`pro` load as aliases). Each adapter maps the tier to its harness's models. Roles default to
+`medium`; `large` and `inherit` are reserved for `ultron-prime` or explicit User authorization.
 
 ---
 
@@ -137,7 +122,7 @@ Tracks the persistent organizational metadata for a team.
 ```json
 {
   "created_at": "2026-11-07T10:08:13.469120Z",
-  "default_model": "flash",
+  "default_model": "medium",
   "hive_path": "ultron/hive/docs",
   "layer": 1,
   "mission": "Author and audit ULTRON's public-ready README.md, deep-dive docs/ARCHITECTURE.md, and visual HTML architecture showcase.",
@@ -155,8 +140,8 @@ Tracks the persistent organizational metadata for a team.
 - `mission` *(string, required)*: Core mandate and operational boundaries of the team.
 - `layer` *(integer, required)*: Depth in the organizational hierarchy (1 for top-level teams reporting to Prime; `parent.layer + 1` for subteams).
 - `parent_team` *(string | null, required)*: Slug of parent team, or `null` if attached to `ultron-prime`.
-- `default_model` *(string, required)*: Default LLM tier (`flash_lite`, `flash`, `pro`, `inherit`).
-- `workspace_mode` *(string, required)*: Antigravity subagent workspace isolation (`inherit`, `share`, `branch`).
+- `default_model` *(string, required)*: Default model tier (`small`, `medium`, `large`, `inherit`).
+- `workspace_mode` *(string, required)*: Session workspace isolation (`inherit`, `share`, `branch`). `branch` is not supported on Claude Code yet.
 - `hive_path` *(string, required)*: Relative POSIX directory path from repo root.
 - `created_at` *(string, ISO-8601 UTC)*: Immutable timestamp of team creation.
 - `updated_at` *(string, ISO-8601 UTC)*: Timestamp of last structural update (e.g., adding a role).
@@ -169,7 +154,7 @@ Tracks the domain charter and tool privileges for a specific specialist role.
 {
   "agent_id": "docs/writer",
   "mcp_tools": true,
-  "model": "flash",
+  "model": "medium",
   "registered_at": "2026-11-07T10:08:13.488100Z",
   "responsibilities": "Author public-ready README.md and comprehensive as-implemented docs/ARCHITECTURE.md grounded strictly in ultron/core/core.py, ultron/core/ULTRON_PRIME.md, and templates.",
   "role": "writer",
@@ -200,19 +185,24 @@ Located at: `ultron/core/.runtime/sessions.json`
 {
   "agents": {
     "docs/lead": {
-      "conversation_id": "04069c63-eb91-4c7e-8f7b-c428887f3a38",
+      "conversation_id": "ultron--docs--lead",
+      "harness": "claude-code",
       "last_seen": "2026-11-07T10:13:12.180210Z",
       "registered_at": "2026-11-07T10:08:13.471238Z",
+      "session_id": "8014d60f",
       "status": "active"
     },
     "docs/writer": {
-      "conversation_id": "6dc4dd42-c318-4bb1-916f-cf3f31bfe9e7",
+      "conversation_id": "ultron--docs--writer",
+      "harness": "claude-code",
       "last_seen": "2026-11-07T10:11:19.459012Z",
       "registered_at": "2026-11-07T10:08:13.488100Z",
+      "session_id": "01234604",
       "status": "active"
     },
     "ultron-prime": {
-      "conversation_id": "abcb720d-b0b0-4df0-bf89-5f6094b341cd",
+      "conversation_id": "ultron-prime-session",
+      "harness": "claude-code",
       "last_seen": "2026-11-07T10:11:12.000000Z",
       "registered_at": "2026-11-07T10:05:01.120300Z",
       "status": "active"
@@ -221,8 +211,12 @@ Located at: `ultron/core/.runtime/sessions.json`
 }
 ```
 
+- `conversation_id`: the role's doorbell address (a Claude Code session name, or an Antigravity conversation UUID).
+- `session_id`: the harness's handle for stopping the session (Claude Code `--bg` ID); absent on Antigravity.
+- `harness`: which adapter bound the session.
+
 #### Clean Git Tree Separation:
-Because live harness session UUIDs change whenever an agent session is terminated and respawned, storing session bindings in `team.json` or `role.json` would cause continuous, noisy diffs in `git status`. By isolating session UUIDs inside gitignored `.runtime/sessions.json`:
+Because live harness session addresses change whenever an agent session is terminated and respawned, storing session bindings in `team.json` or `role.json` would cause continuous, noisy diffs in `git status`. By isolating session bindings inside gitignored `.runtime/sessions.json`:
 - `activate-team`, `activate-agent`, `disable-team`, and `prepare-disable` mutate only `.runtime/sessions.json`.
 - Running `git status --porcelain` remains 100% clean across all team wake/sleep cycles.
 
@@ -247,7 +241,7 @@ The first line of every `.jsonl` file. Initializes thread metadata:
 ```json
 {
   "author": "docs/lead",
-  "author_id": "04069c63-eb91-4c7e-8f7b-c428887f3a38",
+  "author_id": "ultron--docs--lead",
   "category": "task",
   "content": "Assignment from docs/lead to docs/writer: Author documentation...",
   "created_at": "2026-11-07T10:12:53.104200Z",
@@ -270,7 +264,7 @@ Appended when any authorized agent posts a message:
 ```json
 {
   "author": "docs/writer",
-  "author_id": "6dc4dd42-c318-4bb1-916f-cf3f31bfe9e7",
+  "author_id": "ultron--docs--writer",
   "content": "Drafted initial architecture specification. Ready for Tier-2 review.",
   "created_at": "2026-11-07T10:14:02.891040Z",
   "event_id": "e-8f3b1901c0aa",
@@ -418,10 +412,10 @@ When appending new events to JSONL threads:
                         +--------> |  DISABLED  | <--------+
                         |          +-----+------+          |
                         |                |                 |
-                        |                | activate_team   |
-      prepare-disable   |                v                 | External Branch
-      + manage_subagents|          +------------+          | Checkout deleting
-      + disable-team    +----------+   ACTIVE   |          | Hive team directory
+                        |                | spawn-team      |
+                        |                v                 | External Branch
+      stop-team         |          +------------+          | Checkout deleting
+                        +----------+   ACTIVE   |          | Hive team directory
                                    +------------+          |
                                          |                 |
                                          +-----------------+
@@ -431,7 +425,7 @@ When appending new events to JSONL threads:
 ### 5.1 The Two-State Agent Lifecycle
 Every role and team exists in one of two binary states:
 - **`disabled`**: Persistent manifests (`team.json`, `role.json`, `AGENTS.md`) and scratch workspaces exist on disk, but no live subagent process is running. In `.runtime/sessions.json`, `status="disabled"` and `conversation_id=""`.
-- **`active`**: An active background harness session is provisioned. In `.runtime/sessions.json`, `status="active"` and `conversation_id="<uuid>"`.
+- **`active`**: An active background harness session is provisioned. In `.runtime/sessions.json`, `status="active"` and `conversation_id="<doorbell address>"`.
 
 ### 5.2 Provisioning & Activation Invariants
 The engine enforces structural consistency across the organizational graph:
@@ -443,22 +437,17 @@ The engine enforces structural consistency across the organizational graph:
 2. **Mandatory Team Lead:** Every team created via `create-team` automatically scaffolds `<team-slug>/lead`. Additional roles cannot be named `lead`.
 3. **Hierarchical Activation Guard:** A child team cannot be activated if its parent team is currently `disabled` (failing loud with `ValueError`), unless `--allow-detached` is explicitly provided.
 4. **Lead-First Specialist Activation:** A specialist cannot be activated if its `<team-slug>/lead` is `disabled` (failing loud with `ValueError`), unless `--allow-detached` is explicitly provided.
-5. **Full Activation Completeness:** `activate-team` requires conversation UUIDs for **all** registered roles in the team. If any specialist UUID is omitted, activation fails loud unless `--partial` is explicitly passed.
+5. **Full Activation Completeness:** `activate-team` requires doorbell addresses for **all** registered roles in the team (`spawn-team` supplies them on Claude Code). If any role's address is omitted, activation fails loud unless `--partial` is explicitly passed.
 
 ### 5.3 Clean Deactivation ("Stand Down") Protocol
 Standing down idle teams conserves harness memory and prevents unexpected background token consumption:
 1. **Lead Deactivation Safety:** A Team Lead cannot be disabled while specialists in that team remain active.
 2. **Subtree Deactivation Safety:** A parent team cannot be disabled while child teams remain active unless `--cascade` is passed.
-3. **Three-Phase Stand-Down Execution:**
-   - **Phase 1: Planning (`prepare-disable`):**
-     `python3 ultron/core/core.py prepare-disable <team-slug> [--cascade] --json`  
-     Validates dependencies and returns the exact list of `conversation_ids_to_kill`.
-   - **Phase 2: Harness Termination:**
-     ULTRON PRIME executes `manage_subagents(Action="kill", ConversationIds=[...])`.
-   - **Phase 3: State Deregistration (`disable-team`):**
-     `python3 ultron/core/core.py disable-team <team-slug> [--cascade]`  
-     Updates `.runtime/sessions.json`, setting `status="disabled"` and clearing session UUIDs.
-4. **Zero Data Loss:** Manifests, team charters, scratch directories, and message board histories remain intact on disk. Re-activation via `activate-team` instantly restores full operational context.
+3. **Stand-Down Execution (`stop-team <team-slug> [--cascade]`):**
+   - **Planning:** `prepare-disable` validates dependencies and lists the sessions to stop.
+   - **Termination:** on Claude Code, `stop-team` runs `claude stop <session_id>` per role; on Antigravity it returns a plan for ULTRON PRIME to kill the sessions with the harness tool.
+   - **Deregistration:** `disable-team` sets `status="disabled"` and clears the bindings (automatic on Claude Code; the last plan step on Antigravity).
+4. **Zero Data Loss:** Manifests, team charters, scratch directories, and message board histories remain intact on disk. Re-activation via `spawn-team` instantly restores full operational context.
 
 ### 5.4 Ghost Session Purging & Self-Healing Across Git Checkouts
 If a developer switches Git branches or runs `git checkout`, an entire team directory under `ultron/hive/` might disappear from the filesystem while its session entry lingers in the gitignored `.runtime/sessions.json`.
@@ -510,9 +499,9 @@ ULTRON eliminates context saturation by enforcing strict visibility boundaries o
 | **Reclassify (`reclassify`)** | **`ultron-prime` only** | **`ultron-prime` only** | **`ultron-prime` only** | **`ultron-prime` only** |
 
 ### 6.3 Personal Memory Persistence Across Respawns
-When a team is stood down and later respawned, the agents receive brand-new harness `conversation_id` UUIDs.
+When a team is stood down and later respawned, the agents receive new harness sessions and doorbell addresses.
 
-However, `personal` threads are keyed to the canonical `agent_id` (e.g., `docs/writer`), **not** the ephemeral session UUID. When `docs/writer` boots in a subsequent campaign, running:
+However, `personal` threads are keyed to the canonical `agent_id` (e.g., `docs/writer`), **not** the ephemeral session address. When `docs/writer` boots in a subsequent campaign, running:
 ```bash
 python3 ultron/core/core.py list --as docs/writer --visibility personal
 ```
@@ -537,48 +526,48 @@ Because JSONL logs are passive datastores on disk, agents **never** poll in cont
 sequenceDiagram
     autonumber
     actor User
-    participant Prime as "ULTRON PRIME (abcb720d)"
-    participant Lead as "docs/lead (04069c63)"
-    participant Writer as "docs/writer (6dc4dd42)"
+    participant Prime as "ULTRON PRIME"
+    participant Lead as "docs/lead"
+    participant Writer as "docs/writer"
     participant Board as "ultron/core/threads (JSONL Storage)"
 
     User->>Prime: Instructs objective: Author Documentation
     Note over Prime: Prime deconstructs objective
     Prime->>Board: new-thread --team docs --visibility team ("Task: Author README...")
-    Prime->>Prime: whois docs/lead --id-only -> resolves 04069c63
-    Prime->>Lead: send_message(Recipient="04069c63", "Doorbell: Assigned Thread 567656f5...")
-    Note over Lead: Antigravity wakes docs/lead reactively
+    Prime->>Prime: whois docs/lead --id-only -> resolves lead address
+    Prime->>Lead: doorbell("Doorbell: Assigned Thread 567656f5...")
+    Note over Lead: harness wakes docs/lead reactively
 
     Lead->>Board: view 567656f5 --as docs/lead
     Note over Lead: Lead decomposes deliverables for writer
-    Lead->>Lead: whois docs/writer --id-only -> resolves 6dc4dd42
-    Lead->>Writer: send_message(Recipient="6dc4dd42", "Doorbell: Assigned Thread 567656f5...")
-    Note over Writer: Antigravity wakes docs/writer reactively
+    Lead->>Lead: whois docs/writer --id-only -> resolves writer address
+    Lead->>Writer: doorbell("Doorbell: Assigned Thread 567656f5...")
+    Note over Writer: harness wakes docs/writer reactively
 
     Writer->>Board: view 567656f5 --as docs/writer
     Note over Writer: Writer drafts README.md & docs/ARCHITECTURE.md
     Writer->>Board: reply 567656f5 --author docs/writer ("Deliverables complete...")
-    Writer->>Lead: send_message(Recipient="04069c63", "Doorbell: Deliverables ready for review...")
-    Note over Lead: Antigravity wakes docs/lead reactively
+    Writer->>Lead: doorbell("Doorbell: Deliverables ready for review...")
+    Note over Lead: harness wakes docs/lead reactively
 
     Lead->>Board: view 567656f5 --as docs/lead
     Note over Lead: Lead conducts skeptical Tier-2 review
     Lead->>Board: set-status 567656f5 resolved --as docs/lead
-    Lead->>Prime: send_message(Recipient="abcb720d", "Objective Complete: Verified docs...")
-    Note over Prime: Antigravity wakes ULTRON PRIME reactively
+    Lead->>Prime: doorbell("Objective Complete: Verified docs...")
+    Note over Prime: harness wakes ULTRON PRIME reactively
 
     Prime->>User: Reports milestone completion
 ```
 
 ### Doorbell Step-by-Step Rule:
 1. **Write to Datastore:** Agent appends post or status change via `python3 ultron/core/core.py new-thread` or `reply`.
-2. **Resolve Recipient UUID:**
+2. **Resolve the Recipient's Doorbell Address:**
    ```bash
    python3 ultron/core/core.py whois <target_agent_id> --id-only
    ```
    *Note: If the target agent is disabled, this command writes nothing to stdout, outputs an error message to stderr, and exits with code 1, immediately informing the caller that the recipient must be activated first.*
-3. **Trigger Reactive Wakeup:** Call harness `send_message(Recipient="<resolved_uuid>", Message="Doorbell: ...")`.
-4. **End Turn Immediately:** Once the doorbell message is dispatched, the sending agent calls no more tools and yields execution. The Antigravity harness automatically wakes the recipient, and will subsequently resume the sender when a return doorbell arrives.
+3. **Trigger Reactive Wakeup:** Send "Doorbell: ..." to the resolved address with the harness's messaging tool (`SendMessage` on Claude Code, `send_message` on Antigravity).
+4. **End Turn Immediately:** Once the doorbell message is dispatched, the sending agent calls no more tools and yields execution. The harness wakes the recipient, and will subsequently resume the sender when a return doorbell arrives.
 
 ---
 
@@ -607,16 +596,7 @@ python3 -W error -m unittest discover -s tests -v
 
 ## 9. Extensibility & Portability Guide
 
-### 9.1 Operating on Google Antigravity (`agy`)
-In Antigravity:
-- ULTRON PRIME operates in the root session.
-- Subagents are defined using `define_subagent` and started using `invoke_subagent`.
-- Sessions communicate reactively using `send_message`.
-- Session monitoring and teardown are managed using `manage_subagents`.
-
-### 9.2 Porting to Claude Code & Other CLI Harnesses
-ULTRON is designed to be harness-agnostic:
-- **Registry & Datastore:** `python3 ultron/core/core.py` runs anywhere Python 3.10+ is available.
-- **Session Mapping:** Replace `define_subagent` / `invoke_subagent` with the host runtime's task launcher (e.g., Claude Code sub-sessions or background processes).
-- **Doorbell Mapping:** Replace Antigravity's `send_message` with named pipe signals, socket notifications, or subshell prompts.
-- **Durability:** Because the entire organizational graph, role charters, and message threads live in Git, porting to any new runtime requires zero schema translation.
+The core is harness-neutral; each harness is an adapter (`HarnessAdapter` in `ultron/core/core.py`).
+[`HARNESSES.md`](HARNESSES.md) covers harness selection, per-harness actions and requirements, and
+the adapter contract for adding a harness. Because the organizational graph, charters and threads
+live in Git, adding a harness requires no schema translation.
