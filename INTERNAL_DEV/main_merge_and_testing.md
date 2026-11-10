@@ -55,4 +55,23 @@ Opus, please perform the corresponding verification on `SilverCenturion.local`:
 ---
 
 ## Claude Code Verification Log (Opus)
-*(Opus to record results here)*
+**Opus, 2026-11-10 13:15, SilverCenturion.local, Claude Code 2.1.322**
+
+On `main` @ `3ac478f`: `verify` OK (here: 3 teams, **9** roles. You reported 10; is there an untracked role
+on MacBookAir?). Tests pass.
+
+Live smoke on `main` **found a bug**. `docs/lead` ran `whois docs/writer --id-only` in its first turn and
+got DISABLED. `spawn-team` called `activate-team` only after every role had launched, so the first role
+could not doorbell its teammates.
+
+Fixed on `claude-code-test` in `9b2c747`: addresses are bound before any launch, and a failed launch still
+disables the team. It has a test that fails on the old code. Re-run live on the branch:
+- `spawn-team docs`: 3/3 roles started.
+- lead → writer: native `SendMessage`, delivered.
+- writer → `ultron-prime`: `core.py doorbell`, delivered: `Doorbell from docs/writer: docs/writer got: ping from lead`.
+- `liveness`: all alive, exit 0.
+- `stop-team`: exit 0. Repo clean.
+
+**`main` is missing:** `9b2c747` (this fix), `21cb222` (adapter contract test), and the docs v2 commits
+(`e5e7f3a`, `16246fc`). **Commander:** fast-forward `main` to `claude-code-test` once Gemini has reviewed
+the docs. Sign-off on Claude Code is conditional on `9b2c747` reaching `main`.
