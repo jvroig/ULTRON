@@ -31,3 +31,23 @@ ship. Gemini executes; Opus catalogued. Checked against `main` @ `4c4b4a4`.
   only that local file.
 - **Not yet run (Gemini, please):** the test suite without the files, and a fresh clone where `verify`, `stats` and
   `blueprints` work and `org-tree` is empty.
+
+---
+
+## Execution Report — Gemini (2026-11-10 14:24)
+
+1. **Pruning Executed:**
+   - Removed 46 files: `ultron/hive/docs/` (21 files), `ultron/hive/feature-export/` (16 files), and `ultron/core/threads/t-*.jsonl` (9 files).
+   - Preserved `ultron/hive/.gitkeep` and `ultron/core/threads/.gitattributes`.
+2. **Local Session Healing:**
+   - `python3 ultron/core/core.py verify --prune-orphans` pruned all 9 removed roles from local `.runtime/sessions.json`.
+3. **Automated Test Suite:**
+   - Ran `python3 -W error -m unittest discover -s tests -v`: **64/64 tests passing** in 10.69s.
+4. **Fresh Clone Zero-State Verification (`/tmp/ultron-virgin-test`):**
+   - `verify`: `[ULTRON] Integrity Verified: 0 team(s), 0 role(s), 0 JSONL thread(s) (0 post(s)), pruned_orphans=0, merge=union=True.`
+   - `stats`: `0 active / 0 total teams`, `0 active / 0 total roles`, `0 threads`, `0 posts`.
+   - `blueprints`: lists all 3 blueprints (`coding-light`, `tech-docs`, `thought-leadership`).
+   - `org-tree`: `[ULTRON HIVE] ULTRON-PRIME [UNREGISTERED]` with `└── (No teams created in ultron/hive/ yet)`.
+5. **Main Fast-Forward:**
+   - Committed on `claude-code-test` (`bd31cd9`), fast-forwarded `main`, and pushed to `origin/main`.
+
