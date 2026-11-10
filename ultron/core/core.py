@@ -228,6 +228,9 @@ class HarnessAdapter:
     def role_paths(self, core: "UltronCore", ctx: Mapping[str, Any]) -> Tuple[str, str, str]:
         raise NotImplementedError
 
+    def probe(self, agents: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any]:
+        raise NotImplementedError
+
     def doorbell_address(self, ctx: Mapping[str, Any]) -> str:
         raise NotImplementedError
 
@@ -304,6 +307,16 @@ class AntigravityAdapter(HarnessAdapter):
             "next_steps": [
                 f"manage_subagents(Action=\"kill\", ConversationIds={plan['conversation_ids_to_kill']})",
                 f"disable-team {plan['team_slug']}{cascade_flag}",
+            ],
+        }
+
+    def probe(self, agents: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any]:
+        ids = sorted(str(a.get("conversation_id", "")) for a in agents.values())
+        return {
+            "harness": self.name,
+            "agents": {aid: {"state": "unknown", "detail": "probe from Antigravity"} for aid in agents},
+            "next_steps": [
+                f"manage_subagents(Action=\"list\") and check these conversation IDs are listed: {ids}",
             ],
         }
 
@@ -412,6 +425,29 @@ class ClaudeCodeAdapter(HarnessAdapter):
         if res.returncode != 0:
             return (res.stderr or res.stdout).strip() or f"exit code {res.returncode}"
         return None
+
+    def live_sessions(self) -> List[Dict[str, Any]]:
+        res = subprocess.run([self.claude_bin(), "agents", "--json"], capture_output=True, text=True, timeout=60)
+        if res.returncode != 0:
+            raise RuntimeError(f"'claude agents --json' failed: {(res.stderr or res.stdout).strip()}")
+        return [s for s in json.loads(res.stdout) if s.get("pid")]
+
+    def probe(self, agents: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any]:
+        live = self.live_sessions()
+        results: Dict[str, Dict[str, str]] = {}
+        for aid, entry in agents.items():
+            sid = str(entry.get("session_id", "")).strip()
+            if not sid:
+                results[aid] = {"state": "unknown", "detail": "no session id recorded"}
+                continue
+            match = next(
+                (s for s in live if s.get("id") == sid or str(s.get("sessionId", "")).startswith(sid)), None
+            )
+            if match:
+                results[aid] = {"state": "alive", "detail": str(match.get("status", ""))}
+            else:
+                results[aid] = {"state": "gone", "detail": f"session {sid} is not running"}
+        return {"harness": self.name, "agents": results, "next_steps": []}
 
     def spawn(self, core: "UltronCore", team: Mapping[str, Any], specs: List[Dict[str, Any]]) -> Dict[str, Any]:
         if team["workspace_mode"] == "branch":
@@ -1883,6 +1919,22 @@ class UltronCore:
             sessions = self._read_sessions_unlocked()
         return adapter.stop(self, plan, sessions, cascade)
 
+    def probe_liveness(self, team_slug: Optional[str] = None, harness: Optional[str] = None) -> Dict[str, Any]:
+        adapter = harness_adapter(resolve_harness(harness, self))
+        clean_team = validate_slug(team_slug, "team slug") if team_slug else None
+        if clean_team and not self.get_team(clean_team):
+            raise ValueError(f"Team '{clean_team}' does not exist.")
+        with self._lock(exclusive=False):
+            sessions = self._read_sessions_unlocked()
+        agents = {
+            aid: entry
+            for aid, entry in sessions["agents"].items()
+            if aid != PRIME_ID
+            and entry.get("status") == "active"
+            and (clean_team is None or aid.split("/")[0] == clean_team)
+        }
+        return adapter.probe(agents)
+
     def get_prime_harness(self) -> str:
         with self._lock(exclusive=False):
             sessions = self._read_sessions_unlocked()
@@ -3262,6 +3314,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_st.add_argument("--cascade", action="store_true", help="Include all descendant child teams")
     p_st.add_argument("--harness", default=None, help=f"Harness running ULTRON (default: ${HARNESS_ENV}, then auto-detect)")
 
+    p_lv = add_cmd("liveness", "Check that every active role's session is still running")
+    p_lv.add_argument("team", nargs="?", default=None, help="Only this team (default: all active roles)")
+    p_lv.add_argument("--harness", default=None, help=f"Harness running ULTRON (default: ${HARNESS_ENV}, auto-detect, then Prime's)")
+
     # activate-team
     p_at = add_cmd("activate-team", "Bind live doorbell addresses and mark a team active (spawn-team does this on Claude Code)")
     p_at.add_argument("team", help="Team slug")
@@ -3735,6 +3791,20 @@ def main(argv: Optional[List[str]] = None) -> int:
                 for aid in res["missing_session_ids"]:
                     print(f"[ULTRON] No session id recorded for {aid}; stop it by hand.", file=sys.stderr)
             if res["stop_failures"] or res["missing_session_ids"]:
+                return 1
+
+        elif cmd == "liveness":
+            res = core.probe_liveness(team_slug=args.team, harness=args.harness)
+            if args.json:
+                print(json.dumps(res, indent=2, sort_keys=True))
+            else:
+                if not res["agents"]:
+                    print("[ULTRON] No active roles.")
+                for aid, r in sorted(res["agents"].items()):
+                    print(f"  {aid:<28} {r['state']:<8} {r['detail']}")
+                for step in res["next_steps"]:
+                    print(f"  - {step}")
+            if any(r["state"] == "gone" for r in res["agents"].values()):
                 return 1
 
         elif cmd == "activate-team":

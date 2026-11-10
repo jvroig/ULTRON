@@ -5,7 +5,7 @@ supported harness has an adapter in `ultron/core/core.py` (`HarnessAdapter` subc
 
 ## Which harness is used
 
-`spawn-team`, `stop-team`, `render-spawn`, `activate-team` and `register-prime` pick the harness
+`spawn-team`, `stop-team`, `liveness`, `render-spawn`, `activate-team` and `register-prime` pick the harness
 from, in order:
 
 1. `--harness <name>`
@@ -25,7 +25,7 @@ the one Prime registered with: sessions on different harnesses cannot doorbell e
 | Doorbell | `SendMessage` with `to` = address | `send_message(Recipient=<address>, Message=…)` |
 | Spawn a team | `spawn-team` launches and binds every role | `spawn-team` prints a plan: `define_subagent` + `invoke_subagent` per spec, then `activate-team` |
 | Stop a team | `stop-team` stops every session and disables the team | `stop-team` prints a plan: `manage_subagents(Action="kill")`, then `disable-team` |
-| List live sessions | `claude agents` | `manage_subagents(Action="list")` |
+| Check roles are running | `liveness [team]` checks `claude agents --json`; exits 1 if a role is gone | `liveness` prints a plan: `manage_subagents(Action="list")` |
 | Safety heartbeat | `CronCreate` | `schedule` |
 | Model tiers `small` / `medium` / `large` | haiku / sonnet / opus | flash_lite / flash / pro |
 
@@ -57,8 +57,8 @@ the team stays active until Prime runs `disable-team`.
 ## Adding a harness
 
 Subclass `HarnessAdapter` and register it in `HARNESS_ADAPTERS`. An adapter supplies tool names,
-the tier → model map, how role context is delivered (`build_spec`), `spawn` / `stop` (performed, or
-returned as a plan for Prime), and the doorbell address and call. A harness without a way for one
+the tier → model map, how role context is delivered (`build_spec`), `spawn` / `stop` / `probe`
+(performed, or returned as a plan for Prime), and the doorbell address and call. A harness without a way for one
 session to wake another cannot host ULTRON, because agents never poll.
 
 `HarnessAdapterContractTestCase` in `tests/test_ultron_core.py` runs against every adapter. Add the

@@ -134,4 +134,4 @@ If your harness can stop sessions from the CLI, this stops them and marks the te
     ```bash
     python3 ultron/core/core.py reclassify <thread_id> --as ultron-prime --visibility <personal|team|global> [--team <slug>] [--with-team <slug>] [--owner <agent_id>]
     ```
-- **Safety Cron:** For multi-stage autonomous campaigns, keep a recurring safety heartbeat with your harness's scheduler (e.g., `*/15 * * * *` or `*/30 * * * *`) that inspects live sessions and `python3 ultron/core/core.py list --all`. Cancel it once User goals are verified complete.
+- **Safety Cron:** For multi-stage autonomous campaigns, keep a recurring safety heartbeat with your harness's scheduler (e.g., `*/15 * * * *` or `*/30 * * * *`) that runs `python3 ultron/core/core.py liveness` and `python3 ultron/core/core.py list --all`. A role reported `gone` has stopped: `stop-team` its team, then `spawn-team` it again. Cancel it once User goals are verified complete.

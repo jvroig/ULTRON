@@ -993,6 +993,15 @@ elif args[0] == "stop":
         print("No job matching", file=sys.stderr)
         sys.exit(1)
     print(f"stopped {args[1]}")
+elif args[0] == "agents":
+    if os.environ.get("FAKE_CLAUDE_AGENTS_FAIL"):
+        print("not signed in", file=sys.stderr)
+        sys.exit(1)
+    calls = [json.loads(l)["args"] for l in open(os.environ["FAKE_CLAUDE_LOG"])]
+    launched = {f"{i:08x}": c[c.index("-n") + 1] for i, c in enumerate(calls, 1) if c[0] == "--bg"}
+    stopped = {c[1] for c in calls if c[0] == "stop"} | set(os.environ.get("FAKE_CLAUDE_DEAD", "").split())
+    print(json.dumps([{"pid": 1, "id": i, "name": n, "kind": "background", "status": "idle"}
+                      for i, n in launched.items() if i not in stopped]))
 """
 
 
@@ -1199,6 +1208,40 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
     def test_session_id_parsing_accepts_non_hex_ids(self) -> None:
         match = BG_SESSION_ID_RE.search("  claude attach 3f2a9c1e-bg_Z7    open in this terminal")
         self.assertEqual(match.group(1), "3f2a9c1e-bg_Z7")
+
+    def test_liveness_reports_every_spawned_role_alive(self) -> None:
+        self.core.spawn_team("api")
+        res = self.core.probe_liveness("api")
+        self.assertEqual({a: r["state"] for a, r in res["agents"].items()}, {"api/lead": "alive", "api/coder": "alive"})
+
+    def test_liveness_flags_a_dead_session_and_exits_nonzero(self) -> None:
+        spawned = self.core.spawn_team("api")
+        dead = next(s["session_id"] for s in spawned["sessions"] if s["agent_id"] == "api/coder")
+        os.environ["FAKE_CLAUDE_DEAD"] = dead
+        res = self.run_cli("liveness", "api")
+        self.assertEqual(res.returncode, 1, res.stdout)
+        self.assertRegex(res.stdout, r"api/coder\s+gone")
+        self.assertRegex(res.stdout, r"api/lead\s+alive")
+
+    def test_liveness_ignores_prime_and_disabled_teams(self) -> None:
+        self.core.register_prime("prime-session", harness="claude-code")
+        self.core.spawn_team("api")
+        self.core.stop_team("api")
+        self.assertEqual(self.core.probe_liveness()["agents"], {})
+
+    def test_liveness_fails_loudly_when_claude_agents_fails(self) -> None:
+        self.core.spawn_team("api")
+        os.environ["FAKE_CLAUDE_AGENTS_FAIL"] = "1"
+        res = self.run_cli("liveness")
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("claude agents --json", res.stderr)
+
+    def test_antigravity_liveness_returns_a_plan_with_the_conversation_ids(self) -> None:
+        self.core.register_prime("prime-uuid", harness="antigravity")
+        self.core.activate_team("api", {"lead": "u1", "coder": "u2"}, harness="antigravity")
+        res = self.core.probe_liveness(harness="antigravity")
+        self.assertEqual({r["state"] for r in res["agents"].values()}, {"unknown"})
+        self.assertIn("['u1', 'u2']", res["next_steps"][0])
 
     def test_spawn_refuses_an_already_active_team(self) -> None:
         self.core.spawn_team("api")
