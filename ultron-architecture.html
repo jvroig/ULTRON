@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ULTRON Architecture Showcase — Universal Layered Team &amp; Role Orchestration Network</title>
+<title>ULTRON Architecture Showcase v2.0 — Universal Multi-Harness Team &amp; Role Orchestration Network</title>
 <style>
   :root {
     --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -53,6 +53,17 @@
     --board-light: #fffbeb;
     --board-border: #fde68a;
     --board-text: #92400e;
+
+    /* Harness Colors */
+    --agy-base: #2563eb;
+    --agy-light: #eff6ff;
+    --agy-border: #bfdbfe;
+    --agy-text: #1d4ed8;
+
+    --claude-base: #d97706;
+    --claude-light: #fffbeb;
+    --claude-border: #fde68a;
+    --claude-text: #b45309;
 
     --code-bg: #1e293b;
     --code-text: #f8fafc;
@@ -107,6 +118,16 @@
       --board-light: #2b2008;
       --board-border: #523b10;
       --board-text: #fde68a;
+
+      --agy-base: #3b82f6;
+      --agy-light: #0f1f38;
+      --agy-border: #1e3a66;
+      --agy-text: #93c5fd;
+
+      --claude-base: #f59e0b;
+      --claude-light: #2b1f09;
+      --claude-border: #5c3b0d;
+      --claude-text: #fcd34d;
 
       --code-bg: #090d14;
       --code-text: #e2e8f0;
@@ -163,6 +184,16 @@
     --board-border: #523b10;
     --board-text: #fde68a;
 
+    --agy-base: #3b82f6;
+    --agy-light: #0f1f38;
+    --agy-border: #1e3a66;
+    --agy-text: #93c5fd;
+
+    --claude-base: #f59e0b;
+    --claude-light: #2b1f09;
+    --claude-border: #5c3b0d;
+    --claude-text: #fcd34d;
+
     --code-bg: #090d14;
     --code-text: #e2e8f0;
     --badge-bg: #243042;
@@ -217,6 +248,16 @@
     --board-border: #fde68a;
     --board-text: #92400e;
 
+    --agy-base: #2563eb;
+    --agy-light: #eff6ff;
+    --agy-border: #bfdbfe;
+    --agy-text: #1d4ed8;
+
+    --claude-base: #d97706;
+    --claude-light: #fffbeb;
+    --claude-border: #fde68a;
+    --claude-text: #b45309;
+
     --code-bg: #1e293b;
     --code-text: #f8fafc;
     --badge-bg: #e2e8f0;
@@ -237,7 +278,7 @@
   }
 
   .container {
-    max-width: 1060px;
+    max-width: 1080px;
     margin: 0 auto;
   }
 
@@ -340,6 +381,8 @@
   .chip.git { background: var(--git-light); border-color: var(--git-border); color: var(--git-text); }
   .chip.runtime { background: var(--runtime-light); border-color: var(--runtime-border); color: var(--runtime-text); }
   .chip.team { background: var(--team-light); border-color: var(--team-border); color: var(--team-text); }
+  .chip.agy { background: var(--agy-light); border-color: var(--agy-border); color: var(--agy-text); }
+  .chip.claude { background: var(--claude-light); border-color: var(--claude-border); color: var(--claude-text); }
 
   /* Section Anchor Nav */
   .quicknav {
@@ -696,6 +739,55 @@
     color: var(--text-main);
   }
 
+  /* Adapter Comparison Grid */
+  .adapter-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 16px;
+    margin-top: 16px;
+  }
+
+  .adapter-card {
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    padding: 18px;
+    background: var(--bg-surface);
+  }
+
+  .adapter-card.agy { border-top: 4px solid var(--agy-base); }
+  .adapter-card.claude { border-top: 4px solid var(--claude-base); }
+
+  .adapter-title {
+    font-size: 1.05rem;
+    font-weight: 800;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .feature-list {
+    list-style: none;
+    font-size: 0.82rem;
+  }
+
+  .feature-list li {
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .feature-list li:last-child {
+    border-bottom: none;
+  }
+
+  .feature-bullet {
+    font-weight: 700;
+    color: var(--text-subtle);
+  }
+
   /* Lifecycle Loop */
   .pipeline-track {
     display: flex;
@@ -732,6 +824,18 @@
     background: var(--prime-light);
     color: var(--prime-text);
     border-color: var(--prime-border);
+  }
+
+  .stage-badge.agy {
+    background: var(--agy-light);
+    color: var(--agy-text);
+    border-color: var(--agy-border);
+  }
+
+  .stage-badge.claude {
+    background: var(--claude-light);
+    color: var(--claude-text);
+    border-color: var(--claude-border);
   }
 
   .stage-info {
@@ -793,6 +897,12 @@
     color: var(--git-text);
   }
 
+  .callout-box.harness {
+    border-left-color: var(--claude-base);
+    background: var(--claude-light);
+    color: var(--claude-text);
+  }
+
   .callout-title {
     font-weight: 700;
     margin-bottom: 4px;
@@ -820,6 +930,7 @@
     gap: 4px;
     border-bottom: 1px solid var(--border);
     margin-bottom: 12px;
+    overflow-x: auto;
   }
 
   .tab-btn {
@@ -832,6 +943,7 @@
     cursor: pointer;
     border-bottom: 2px solid transparent;
     transition: all 0.15s ease;
+    white-space: nowrap;
   }
 
   .tab-btn:hover {
@@ -861,8 +973,8 @@
   <header>
     <div class="header-top">
       <div class="brand-group">
-        <h1><span class="brand-dot"></span> ULTRON Architecture Showcase</h1>
-        <div class="header-desc">Universal Layered Team &amp; Role Orchestration Network &middot; As-Implemented Architecture</div>
+        <h1><span class="brand-dot"></span> ULTRON Architecture Showcase <span style="font-size:1rem; font-weight:600; color:var(--text-subtle); margin-left:4px;">v2.0</span></h1>
+        <div class="header-desc">Universal Layered Team &amp; Role Orchestration Network &middot; As-Implemented Multi-Harness Architecture</div>
       </div>
       <div class="theme-switcher">
         <button class="theme-btn" id="btn-theme-light" onclick="setTheme('light')">☀️ Light</button>
@@ -873,20 +985,23 @@
     <div class="meta-chips">
       <span class="chip prime">👑 ULTRON PRIME (Layer 0)</span>
       <span class="chip team">🏢 N-Layer Recursive Hive</span>
-      <span class="chip git">🌿 Pure Git-Native (merge=union)</span>
-      <span class="chip runtime">⚡ Zero-Poll Reactive Doorbells</span>
-      <span class="chip">🛡️ Dynamic Resource Conservation</span>
+      <span class="chip agy">⚡ Google Antigravity</span>
+      <span class="chip claude">🟠 Anthropic Claude Code</span>
+      <span class="chip runtime">🔌 Pluggable Harness Adapters</span>
+      <span class="chip git">🌿 Git-Native (merge=union)</span>
+      <span class="chip">🛡️ Zero-Poll Shell Doorbells</span>
     </div>
   </header>
 
   <!-- Quick Navigation Bar -->
   <nav class="quicknav">
     <a href="#names">1. Identity &amp; Acronyms</a>
-    <a href="#hierarchy">2. N-Layer Hive Topology</a>
-    <a href="#storage">3. Pure Git-Native Storage</a>
-    <a href="#visibility">4. Visibility &amp; Doorbells</a>
-    <a href="#lifecycle">5. Lifecycle &amp; Conservation</a>
-    <a href="#cli">6. CLI Reference</a>
+    <a href="#hierarchy">2. N-Layer Mixed Hives</a>
+    <a href="#adapters">3. Multi-Harness Adapters</a>
+    <a href="#storage">4. Pure Git-Native Storage</a>
+    <a href="#visibility">5. Doorbells &amp; RPC</a>
+    <a href="#lifecycle">6. Lifecycle &amp; Conservation</a>
+    <a href="#cli">7. CLI Quick Reference</a>
   </nav>
 
   <!-- Section 1: Names & Acronyms -->
@@ -900,7 +1015,7 @@
       <div class="hero-id-card network-card">
         <span class="id-label">The Autonomous Agent Network</span>
         <div class="id-title">ULTRON</div>
-        <div class="id-desc"><strong>Universal Layered Team and Role Orchestration Network</strong> &mdash; A modular, recursive multi-agent orchestration architecture designed for high autonomy, structured collaboration, and resource efficiency on top of agentic harnesses.</div>
+        <div class="id-desc"><strong>Universal Layered Team and Role Orchestration Network</strong> &mdash; A modular, recursive multi-agent orchestration architecture designed for high autonomy, structured collaboration, and resource efficiency across multiple agent harnesses (Google Antigravity, Claude Code, and future hosts).</div>
       </div>
       <div class="hero-id-card prime-card">
         <span class="id-label">Root Orchestrator &middot; Layer 0</span>
@@ -916,7 +1031,7 @@
           <span class="letter-char">U</span>
           <span class="letter-word">Universal</span>
         </div>
-        <div class="letter-body">Not bound to a single vertical. Any domain capability (code, docs, secops, QA) plugs in as an autonomous team.</div>
+        <div class="letter-body">Not bound to a single vertical or harness. Runs identically on Antigravity, Claude Code, or mixed multi-host hives.</div>
       </div>
       <div class="letter-card">
         <div class="letter-header">
@@ -930,46 +1045,46 @@
           <span class="letter-char">T</span>
           <span class="letter-word">Team</span>
         </div>
-        <div class="letter-body">Teams are the atomic unit of work. No unmanaged lone agents; roles collaborate in structured pods.</div>
+        <div class="letter-body">Teams are the atomic unit of work. No unmanaged lone agents; roles collaborate in structured, purposeful pods.</div>
       </div>
       <div class="letter-card">
         <div class="letter-header">
           <span class="letter-char">R</span>
           <span class="letter-word">Role</span>
         </div>
-        <div class="letter-body">Flat peer specialist roles inside teams, led by a mandatory <code>&lt;team&gt;/lead</code> as internal coordinator and external bridge.</div>
+        <div class="letter-body">Flat peer specialist roles inside teams, led by a mandatory <code>&lt;team&gt;/lead</code> as coordinator and sole external bridge.</div>
       </div>
       <div class="letter-card">
         <div class="letter-header">
           <span class="letter-char">O</span>
           <span class="letter-word">Orchestration</span>
         </div>
-        <div class="letter-body">Autonomous delegation, reactive doorbells, and clean teardown/reactivation for maximal resource conservation.</div>
+        <div class="letter-body">Autonomous delegation, cross-harness reactive doorbells, and clean teardown/reactivation for maximal resource conservation.</div>
       </div>
       <div class="letter-card">
         <div class="letter-header">
           <span class="letter-char">N</span>
           <span class="letter-word">Network</span>
         </div>
-        <div class="letter-body">Pure Git-native append-only event board (<code>threads/*.jsonl</code>) and doorbells linking all operational nodes.</div>
+        <div class="letter-body">Pure Git-native append-only event board (<code>threads/*.jsonl</code>) and doorbells linking all operational nodes across runtimes.</div>
       </div>
     </div>
   </section>
 
-  <!-- Section 2: N-Layer Hive Hierarchy -->
+  <!-- Section 2: N-Layer Hive Hierarchy & Mixed Hives -->
   <section id="hierarchy" class="section-card">
     <div class="section-header">
-      <h2 class="section-title">2. N-Layer Hive Hierarchy &amp; Chain of Command</h2>
-      <div class="section-sub">Corporate org-chart topology: flat intra-team peer collaboration with strict upward escalation.</div>
+      <h2 class="section-title">2. N-Layer Hive Hierarchy &amp; Mixed Hives</h2>
+      <div class="section-sub">Corporate org-chart topology: flat intra-team peer collaboration with strict upward escalation across multiple harnesses.</div>
     </div>
 
     <p style="font-size:0.88rem; color:var(--text-muted); margin-bottom:14px;">
-      ULTRON organizes agents into an arbitrary-depth tree under <code>ultron/hive/</code>. Layer 1 teams report directly to <strong>ULTRON PRIME</strong>. Deeper sub-teams (<code>Layer 2..N</code>) attach under any parent team via <code>--parent &lt;parent-slug&gt;</code>. Inside any team, specialist roles are <strong>flat peers</strong>. Every team features a mandatory <strong><code>lead</code></strong> who acts as the internal coordinator and the <strong>sole external communication bridge</strong>.
+      ULTRON organizes agents into an arbitrary-depth tree under <code>ultron/hive/</code>. Layer 1 teams report directly to <strong>ULTRON PRIME</strong>. Deeper sub-teams (<code>Layer 2..N</code>) attach under any parent team via <code>--parent &lt;parent-slug&gt;</code>. Teams can run on different agent harnesses within the same hive (e.g. Antigravity PRIME managing a Claude Code team, or vice-versa). Inside each team, specialist roles are <strong>flat peers</strong> who work directly with teammates on team threads and doorbell them directly. External traffic flows exclusively through <strong><code>&lt;team&gt;/lead</code></strong>.
     </p>
 
     <div class="diagram-container">
       <div class="svg-wrap">
-        <svg viewBox="0 0 960 480" width="960" height="480" xmlns="http://www.w3.org/2000/svg">
+        <svg viewBox="0 0 980 500" width="980" height="500" xmlns="http://www.w3.org/2000/svg">
           <defs>
             <marker id="arrow-down" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
               <path d="M 0 1 L 8 5 L 0 9 z" fill="var(--team-base)" />
@@ -982,425 +1097,452 @@
             </filter>
           </defs>
 
-          <!-- Layer Bands (Subtle background stripes) -->
-          <rect x="10" y="10" width="940" height="60" rx="8" fill="var(--bg-subtle)" stroke="var(--border)" stroke-dasharray="4" />
-          <text x="24" y="45" font-family="sans-serif" font-size="11" font-weight="700" fill="var(--text-subtle)" letter-spacing="1">LAYER 0 &middot; ROOT ORCHESTRATION</text>
+          <!-- Layer Bands -->
+          <rect x="10" y="10" width="960" height="65" rx="8" fill="var(--bg-subtle)" stroke="var(--border)" stroke-dasharray="4" />
+          <text x="24" y="48" font-family="sans-serif" font-size="11" font-weight="700" fill="var(--text-subtle)" letter-spacing="1">LAYER 0 &middot; ROOT ORCHESTRATION</text>
 
-          <rect x="10" y="105" width="940" height="155" rx="8" fill="var(--bg-subtle)" stroke="var(--border)" stroke-dasharray="4" />
-          <text x="24" y="130" font-family="sans-serif" font-size="11" font-weight="700" fill="var(--text-subtle)" letter-spacing="1">LAYER 1 &middot; PARENT TEAMS (docs, platform)</text>
+          <rect x="10" y="110" width="960" height="165" rx="8" fill="var(--bg-subtle)" stroke="var(--border)" stroke-dasharray="4" />
+          <text x="24" y="135" font-family="sans-serif" font-size="11" font-weight="700" fill="var(--text-subtle)" letter-spacing="1">LAYER 1 &middot; PARENT TEAMS (Mixed Harnesses)</text>
 
-          <rect x="10" y="295" width="940" height="175" rx="8" fill="var(--bg-subtle)" stroke="var(--border)" stroke-dasharray="4" />
-          <text x="24" y="320" font-family="sans-serif" font-size="11" font-weight="700" fill="var(--text-subtle)" letter-spacing="1">LAYER 2..N &middot; RECURSIVE SUB-TEAMS (web-viz, auth)</text>
+          <rect x="10" y="310" width="960" height="175" rx="8" fill="var(--bg-subtle)" stroke="var(--border)" stroke-dasharray="4" />
+          <text x="24" y="335" font-family="sans-serif" font-size="11" font-weight="700" fill="var(--text-subtle)" letter-spacing="1">LAYER 2..N &middot; RECURSIVE SUB-TEAMS (web-viz)</text>
 
           <!-- User Node -->
-          <g transform="translate(180, 20)">
-            <rect width="130" height="40" rx="8" fill="var(--bg-surface)" stroke="var(--border-strong)" stroke-width="1.5" filter="url(#card-shadow)" />
-            <text x="65" y="25" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="700" fill="var(--text-main)">👤 User</text>
+          <g transform="translate(140, 22)">
+            <rect width="130" height="42" rx="8" fill="var(--bg-surface)" stroke="var(--border-strong)" stroke-width="1.5" filter="url(#card-shadow)" />
+            <text x="65" y="26" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="700" fill="var(--text-main)">👤 User</text>
           </g>
 
           <!-- Direct User <-> PRIME link -->
-          <line x1="315" y1="40" x2="435" y2="40" stroke="var(--border-strong)" stroke-width="2" stroke-dasharray="2 3" />
-          <text x="375" y="34" text-anchor="middle" font-family="sans-serif" font-size="9" font-weight="700" fill="var(--text-subtle)">Single Point of Contact</text>
+          <line x1="275" y1="43" x2="415" y2="43" stroke="var(--border-strong)" stroke-width="2" stroke-dasharray="2 3" />
+          <text x="345" y="37" text-anchor="middle" font-family="sans-serif" font-size="9" font-weight="700" fill="var(--text-subtle)">Single Point of Contact</text>
 
           <!-- ULTRON PRIME Node -->
-          <g transform="translate(440, 16)">
-            <rect width="280" height="48" rx="10" fill="var(--prime-light)" stroke="var(--prime-border)" stroke-width="2" filter="url(#card-shadow)" />
-            <text x="140" y="27" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="800" fill="var(--prime-text)">👑 ULTRON PRIME</text>
-            <text x="140" y="42" text-anchor="middle" font-family="sans-serif" font-size="9" font-weight="600" fill="var(--prime-base)">Root Orchestrator &middot; Sole Provisioning Authority</text>
+          <g transform="translate(420, 16)">
+            <rect width="360" height="52" rx="10" fill="var(--prime-light)" stroke="var(--prime-border)" stroke-width="2" filter="url(#card-shadow)" />
+            <text x="180" y="27" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="800" fill="var(--prime-text)">👑 ULTRON PRIME</text>
+            <text x="180" y="44" text-anchor="middle" font-family="sans-serif" font-size="9" font-weight="600" fill="var(--prime-base)">Root Orchestrator &middot; Sole Provisioning Authority &middot; Auto-Detected Harness</text>
           </g>
 
           <!-- Delegation down to Layer 1 -->
-          <path d="M 520,64 L 520,85 L 260,85 L 260,115" fill="none" stroke="var(--team-base)" stroke-width="2" marker-end="url(#arrow-down)" />
-          <path d="M 640,64 L 640,85 L 700,85 L 700,115" fill="none" stroke="var(--team-base)" stroke-width="2" marker-end="url(#arrow-down)" />
+          <path d="M 500,68 L 500,90 L 260,90 L 260,120" fill="none" stroke="var(--team-base)" stroke-width="2" marker-end="url(#arrow-down)" />
+          <path d="M 700,68 L 700,90 L 720,90 L 720,120" fill="none" stroke="var(--team-base)" stroke-width="2" marker-end="url(#arrow-down)" />
 
-          <!-- TEAM 1: docs (Layer 1) -->
-          <g transform="translate(60, 120)">
-            <rect width="400" height="125" rx="12" fill="var(--bg-surface)" stroke="var(--team-border)" stroke-width="1.5" filter="url(#card-shadow)" />
-            <rect x="0" y="0" width="400" height="28" rx="12" fill="var(--team-light)" />
-            <text x="14" y="19" font-family="sans-serif" font-size="11" font-weight="800" fill="var(--team-text)">TEAM: docs &middot; Technical Documentation</text>
-            <text x="385" y="19" text-anchor="end" font-family="sans-serif" font-size="9" font-weight="700" fill="var(--team-base)">LAYER 1</text>
+          <!-- TEAM 1: feature-export (Antigravity Harness) -->
+          <g transform="translate(40, 125)">
+            <rect width="440" height="135" rx="12" fill="var(--bg-surface)" stroke="var(--agy-border)" stroke-width="1.5" filter="url(#card-shadow)" />
+            <rect x="0" y="0" width="440" height="30" rx="12" fill="var(--agy-light)" />
+            <text x="14" y="20" font-family="sans-serif" font-size="11" font-weight="800" fill="var(--agy-text)">TEAM: feature-export &middot; Engineering Pod</text>
+            <rect x="310" y="6" width="118" height="18" rx="4" fill="var(--agy-base)" />
+            <text x="369" y="19" text-anchor="middle" font-family="monospace" font-size="8.5" font-weight="800" fill="#ffffff">antigravity harness</text>
 
-            <!-- Roles inside docs -->
-            <!-- docs/lead -->
-            <g transform="translate(16, 38)">
-              <rect width="170" height="68" rx="8" fill="var(--team-light)" stroke="var(--team-base)" stroke-width="1.5" />
-              <text x="12" y="22" font-family="monospace" font-size="11" font-weight="700" fill="var(--team-text)">docs/lead</text>
-              <text x="12" y="38" font-family="sans-serif" font-size="9" font-weight="700" fill="var(--team-base)">Team Leader</text>
-              <text x="12" y="54" font-family="sans-serif" font-size="8" fill="var(--text-muted)">Sole External Bridge &amp; Coordinator</text>
+            <!-- Roles inside feature-export -->
+            <!-- lead -->
+            <g transform="translate(14, 42)">
+              <rect width="130" height="78" rx="8" fill="var(--team-light)" stroke="var(--team-base)" stroke-width="1.5" />
+              <text x="10" y="20" font-family="monospace" font-size="10" font-weight="700" fill="var(--team-text)">feature-export/lead</text>
+              <text x="10" y="36" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--team-base)">Team Leader</text>
+              <text x="10" y="52" font-family="sans-serif" font-size="7.5" fill="var(--text-muted)">Sole External Bridge</text>
+              <text x="10" y="67" font-family="monospace" font-size="7" fill="var(--text-subtle)">flash &middot; subagents=0</text>
             </g>
 
-            <!-- Horizontal peer connector -->
-            <line x1="188" y1="72" x2="216" y2="72" stroke="var(--border-strong)" stroke-width="2" stroke-dasharray="3" />
+            <!-- Direct peer line to specialists -->
+            <line x1="148" y1="80" x2="162" y2="80" stroke="var(--git-base)" stroke-width="2" stroke-dasharray="3" />
 
-            <!-- docs/writer (Specialist) -->
-            <g transform="translate(218, 38)">
-              <rect width="165" height="68" rx="8" fill="var(--spec-light)" stroke="var(--spec-border)" stroke-width="1.2" />
-              <text x="12" y="22" font-family="monospace" font-size="11" font-weight="700" fill="var(--spec-text)">docs/writer</text>
-              <text x="12" y="38" font-family="sans-serif" font-size="9" font-weight="700" fill="var(--text-subtle)">Technical Writer</text>
-              <text x="12" y="54" font-family="sans-serif" font-size="8" fill="var(--text-muted)">Flat Peer Role &middot; Docs Authoring</text>
+            <!-- spec -->
+            <g transform="translate(164, 42)">
+              <rect width="80" height="78" rx="8" fill="var(--spec-light)" stroke="var(--spec-border)" stroke-width="1.2" />
+              <text x="8" y="20" font-family="monospace" font-size="9" font-weight="700" fill="var(--spec-text)">.../spec</text>
+              <text x="8" y="36" font-family="sans-serif" font-size="7.5" font-weight="700" fill="var(--spec-text)">Architect</text>
+              <text x="8" y="52" font-family="sans-serif" font-size="7" fill="var(--text-muted)">HLD &amp; Audit</text>
+              <text x="8" y="67" font-family="sans-serif" font-size="6.5" font-weight="700" fill="var(--git-text)">Direct Peer</text>
+            </g>
+
+            <!-- dev -->
+            <g transform="translate(254, 42)">
+              <rect width="80" height="78" rx="8" fill="var(--spec-light)" stroke="var(--spec-border)" stroke-width="1.2" />
+              <text x="8" y="20" font-family="monospace" font-size="9" font-weight="700" fill="var(--spec-text)">.../dev</text>
+              <text x="8" y="36" font-family="sans-serif" font-size="7.5" font-weight="700" fill="var(--spec-text)">Developer</text>
+              <text x="8" y="52" font-family="sans-serif" font-size="7" fill="var(--text-muted)">Code &amp; Tests</text>
+              <text x="8" y="67" font-family="sans-serif" font-size="6.5" font-weight="700" fill="var(--git-text)">Direct Peer</text>
+            </g>
+
+            <!-- qa -->
+            <g transform="translate(344, 42)">
+              <rect width="82" height="78" rx="8" fill="var(--spec-light)" stroke="var(--spec-border)" stroke-width="1.2" />
+              <text x="8" y="20" font-family="monospace" font-size="9" font-weight="700" fill="var(--spec-text)">.../qa</text>
+              <text x="8" y="36" font-family="sans-serif" font-size="7.5" font-weight="700" fill="var(--spec-text)">QA Auditor</text>
+              <text x="8" y="52" font-family="sans-serif" font-size="7" fill="var(--text-muted)">Tests &amp; Punch</text>
+              <text x="8" y="67" font-family="sans-serif" font-size="6.5" font-weight="700" fill="var(--git-text)">Direct Peer</text>
             </g>
           </g>
 
-          <!-- TEAM 2: platform (Layer 1) -->
-          <g transform="translate(490, 120)">
-            <rect width="420" height="125" rx="12" fill="var(--bg-surface)" stroke="var(--team-border)" stroke-width="1.5" filter="url(#card-shadow)" />
-            <rect x="0" y="0" width="420" height="28" rx="12" fill="var(--team-light)" />
-            <text x="14" y="19" font-family="sans-serif" font-size="11" font-weight="800" fill="var(--team-text)">TEAM: platform &middot; Core Platform &amp; APIs</text>
-            <text x="405" y="19" text-anchor="end" font-family="sans-serif" font-size="9" font-weight="700" fill="var(--team-base)">LAYER 1</text>
+          <!-- TEAM 2: docs (Claude Code Harness) -->
+          <g transform="translate(510, 125)">
+            <rect width="440" height="135" rx="12" fill="var(--bg-surface)" stroke="var(--claude-border)" stroke-width="1.5" filter="url(#card-shadow)" />
+            <rect x="0" y="0" width="440" height="30" rx="12" fill="var(--claude-light)" />
+            <text x="14" y="20" font-family="sans-serif" font-size="11" font-weight="800" fill="var(--claude-text)">TEAM: docs &middot; Technical Documentation</text>
+            <rect x="314" y="6" width="114" height="18" rx="4" fill="var(--claude-base)" />
+            <text x="371" y="19" text-anchor="middle" font-family="monospace" font-size="8.5" font-weight="800" fill="#ffffff">claude-code harness</text>
 
-            <!-- platform/lead -->
-            <g transform="translate(14, 38)">
-              <rect width="140" height="68" rx="8" fill="var(--team-light)" stroke="var(--team-base)" stroke-width="1.5" />
-              <text x="10" y="22" font-family="monospace" font-size="10.5" font-weight="700" fill="var(--team-text)">platform/lead</text>
-              <text x="10" y="38" font-family="sans-serif" font-size="9" font-weight="700" fill="var(--team-base)">Team Leader</text>
-              <text x="10" y="54" font-family="sans-serif" font-size="8" fill="var(--text-muted)">Internal Lead &amp; Bridge</text>
+            <!-- Roles inside docs -->
+            <!-- docs/lead -->
+            <g transform="translate(18, 42)">
+              <rect width="185" height="78" rx="8" fill="var(--team-light)" stroke="var(--team-base)" stroke-width="1.5" />
+              <text x="12" y="20" font-family="monospace" font-size="10.5" font-weight="700" fill="var(--team-text)">docs/lead</text>
+              <text x="12" y="36" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--team-base)">Team Leader</text>
+              <text x="12" y="52" font-family="sans-serif" font-size="7.5" fill="var(--text-muted)">Sole External Bridge &amp; Coordinator</text>
+              <text x="12" y="67" font-family="monospace" font-size="7" fill="var(--text-subtle)">haiku &middot; shared checkout</text>
             </g>
 
-            <line x1="156" y1="72" x2="168" y2="72" stroke="var(--border-strong)" stroke-width="1.5" stroke-dasharray="3" />
+            <line x1="206" y1="80" x2="232" y2="80" stroke="var(--git-base)" stroke-width="2" stroke-dasharray="3" />
 
-            <!-- platform/coder -->
-            <g transform="translate(170, 38)">
-              <rect width="115" height="68" rx="8" fill="var(--spec-light)" stroke="var(--spec-border)" stroke-width="1.2" />
-              <text x="8" y="22" font-family="monospace" font-size="10" font-weight="700" fill="var(--spec-text)">platform/coder</text>
-              <text x="8" y="38" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--text-subtle)">Backend Dev</text>
-              <text x="8" y="54" font-family="sans-serif" font-size="7.5" fill="var(--text-muted)">Flat Peer Specialist</text>
-            </g>
-
-            <line x1="287" y1="72" x2="297" y2="72" stroke="var(--border-strong)" stroke-width="1.5" stroke-dasharray="3" />
-
-            <!-- platform/reviewer -->
-            <g transform="translate(299, 38)">
-              <rect width="110" height="68" rx="8" fill="var(--spec-light)" stroke="var(--spec-border)" stroke-width="1.2" />
-              <text x="8" y="22" font-family="monospace" font-size="9.5" font-weight="700" fill="var(--spec-text)">platform/reviewer</text>
-              <text x="8" y="38" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--text-subtle)">Code Auditor</text>
-              <text x="8" y="54" font-family="sans-serif" font-size="7.5" fill="var(--text-muted)">Read-Only Tier-2</text>
+            <!-- docs/writer -->
+            <g transform="translate(234, 42)">
+              <rect width="185" height="78" rx="8" fill="var(--spec-light)" stroke="var(--spec-border)" stroke-width="1.2" />
+              <text x="12" y="20" font-family="monospace" font-size="10.5" font-weight="700" fill="var(--spec-text)">docs/writer</text>
+              <text x="12" y="36" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--spec-text)">Technical Writer</text>
+              <text x="12" y="52" font-family="sans-serif" font-size="7.5" fill="var(--text-muted)">Flat Peer Specialist &middot; Direct Collab</text>
+              <text x="12" y="67" font-family="monospace" font-size="7" fill="var(--text-subtle)">haiku &middot; permissions.deny</text>
             </g>
           </g>
 
           <!-- Sub-Team Link: docs -> web-viz -->
-          <path d="M 160,245 L 160,310" fill="none" stroke="var(--team-base)" stroke-width="2" marker-end="url(#arrow-down)" />
-          <path d="M 180,310 L 180,250" fill="none" stroke="var(--prime-base)" stroke-width="1.5" stroke-dasharray="4" marker-end="url(#arrow-up)" />
-          <text x="195" y="280" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--prime-base)">Escalation Up</text>
-
-          <!-- Sub-Team Link: platform -> auth -->
-          <path d="M 680,245 L 680,310" fill="none" stroke="var(--team-base)" stroke-width="2" marker-end="url(#arrow-down)" />
-          <path d="M 700,310 L 700,250" fill="none" stroke="var(--prime-base)" stroke-width="1.5" stroke-dasharray="4" marker-end="url(#arrow-up)" />
-          <text x="715" y="280" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--prime-base)">Escalation Up</text>
+          <path d="M 730,260 L 730,325" fill="none" stroke="var(--team-base)" stroke-width="2" marker-end="url(#arrow-down)" />
+          <path d="M 750,325 L 750,265" fill="none" stroke="var(--prime-base)" stroke-width="1.5" stroke-dasharray="4" marker-end="url(#arrow-up)" />
+          <text x="765" y="295" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--prime-base)">Escalation Up</text>
 
           <!-- TEAM 3: web-viz (Layer 2 under docs) -->
-          <g transform="translate(60, 315)">
-            <rect width="400" height="135" rx="12" fill="var(--bg-surface)" stroke="var(--team-border)" stroke-width="1.5" filter="url(#card-shadow)" />
-            <rect x="0" y="0" width="400" height="28" rx="12" fill="var(--team-light)" />
-            <text x="14" y="19" font-family="sans-serif" font-size="11" font-weight="800" fill="var(--team-text)">SUB-TEAM: web-viz &middot; Visual Architecture Showcase</text>
-            <text x="385" y="19" text-anchor="end" font-family="sans-serif" font-size="9" font-weight="700" fill="var(--team-base)">LAYER 2</text>
+          <g transform="translate(510, 330)">
+            <rect width="440" height="135" rx="12" fill="var(--bg-surface)" stroke="var(--claude-border)" stroke-width="1.5" filter="url(#card-shadow)" />
+            <rect x="0" y="0" width="440" height="30" rx="12" fill="var(--claude-light)" />
+            <text x="14" y="20" font-family="sans-serif" font-size="11" font-weight="800" fill="var(--claude-text)">SUB-TEAM: web-viz &middot; Visual Architecture Showcase</text>
+            <rect x="314" y="6" width="114" height="18" rx="4" fill="var(--claude-base)" />
+            <text x="371" y="19" text-anchor="middle" font-family="monospace" font-size="8.5" font-weight="800" fill="#ffffff">claude-code harness</text>
 
             <!-- web-viz/lead -->
-            <g transform="translate(16, 42)">
-              <rect width="170" height="75" rx="8" fill="var(--team-light)" stroke="var(--team-base)" stroke-width="1.5" />
-              <text x="12" y="22" font-family="monospace" font-size="11" font-weight="700" fill="var(--team-text)">web-viz/lead</text>
-              <text x="12" y="38" font-family="sans-serif" font-size="9" font-weight="700" fill="var(--team-base)">Team Leader</text>
-              <text x="12" y="52" font-family="sans-serif" font-size="8" fill="var(--text-muted)">Coordinates Showcase</text>
-              <text x="12" y="65" font-family="sans-serif" font-size="8" font-weight="700" fill="var(--team-text)">Sole Bridge to docs/lead</text>
+            <g transform="translate(18, 42)">
+              <rect width="185" height="78" rx="8" fill="var(--team-light)" stroke="var(--team-base)" stroke-width="1.5" />
+              <text x="12" y="20" font-family="monospace" font-size="10.5" font-weight="700" fill="var(--team-text)">web-viz/lead</text>
+              <text x="12" y="36" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--team-base)">Team Leader</text>
+              <text x="12" y="52" font-family="sans-serif" font-size="7.5" fill="var(--text-muted)">Coordinates Showcase</text>
+              <text x="12" y="67" font-family="sans-serif" font-size="7.5" font-weight="700" fill="var(--team-text)">Sole Bridge to docs/lead</text>
             </g>
 
-            <line x1="188" y1="80" x2="216" y2="80" stroke="var(--border-strong)" stroke-width="2" stroke-dasharray="3" />
+            <line x1="206" y1="80" x2="232" y2="80" stroke="var(--git-base)" stroke-width="2" stroke-dasharray="3" />
 
             <!-- web-viz/designer -->
-            <g transform="translate(218, 42)">
-              <rect width="165" height="75" rx="8" fill="var(--spec-light)" stroke="var(--spec-border)" stroke-width="1.2" />
-              <text x="12" y="22" font-family="monospace" font-size="11" font-weight="700" fill="var(--spec-text)">web-viz/designer</text>
-              <text x="12" y="38" font-family="sans-serif" font-size="9" font-weight="700" fill="var(--text-subtle)">HTML &amp; Diagram Specialist</text>
-              <text x="12" y="52" font-family="sans-serif" font-size="8" fill="var(--text-muted)">Builds Architecture Showcase</text>
-              <text x="12" y="65" font-family="sans-serif" font-size="8" font-weight="600" fill="var(--prime-text)">Reports strictly to web-viz/lead</text>
+            <g transform="translate(234, 42)">
+              <rect width="185" height="78" rx="8" fill="var(--spec-light)" stroke="var(--spec-border)" stroke-width="1.2" />
+              <text x="12" y="20" font-family="monospace" font-size="10.5" font-weight="700" fill="var(--spec-text)">web-viz/designer</text>
+              <text x="12" y="36" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--spec-text)">HTML &amp; Diagram Specialist</text>
+              <text x="12" y="52" font-family="sans-serif" font-size="7.5" fill="var(--text-muted)">Builds Responsive HTML/SVG</text>
+              <text x="12" y="67" font-family="sans-serif" font-size="7.5" font-weight="700" fill="var(--git-text)">Direct Peer to web-viz/lead</text>
             </g>
           </g>
 
-          <!-- TEAM 4: auth (Layer 2 under platform) -->
-          <g transform="translate(490, 315)">
-            <rect width="420" height="135" rx="12" fill="var(--bg-surface)" stroke="var(--team-border)" stroke-width="1.5" filter="url(#card-shadow)" />
-            <rect x="0" y="0" width="420" height="28" rx="12" fill="var(--team-light)" />
-            <text x="14" y="19" font-family="sans-serif" font-size="11" font-weight="800" fill="var(--team-text)">SUB-TEAM: auth &middot; Authentication &amp; Security</text>
-            <text x="405" y="19" text-anchor="end" font-family="sans-serif" font-size="9" font-weight="700" fill="var(--team-base)">LAYER 2</text>
-
-            <!-- auth/lead -->
-            <g transform="translate(18, 42)">
-              <rect width="180" height="75" rx="8" fill="var(--team-light)" stroke="var(--team-base)" stroke-width="1.5" />
-              <text x="12" y="22" font-family="monospace" font-size="11" font-weight="700" fill="var(--team-text)">auth/lead</text>
-              <text x="12" y="38" font-family="sans-serif" font-size="9" font-weight="700" fill="var(--team-base)">Team Leader</text>
-              <text x="12" y="52" font-family="sans-serif" font-size="8" fill="var(--text-muted)">Coordinates SecOps</text>
-              <text x="12" y="65" font-family="sans-serif" font-size="8" font-weight="700" fill="var(--team-text)">Sole Bridge to platform/lead</text>
-            </g>
-
-            <line x1="200" y1="80" x2="230" y2="80" stroke="var(--border-strong)" stroke-width="2" stroke-dasharray="3" />
-
-            <!-- auth/secops -->
-            <g transform="translate(232, 42)">
-              <rect width="170" height="75" rx="8" fill="var(--spec-light)" stroke="var(--spec-border)" stroke-width="1.2" />
-              <text x="12" y="22" font-family="monospace" font-size="11" font-weight="700" fill="var(--spec-text)">auth/secops</text>
-              <text x="12" y="38" font-family="sans-serif" font-size="9" font-weight="700" fill="var(--text-subtle)">Security Specialist</text>
-              <text x="12" y="52" font-family="sans-serif" font-size="8" fill="var(--text-muted)">JWT Verification &amp; Auditing</text>
-              <text x="12" y="65" font-family="sans-serif" font-size="8" font-weight="600" fill="var(--prime-text)">Reports strictly to auth/lead</text>
-            </g>
+          <!-- Cross-harness annotation -->
+          <g transform="translate(50, 360)">
+            <rect width="420" height="90" rx="10" fill="var(--bg-subtle)" stroke="var(--border)" stroke-width="1" />
+            <text x="16" y="24" font-family="sans-serif" font-size="10" font-weight="700" fill="var(--text-main)">🌐 Mixed Hive Capability</text>
+            <text x="16" y="44" font-family="sans-serif" font-size="8.5" fill="var(--text-muted)">&bull; A single ULTRON Hive runs teams across multiple harnesses concurrently.</text>
+            <text x="16" y="60" font-family="sans-serif" font-size="8.5" fill="var(--text-muted)">&bull; Teams configure harness via <tspan font-family="monospace" font-weight="700">create-team --harness</tspan> or <tspan font-family="monospace" font-weight="700">set-harness</tspan>.</text>
+            <text x="16" y="76" font-family="sans-serif" font-size="8.5" fill="var(--text-muted)">&bull; Default harness follows ULTRON PRIME if unspecified.</text>
           </g>
 
         </svg>
       </div>
     </div>
 
-    <!-- Upward Escalation Rule Callout -->
+    <!-- Routing and Invariant Callouts -->
     <div class="callout-box">
-      <div class="callout-title">⚠️ The Strict Escalation &amp; Provisioning Invariants</div>
+      <div class="callout-title">⚠️ Strict Chain-of-Command &amp; Routing Invariants</div>
       <p>
-        <strong>1. Specialists never doorbell external teams or ULTRON PRIME:</strong> All external communication must funnel through the team's <code>lead</code>.<br>
-        <strong>2. No rogue provisioning:</strong> Only <code>ultron-prime</code> can run <code>create-team</code>, <code>add-role</code>, or spawn subagents. Specialists escalate resource/headcount requests upward: <em>Specialist &rarr; Team Lead &rarr; Parent Lead &rarr; ULTRON PRIME &rarr; User</em>.
+        <strong>1. Specialists have <code>direct_peers_allowed: true</code> inside their team:</strong> Specialists communicate directly with teammates on <code>--visibility team</code> threads and doorbell them directly. They never doorbell external teams or ULTRON PRIME; all external communications must funnel through <code>&lt;team&gt;/lead</code>.<br>
+        <strong>2. No rogue provisioning:</strong> Only <code>ultron-prime</code> can run <code>create-team</code>, <code>add-role</code>, or spawn subagents. The ULTRON Core CLI strictly blocks non-Prime roles from executing lifecycle subcommands.<br>
+        <strong>3. Upward Escalation:</strong> Specialists escalate resource/headcount requests upward: <em>Specialist &rarr; Team Lead &rarr; Parent Lead &rarr; ULTRON PRIME &rarr; User</em>.
       </p>
     </div>
   </section>
 
-  <!-- Section 3: Pure Git-Native Storage Split -->
-  <section id="storage" class="section-card">
+  <!-- Section 3: Multi-Harness Adapters & Isolation Contract -->
+  <section id="adapters" class="section-card">
     <div class="section-header">
-      <h2 class="section-title">3. Pure Git-Native Storage Split (Dual-Zone Architecture)</h2>
-      <div class="section-sub">Zero SQLite or database engines. On-disk files are the single source of truth.</div>
+      <h2 class="section-title">3. Multi-Harness Adapters &amp; Isolation Contracts</h2>
+      <div class="section-sub">Extensible architecture decoupling ULTRON organizational logic from host agent execution platforms.</div>
     </div>
 
     <p style="font-size:0.88rem; color:var(--text-muted);">
-      ULTRON enforces a strict physical split between <strong>Git-Tracked persistent assets</strong> (org charters, roles, code, and append-only event logs) and <strong>Gitignored ephemeral runtime state</strong> (Antigravity session UUIDs and lockfiles).
+      ULTRON implements the <code>HarnessAdapter</code> abstract contract in <code>ultron/core/core.py</code>. The adapter handles platform-specific process lifecycles, neutral model tier mapping, prompt synthesis, and reactive doorbell delivery, leaving team charters, permissions, and board logs 100% portable.
     </p>
 
-    <!-- Visual Dual-Zone Diagram -->
-    <div class="diagram-container">
-      <div class="svg-wrap">
-        <svg viewBox="0 0 920 220" width="920" height="220" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <filter id="box-shadow" x="-3%" y="-5%" width="106%" height="115%">
-              <feDropShadow dx="0" dy="2" stdDeviation="2.5" flood-opacity="0.06" />
-            </filter>
-          </defs>
+    <!-- Adapter Comparison Cards -->
+    <div class="adapter-grid">
+      <!-- Antigravity Adapter Card -->
+      <div class="adapter-card agy">
+        <div class="adapter-title">
+          <span style="color:var(--agy-base);">🔵</span> AntigravityAdapter
+          <span class="chip agy" style="margin-left:auto;">Google Antigravity</span>
+        </div>
+        <ul class="feature-list">
+          <li>
+            <span class="feature-bullet">&bull;</span>
+            <div><strong>Role Spawning:</strong> Emits structured subagent specs for ULTRON PRIME to execute via <code>define_subagent</code> and <code>invoke_subagent</code>.</div>
+          </li>
+          <li>
+            <span class="feature-bullet">&bull;</span>
+            <div><strong>Neutral Model Tiers:</strong> <code>small</code> &rarr; <code>flash</code>, <code>medium</code> &rarr; <code>flash</code>, <code>large</code> &rarr; <code>pro</code>.</div>
+          </li>
+          <li>
+            <span class="feature-bullet">&bull;</span>
+            <div><strong>Intra-Team Doorbell:</strong> Native <code>send_message(Recipient="&lt;uuid&gt;", ...)</code> delivered directly by the harness.</div>
+          </li>
+          <li>
+            <span class="feature-bullet">&bull;</span>
+            <div><strong>Shell Doorbell (Inbound):</strong> Discovers live daemon via <code>~/.gemini/antigravity/daemon/hub_*.json</code>, validates PID, and invokes <code>agentapi send-message</code> (&lt;100ms local RPC).</div>
+          </li>
+          <li>
+            <span class="feature-bullet">&bull;</span>
+            <div><strong>Workspace &amp; Isolation:</strong> Subagents inherit workspace (<code>Workspace=inherit</code>); charter prompts omit Claude Code specific context imports.</div>
+          </li>
+          <li>
+            <span class="feature-bullet">&bull;</span>
+            <div><strong>Liveness Verification:</strong> Emits inspection plan with session UUIDs for Prime to run <code>manage_subagents(list)</code>.</div>
+          </li>
+        </ul>
+      </div>
 
-          <!-- Zone 1: Git Tracked -->
-          <g transform="translate(10, 10)">
-            <rect width="520" height="195" rx="12" fill="var(--bg-surface)" stroke="var(--git-base)" stroke-width="2" filter="url(#box-shadow)" />
-            <rect x="0" y="0" width="520" height="32" rx="12" fill="var(--git-light)" />
-            <text x="16" y="21" font-family="sans-serif" font-size="12" font-weight="800" fill="var(--git-text)">🌿 ZONE 1: GIT-TRACKED &amp; PERSISTENT</text>
-            <text x="504" y="21" text-anchor="end" font-family="monospace" font-size="10" font-weight="700" fill="var(--git-base)">repo root / ultron/</text>
-
-            <!-- Hive Folder -->
-            <rect x="16" y="44" width="235" height="135" rx="8" fill="var(--bg-subtle)" stroke="var(--border)" />
-            <text x="26" y="62" font-family="monospace" font-size="10.5" font-weight="700" fill="var(--text-main)">ultron/hive/ (Org Tree)</text>
-            <text x="26" y="80" font-family="sans-serif" font-size="9" fill="var(--text-muted)">&bull; <tspan font-family="monospace" font-weight="700" fill="var(--text-main)">team.json</tspan> (metadata &amp; parent)</text>
-            <text x="26" y="98" font-family="sans-serif" font-size="9" fill="var(--text-muted)">&bull; <tspan font-family="monospace" font-weight="700" fill="var(--text-main)">AGENTS.md</tspan> (team charter)</text>
-            <text x="26" y="116" font-family="sans-serif" font-size="9" fill="var(--text-muted)">&bull; <tspan font-family="monospace" font-weight="700" fill="var(--text-main)">roles/&lt;role&gt;/role.json</tspan></text>
-            <text x="26" y="134" font-family="sans-serif" font-size="9" fill="var(--text-muted)">&bull; <tspan font-family="monospace" font-weight="700" fill="var(--text-main)">roles/&lt;role&gt;/workspace/</tspan></text>
-            <text x="26" y="156" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--git-text)">✔ Fully versioned across branches</text>
-
-            <!-- Threads Folder -->
-            <rect x="265" y="44" width="240" height="135" rx="8" fill="var(--bg-subtle)" stroke="var(--border)" />
-            <text x="275" y="62" font-family="monospace" font-size="10.5" font-weight="700" fill="var(--text-main)">ultron/core/threads/</text>
-            <text x="275" y="80" font-family="sans-serif" font-size="9" fill="var(--text-muted)">&bull; <tspan font-family="monospace" font-weight="700" fill="var(--text-main)">t-YYYYMMDD-xxxxxxxx.jsonl</tspan></text>
-            <text x="275" y="98" font-family="sans-serif" font-size="9" fill="var(--text-muted)">&bull; Append-only event streams</text>
-            <text x="275" y="116" font-family="sans-serif" font-size="9" fill="var(--text-muted)">&bull; <tspan font-family="monospace" font-weight="700" fill="var(--text-main)">threads/.gitattributes</tspan></text>
-            <rect x="275" y="126" width="220" height="24" rx="4" fill="var(--git-light)" stroke="var(--git-border)" />
-            <text x="285" y="142" font-family="monospace" font-size="9.5" font-weight="800" fill="var(--git-text)">*.jsonl merge=union</text>
-            <text x="275" y="166" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--git-base)">✔ Zero merge conflicts on branch join</text>
-          </g>
-
-          <!-- Zone 2: Gitignored Runtime -->
-          <g transform="translate(555, 10)">
-            <rect width="355" height="195" rx="12" fill="var(--bg-surface)" stroke="var(--runtime-base)" stroke-width="2" filter="url(#box-shadow)" />
-            <rect x="0" y="0" width="355" height="32" rx="12" fill="var(--runtime-light)" />
-            <text x="16" y="21" font-family="sans-serif" font-size="12" font-weight="800" fill="var(--runtime-text)">⚡ ZONE 2: GITIGNORED EPHEMERAL</text>
-            <text x="340" y="21" text-anchor="end" font-family="monospace" font-size="10" font-weight="700" fill="var(--runtime-base)">.gitignore</text>
-
-            <rect x="16" y="44" width="323" height="135" rx="8" fill="var(--bg-subtle)" stroke="var(--border)" />
-            <text x="26" y="64" font-family="monospace" font-size="10.5" font-weight="700" fill="var(--text-main)">ultron/core/.runtime/</text>
-            <text x="26" y="84" font-family="sans-serif" font-size="9" fill="var(--text-muted)">&bull; <tspan font-family="monospace" font-weight="700" fill="var(--text-main)">sessions.json</tspan> (live conversation UUIDs)</text>
-            <text x="26" y="104" font-family="sans-serif" font-size="9" fill="var(--text-muted)">&bull; <tspan font-family="monospace" font-weight="700" fill="var(--text-main)">.lock</tspan> (atomic kernel-level file flock)</text>
-            <text x="26" y="124" font-family="sans-serif" font-size="9" fill="var(--text-muted)">&bull; Dynamic team activation / disable state</text>
-            
-            <rect x="26" y="136" width="303" height="30" rx="6" fill="var(--runtime-light)" stroke="var(--runtime-border)" />
-            <text x="36" y="154" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--runtime-text)">✔ git status is 100% clean on team wake/sleep</text>
-          </g>
-        </svg>
+      <!-- Claude Code Adapter Card -->
+      <div class="adapter-card claude">
+        <div class="adapter-title">
+          <span style="color:var(--claude-base);">🟠</span> ClaudeCodeAdapter
+          <span class="chip claude" style="margin-left:auto;">Anthropic Claude Code</span>
+        </div>
+        <ul class="feature-list">
+          <li>
+            <span class="feature-bullet">&bull;</span>
+            <div><strong>Role Spawning:</strong> Direct background process invocation via <code>claude --bg --dangerously-skip-permissions</code> managed by <code>core.py spawn-team</code>.</div>
+          </li>
+          <li>
+            <span class="feature-bullet">&bull;</span>
+            <div><strong>Neutral Model Tiers:</strong> <code>small</code> &rarr; <code>haiku</code>, <code>medium</code> &rarr; <code>haiku</code>, <code>large</code> &rarr; <code>sonnet</code>.</div>
+          </li>
+          <li>
+            <span class="feature-bullet">&bull;</span>
+            <div><strong>Intra-Team Doorbell:</strong> Native <code>SendMessage(recipient="&lt;uuid&gt;", ...)</code> delivered across background sessions.</div>
+          </li>
+          <li>
+            <span class="feature-bullet">&bull;</span>
+            <div><strong>Shell Doorbell (Inbound):</strong> Executes headless caller <code>claude -p --tools SendMessage --model haiku</code> to wake target session.</div>
+          </li>
+          <li>
+            <span class="feature-bullet">&bull;</span>
+            <div><strong>Workspace &amp; Sandbox:</strong> Roles share repo checkout via <code>.claude/settings.json</code> (<code>bgIsolation: "none"</code>); worker roles denied <code>["Agent", "Bash(claude:*)"]</code>.</div>
+          </li>
+          <li>
+            <span class="feature-bullet">&bull;</span>
+            <div><strong>Daemon Isolation:</strong> Each role sets <code>ULTRON_AGENT_ID</code> in its settings <code>env</code>, preventing shared <code>claude daemon</code> ID leaks.</div>
+          </li>
+          <li>
+            <span class="feature-bullet">&bull;</span>
+            <div><strong>Liveness Verification:</strong> Inspects live sessions dynamically via <code>claude agents --json</code>.</div>
+          </li>
+        </ul>
       </div>
     </div>
 
-    <div class="storage-grid">
-      <!-- Zone 1 Details -->
-      <div class="storage-zone git-zone">
-        <span class="zone-badge">Zone 1 &middot; Git-Tracked &amp; Persistent</span>
-        <div class="zone-title">Repository File Database</div>
-        <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:12px;">Committed to Git. Survives branch switches, reboots, and repo relocations.</p>
-
-        <div class="file-item highlight-git">
-          <div class="file-name">ultron/hive/&lt;team&gt;/team.json</div>
-          <div class="file-desc">Canonical team specification (slug, name, parent pointer, mission).</div>
-        </div>
-        <div class="file-item highlight-git">
-          <div class="file-name">ultron/hive/&lt;team&gt;/AGENTS.md</div>
-          <div class="file-desc">Shared team operating charter, responsibilities, and guidelines.</div>
-        </div>
-        <div class="file-item highlight-git">
-          <div class="file-name">ultron/hive/&lt;team&gt;/roles/&lt;role&gt;/</div>
-          <div class="file-desc"><code>role.json</code>, <code>AGENTS.md</code>, and role scratch <code>workspace/</code>.</div>
-        </div>
-        <div class="file-item highlight-git">
-          <div class="file-name">ultron/core/threads/*.jsonl</div>
-          <div class="file-desc">Append-only event log (<code>thread</code>, <code>post</code>, <code>status</code>, <code>reclassify</code>).</div>
-        </div>
-        <div class="file-item highlight-git">
-          <div class="file-name">ultron/core/threads/.gitattributes</div>
-          <div class="file-desc">Enforces <code>*.jsonl merge=union</code> for conflict-free Git branch merges!</div>
-        </div>
-      </div>
-
-      <!-- Zone 2 Details -->
-      <div class="storage-zone runtime-zone">
-        <span class="zone-badge">Zone 2 &middot; Gitignored &amp; Ephemeral</span>
-        <div class="zone-title">Runtime Session Registry</div>
-        <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:12px;">Ignored by Git via <code>ultron/core/.gitignore</code>. Zero working-tree noise.</p>
-
-        <div class="file-item highlight-runtime">
-          <div class="file-name">ultron/core/.runtime/sessions.json</div>
-          <div class="file-desc">Live Antigravity <code>conversation_id</code> UUIDs, registration timestamps, and model bindings.</div>
-        </div>
-        <div class="file-item highlight-runtime">
-          <div class="file-name">ultron/core/.runtime/.lock</div>
-          <div class="file-desc">Kernel-level <code>fcntl.flock</code> mutex ensuring atomic cross-process writes.</div>
-        </div>
-
-        <div class="callout-box git" style="margin-top:20px;">
-          <div class="callout-title">🌿 Pristine Working Trees Guaranteed</div>
-          <p style="font-size:0.8rem;">
-            When teams are enabled (<code>activate-team</code>) or stood down (<code>disable-team</code>), changes are written <strong>strictly to <code>.runtime/sessions.json</code></strong>. Running <code>git status</code> remains completely clean, preventing ghost commits and dirty merges.
-          </p>
-        </div>
-      </div>
-    </div>
-
-    <!-- Code pill block showing gitattributes -->
-    <div class="cli-block">
-      <span class="cli-comment"># ultron/core/threads/.gitattributes — Conflict-Free Git Branch Merging:</span><br>
-      <span class="cli-cmd">*.jsonl</span> <span class="cli-flag">merge=union</span><br><br>
-      <span class="cli-comment"># Why this matters: When two developers or agents work on separate Git branches,</span><br>
-      <span class="cli-comment"># both can append replies or update statuses on the board simultaneously.</span><br>
-      <span class="cli-comment"># Upon git merge, Git union-merges the JSONL lines with ZERO conflicts.</span>
+    <!-- Adapter Contract Invariants Callout -->
+    <div class="callout-box info" style="margin-top:16px;">
+      <div class="callout-title">🔒 Universal Architectural Invariants</div>
+      <p>
+        <strong>1. Zero Cross-Harness Tool Leaks:</strong> Antigravity agents never see Claude Code tools (e.g. <code>SendMessage</code>) in their generated instructions, and Claude Code roles never see Antigravity tools (e.g. <code>send_message</code>).<br>
+        <strong>2. Role Sandbox Boundary:</strong> Worker roles are denied subagent spawning tools (<code>permissions.deny: ["Agent"]</code> or <code>Subagents=False</code>), and <code>core.py</code> strictly denies lifecycle subcommands (<code>create-team</code>, <code>spawn-team</code>, <code>stop-team</code>) when invoked under a worker identity.<br>
+        <strong>3. Fail-Loud Doorbell Verification:</strong> If a doorbell cannot be delivered or the recipient fails to acknowledge, the operation exits with an explicit error rather than silently failing.
+      </p>
     </div>
   </section>
 
-  <!-- Section 4: Visibility & Reactive Doorbells -->
-  <section id="visibility" class="section-card">
+  <!-- Section 4: Pure Git-Native Storage Split -->
+  <section id="storage" class="section-card">
     <div class="section-header">
-      <h2 class="section-title">4. Visibility Scoping &amp; Reactive Doorbell Workflow</h2>
-      <div class="section-sub">Information boundary enforcement and zero-polling event-driven communication.</div>
+      <h2 class="section-title">4. Pure Git-Native Storage Split</h2>
+      <div class="section-sub">Zero-friction merge conflict avoidance through physical separation of persistent and ephemeral state.</div>
     </div>
 
     <p style="font-size:0.88rem; color:var(--text-muted);">
-      To prevent context window bloat and noise across multi-agent swarms, ULTRON enforces a 4-tier visibility model on all thread operations, paired with a 3-step reactive doorbell flow that requires <strong>zero polling loops</strong>.
+      ULTRON enforces a strict physical split between <strong>Git-Tracked persistent assets</strong> (org charters, roles, code, and append-only event logs) and <strong>Gitignored ephemeral runtime state</strong> (harness session UUIDs, daemon files, and lockfiles).
     </p>
 
-    <!-- Visibility Matrix Table -->
+    <div class="storage-grid">
+      <!-- Zone 1: Git Tracked -->
+      <div class="storage-zone git-zone">
+        <span class="zone-badge">🌿 Persistent &middot; Git Tracked</span>
+        <div class="zone-title">Organizational Assets &amp; Event Logs</div>
+        
+        <div class="file-item highlight-git">
+          <div class="file-name">ultron/hive/&lt;slug&gt;/team.json</div>
+          <div class="file-desc">Team metadata, parent slug, assigned harness, and target project repo.</div>
+        </div>
+
+        <div class="file-item highlight-git">
+          <div class="file-name">ultron/hive/&lt;slug&gt;/AGENTS.md</div>
+          <div class="file-desc">Team Charter defining scope, escalation rules, and specialist roster.</div>
+        </div>
+
+        <div class="file-item highlight-git">
+          <div class="file-name">ultron/hive/&lt;slug&gt;/roles/&lt;role&gt;/role.json</div>
+          <div class="file-desc">Role title, responsibilities, and neutral model tier (<code>small</code>, <code>medium</code>, <code>large</code>).</div>
+        </div>
+
+        <div class="file-item highlight-git">
+          <div class="file-name">ultron/hive/&lt;slug&gt;/roles/&lt;role&gt;/AGENTS.md</div>
+          <div class="file-desc">Role charter detailing identity, chain of command, and operating protocols.</div>
+        </div>
+
+        <div class="file-item highlight-git">
+          <div class="file-name">ultron/board/threads/&lt;id&gt;.jsonl</div>
+          <div class="file-desc">Append-only discussion threads with atomic <code>fcntl.flock</code> locking and <code>merge=union</code>.</div>
+        </div>
+
+        <div class="file-item highlight-git">
+          <div class="file-name">.gitattributes</div>
+          <div class="file-desc">Configures <code>merge=union</code> for all <code>*.jsonl</code> files to guarantee conflict-free branch merges.</div>
+        </div>
+      </div>
+
+      <!-- Zone 2: Gitignored Runtime -->
+      <div class="storage-zone runtime-zone">
+        <span class="zone-badge">⚡ Ephemeral &middot; Gitignored (.runtime/)</span>
+        <div class="zone-title">Live Process Sessions &amp; Locks</div>
+
+        <div class="file-item highlight-runtime">
+          <div class="file-name">.runtime/sessions.json</div>
+          <div class="file-desc">Maps role IDs to live session UUIDs per team, along with recorded harness bindings.</div>
+        </div>
+
+        <div class="file-item highlight-runtime">
+          <div class="file-name">.runtime/locks/*.lock</div>
+          <div class="file-desc">Process concurrency locks for atomic file appends and session registry mutations.</div>
+        </div>
+
+        <div class="file-item highlight-runtime">
+          <div class="file-name">~/.gemini/antigravity/daemon/hub_*.json</div>
+          <div class="file-desc">Discovered daemon metadata (HTTP port, CSRF token, live PID) for Antigravity RPC doorbells.</div>
+        </div>
+
+        <div class="file-item highlight-runtime">
+          <div class="file-name">ultron/hive/.../role_context.generated.md</div>
+          <div class="file-desc">Harness-specific startup context generated dynamically for Claude Code roles (gitignored).</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 5: Visibility & Cross-Harness Reactive Doorbells -->
+  <section id="visibility" class="section-card">
+    <div class="section-header">
+      <h2 class="section-title">5. Visibility &amp; Cross-Harness Reactive Doorbells</h2>
+      <div class="section-sub">Zero-poll notification architecture waking agents reactively across Antigravity and Claude Code runtimes.</div>
+    </div>
+
+    <p style="font-size:0.88rem; color:var(--text-muted);">
+      ULTRON eliminates polling loops. Agents write event logs to append-only JSONL files, resolve the recipient's live session address, and trigger an immediate reactive doorbell wakeup.
+    </p>
+
+    <!-- Visibility Scopes Table -->
     <div class="matrix-table-wrap">
       <table class="matrix-table">
         <thead>
           <tr>
-            <th>Visibility Tier</th>
-            <th>CLI Flag</th>
-            <th>Read &amp; Reply Authorization</th>
-            <th>Architectural Purpose</th>
+            <th>Visibility</th>
+            <th>File Location</th>
+            <th>Read Permissions</th>
+            <th>Typical Use Cases</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <td><span class="scope-pill scope-personal">personal</span></td>
-            <td><code>--visibility personal</code></td>
-            <td>Target <code>&lt;team&gt;/&lt;role&gt;</code> only + <code>ultron-prime</code></td>
-            <td>Role-persistent memory: private notes and domain lessons that survive agent session respawns.</td>
+            <td><code>threads/t-&lt;date&gt;-&lt;hex&gt;.jsonl</code></td>
+            <td>Strictly author role only</td>
+            <td>Role-specific debugging techniques, AST recipes, private lessons learned</td>
           </tr>
           <tr>
             <td><span class="scope-pill scope-team">team</span></td>
-            <td><code>--visibility team</code></td>
-            <td>All roles in <code>team_slug</code> + <code>ultron-prime</code></td>
-            <td>Intra-team sprint execution, peer code reviews, and local team lessons.</td>
+            <td><code>threads/t-&lt;date&gt;-&lt;hex&gt;.jsonl</code></td>
+            <td>All roles inside <code>&lt;team&gt;</code></td>
+            <td>Task assignments, specs, PR reviews, QA verification, peer handoffs</td>
           </tr>
           <tr>
-            <td><span class="scope-pill scope-cross">team &harr; child</span></td>
-            <td><code>--visibility team --with-team &lt;subteam&gt;</code></td>
-            <td>Parent team + designated sub-team + <code>ultron-prime</code></td>
-            <td>Cross-layer delegation, contract handoffs, and escalations without global noise.</td>
+            <td><span class="scope-pill scope-cross">team (with-team)</span></td>
+            <td><code>threads/t-&lt;date&gt;-&lt;hex&gt;.jsonl</code></td>
+            <td>Both teams' roles</td>
+            <td>Parent-child task delegation and upward escalation (e.g. <code>docs</code> &harr; <code>web-viz</code>)</td>
           </tr>
           <tr>
             <td><span class="scope-pill scope-global">global</span></td>
-            <td><code>--visibility global</code></td>
-            <td>Every agent in the entire Hive</td>
-            <td>Network-wide architectural standards, breaking changes, and framework-wide announcements.</td>
+            <td><code>threads/t-&lt;date&gt;-&lt;hex&gt;.jsonl</code></td>
+            <td>All Hive agents &amp; PRIME</td>
+            <td>Hive-wide announcements, standard architectural patterns, system policies</td>
           </tr>
         </tbody>
       </table>
     </div>
 
-    <!-- 3-Step Doorbell Sequence -->
-    <h3 style="font-size:1.05rem; font-weight:700; margin-top:24px; margin-bottom:8px;">The 3-Step Reactive Doorbell Flow</h3>
-    <p style="font-size:0.84rem; color:var(--text-muted); margin-bottom:12px;">JSONL files are passive logs on disk. Agents never sleep in polling loops. When an agent posts work, they wake the recipient immediately:</p>
-
-    <!-- Reactive Doorbell SVG Flow -->
+    <!-- Cross-Harness Doorbell SVG Diagram -->
     <div class="diagram-container">
       <div class="svg-wrap">
-        <svg viewBox="0 0 920 185" width="920" height="185" xmlns="http://www.w3.org/2000/svg">
+        <svg viewBox="0 0 940 240" width="940" height="240" xmlns="http://www.w3.org/2000/svg">
           <defs>
-            <marker id="flow-arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-              <path d="M 0 1 L 8 5 L 0 9 z" fill="var(--team-base)" />
+            <marker id="doorbell-arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 1 L 8 5 L 0 9 z" fill="var(--prime-base)" />
             </marker>
           </defs>
 
-          <!-- Step 1 Node -->
-          <g transform="translate(15, 16)">
-            <rect width="250" height="150" rx="10" fill="var(--bg-surface)" stroke="var(--border)" stroke-width="1.5" />
-            <circle cx="26" cy="26" r="14" fill="var(--team-base)" />
-            <text x="26" y="31" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="800" fill="#ffffff">1</text>
-            <text x="50" y="30" font-family="sans-serif" font-size="12" font-weight="700" fill="var(--text-main)">Write JSONL Event</text>
-            <text x="16" y="58" font-family="sans-serif" font-size="9" fill="var(--text-muted)">Agent appends post atomically:</text>
-            <rect x="16" y="68" width="218" height="48" rx="6" fill="var(--code-bg)" />
-            <text x="24" y="86" font-family="monospace" font-size="8.5" fill="#38bdf8">python3 ultron/core/core.py</text>
-            <text x="24" y="102" font-family="monospace" font-size="8.5" fill="#34d399">new-thread / reply ...</text>
-            <text x="16" y="136" font-family="sans-serif" font-size="8" font-weight="600" fill="var(--git-text)">Atomic append with fcntl.flock</text>
+          <!-- Native Intra-Team Doorbell -->
+          <g transform="translate(20, 20)">
+            <rect width="420" height="200" rx="10" fill="var(--bg-surface)" stroke="var(--team-border)" stroke-width="1.5" />
+            <text x="16" y="28" font-family="sans-serif" font-size="11" font-weight="800" fill="var(--team-text)">1. INTRA-TEAM DOORBELL (Same Harness)</text>
+            <text x="16" y="48" font-family="sans-serif" font-size="8.5" fill="var(--text-muted)">Agent calls harness native tool directly inside session:</text>
+
+            <rect x="16" y="60" width="388" height="52" rx="6" fill="var(--code-bg)" />
+            <text x="26" y="80" font-family="monospace" font-size="8" fill="#38bdf8">// Antigravity intra-team:</text>
+            <text x="26" y="96" font-family="monospace" font-size="8" fill="#34d399">send_message(Recipient="&lt;uuid&gt;", Message="Doorbell: ...")</text>
+
+            <rect x="16" y="122" width="388" height="52" rx="6" fill="var(--code-bg)" />
+            <text x="26" y="142" font-family="monospace" font-size="8" fill="#f59e0b">// Claude Code intra-team:</text>
+            <text x="26" y="158" font-family="monospace" font-size="8" fill="#34d399">SendMessage(recipient="&lt;uuid&gt;", content="Doorbell: ...")</text>
+
+            <text x="16" y="192" font-family="sans-serif" font-size="8" font-weight="700" fill="var(--git-text)">&check; Native harness routing &middot; Sub-second direct delivery</text>
           </g>
 
-          <!-- Connector 1 -> 2 -->
-          <path d="M 270,91 L 320,91" fill="none" stroke="var(--team-base)" stroke-width="2.5" marker-end="url(#flow-arrow)" />
+          <!-- Cross-Harness Shell Doorbell -->
+          <g transform="translate(480, 20)">
+            <rect width="440" height="200" rx="10" fill="var(--bg-surface)" stroke="var(--prime-border)" stroke-width="1.5" />
+            <text x="16" y="28" font-family="sans-serif" font-size="11" font-weight="800" fill="var(--prime-text)">2. CROSS-HARNESS SHELL DOORBELL</text>
+            <text x="16" y="48" font-family="sans-serif" font-size="8.5" fill="var(--text-muted)">Invoked for external teams or cross-harness parent/child nodes:</text>
 
-          <!-- Step 2 Node -->
-          <g transform="translate(330, 16)">
-            <rect width="250" height="150" rx="10" fill="var(--bg-surface)" stroke="var(--border)" stroke-width="1.5" />
-            <circle cx="26" cy="26" r="14" fill="var(--team-base)" />
-            <text x="26" y="31" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="800" fill="#ffffff">2</text>
-            <text x="50" y="30" font-family="sans-serif" font-size="12" font-weight="700" fill="var(--text-main)">Resolve Live UUID</text>
-            <text x="16" y="58" font-family="sans-serif" font-size="9" fill="var(--text-muted)">Query session registry:</text>
-            <rect x="16" y="68" width="218" height="48" rx="6" fill="var(--code-bg)" />
-            <text x="24" y="86" font-family="monospace" font-size="8.5" fill="#38bdf8">python3 ultron/core/core.py</text>
-            <text x="24" y="102" font-family="monospace" font-size="8.5" fill="#a78bfa">whois &lt;agent_id&gt; --id-only</text>
-            <text x="16" y="136" font-family="sans-serif" font-size="8" font-weight="600" fill="var(--runtime-text)">Reads .runtime/sessions.json</text>
-          </g>
+            <rect x="16" y="60" width="408" height="42" rx="6" fill="var(--code-bg)" />
+            <text x="26" y="84" font-family="monospace" font-size="8" fill="#a78bfa">python3 ultron/core/core.py doorbell &lt;agent_id&gt; "&lt;msg&gt;"</text>
 
-          <!-- Connector 2 -> 3 -->
-          <path d="M 585,91 L 635,91" fill="none" stroke="var(--team-base)" stroke-width="2.5" marker-end="url(#flow-arrow)" />
+            <!-- Dispatch split -->
+            <rect x="16" y="112" width="195" height="70" rx="6" fill="var(--agy-light)" stroke="var(--agy-border)" />
+            <text x="26" y="130" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--agy-text)">Target: Antigravity</text>
+            <text x="26" y="146" font-family="sans-serif" font-size="7.5" fill="var(--text-muted)">Reads hub_*.json daemon,</text>
+            <text x="26" y="160" font-family="monospace" font-size="7" fill="var(--agy-base)">agentapi send-message</text>
+            <text x="26" y="174" font-family="sans-serif" font-size="7" font-weight="700" fill="var(--git-text)">&lt;100ms local RPC</text>
 
-          <!-- Step 3 Node -->
-          <g transform="translate(645, 16)">
-            <rect width="260" height="150" rx="10" fill="var(--bg-surface)" stroke="var(--prime-border)" stroke-width="1.5" />
-            <circle cx="26" cy="26" r="14" fill="var(--prime-base)" />
-            <text x="26" y="31" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="800" fill="#ffffff">3</text>
-            <text x="50" y="30" font-family="sans-serif" font-size="12" font-weight="700" fill="var(--prime-text)">Doorbell Wakeup</text>
-            <text x="16" y="58" font-family="sans-serif" font-size="9" fill="var(--text-muted)">Wake recipient via Antigravity:</text>
-            <rect x="16" y="68" width="228" height="48" rx="6" fill="var(--code-bg)" />
-            <text x="24" y="86" font-family="monospace" font-size="8" fill="#f1f5f9">send_message(</text>
-            <text x="24" y="102" font-family="monospace" font-size="8" fill="#f87171">Recipient="&lt;uuid&gt;", ...)</text>
-            <text x="16" y="136" font-family="sans-serif" font-size="8" font-weight="700" fill="var(--prime-text)">⚡ Wakes target immediately &middot; 0 polling!</text>
+            <rect x="225" y="112" width="199" height="70" rx="6" fill="var(--claude-light)" stroke="var(--claude-border)" />
+            <text x="235" y="130" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--claude-text)">Target: Claude Code</text>
+            <text x="235" y="146" font-family="sans-serif" font-size="7.5" fill="var(--text-muted)">Headless sender,</text>
+            <text x="235" y="160" font-family="monospace" font-size="7" fill="var(--claude-base)">claude -p --tools SendMessage</text>
+            <text x="235" y="174" font-family="sans-serif" font-size="7" font-weight="700" fill="var(--git-text)">~4s headless delivery</text>
           </g>
         </svg>
       </div>
     </div>
 
+    <!-- Step Flow -->
     <div class="doorbell-flow">
       <div class="flow-step-card">
         <div class="step-number">1</div>
@@ -1413,40 +1555,40 @@
 
       <div class="flow-step-card">
         <div class="step-number">2</div>
-        <div class="step-title">Resolve Live UUID</div>
+        <div class="step-title">Resolve Live Address</div>
         <div class="step-desc">
-          Agent queries the runtime registry for the target recipient's active Antigravity session:
+          Agent resolves recipient's active session UUID and recorded harness:
           <div style="margin-top:6px;"><code class="code-pill">core.py whois &lt;agent_id&gt; --id-only</code></div>
         </div>
       </div>
 
       <div class="flow-step-card">
         <div class="step-number">3</div>
-        <div class="step-title">Doorbell Wakeup</div>
+        <div class="step-title">Reactive Doorbell</div>
         <div class="step-desc">
-          Agent immediately wakes the target via Antigravity's messaging primitive:
-          <div style="margin-top:6px;"><code class="code-pill">send_message(Recipient="&lt;uuid&gt;", ...)</code></div>
-          Target awakens automatically. <strong>Zero polling cycles wasted!</strong>
+          Agent rings native tool (intra-team) or invokes shell doorbell (cross-harness):
+          <div style="margin-top:6px;"><code class="code-pill">core.py doorbell &lt;agent_id&gt; ...</code></div>
+          <strong>Zero polling cycles wasted!</strong>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- Section 5: Team Lifecycle & Dynamic Resource Conservation -->
+  <!-- Section 6: Team Lifecycle & Dynamic Resource Conservation -->
   <section id="lifecycle" class="section-card">
     <div class="section-header">
-      <h2 class="section-title">5. Team Lifecycle &amp; Dynamic Resource Conservation</h2>
-      <div class="section-sub">Conserving token bandwidth and subagent processes without losing organizational memory.</div>
+      <h2 class="section-title">6. Team Lifecycle &amp; Dynamic Resource Conservation</h2>
+      <div class="section-sub">Conserving token bandwidth and background agent processes across multiple execution engines.</div>
     </div>
 
     <p style="font-size:0.88rem; color:var(--text-muted);">
-      Persistent background agents consume memory, model context, and harness slots. ULTRON treats teams as <strong>dynamic state machines</strong>: teams can be spawned on-demand for tasks and cleanly stood down when idle, with 100% of their charters, role lessons, and board logs preserved on disk.
+      Persistent background agents consume memory, model context, and harness slots. ULTRON treats teams as <strong>dynamic state machines</strong>: teams can be spawned on-demand for missions and cleanly stood down when idle, with 100% of their charters, role lessons, and board logs preserved on disk.
     </p>
 
     <!-- Lifecycle State Loop SVG -->
     <div class="diagram-container">
       <div class="svg-wrap">
-        <svg viewBox="0 0 920 160" width="920" height="160" xmlns="http://www.w3.org/2000/svg">
+        <svg viewBox="0 0 940 180" width="940" height="180" xmlns="http://www.w3.org/2000/svg">
           <defs>
             <marker id="loop-arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
               <path d="M 0 1 L 8 5 L 0 9 z" fill="var(--team-base)" />
@@ -1458,116 +1600,78 @@
 
           <!-- State 1: Scaffolded / Dormant -->
           <g transform="translate(20, 30)">
-            <rect width="230" height="90" rx="10" fill="var(--bg-surface)" stroke="var(--border)" stroke-width="1.5" />
+            <rect width="240" height="100" rx="10" fill="var(--bg-surface)" stroke="var(--border)" stroke-width="1.5" />
             <text x="16" y="28" font-family="sans-serif" font-size="11" font-weight="800" fill="var(--text-subtle)">1. DORMANT / SCAFFOLDED</text>
-            <text x="16" y="48" font-family="sans-serif" font-size="9" fill="var(--text-muted)">&bull; <tspan font-family="monospace" font-weight="700" fill="var(--text-main)">create-team</tspan> + <tspan font-family="monospace" font-weight="700" fill="var(--text-main)">add-role</tspan></text>
-            <text x="16" y="66" font-family="sans-serif" font-size="9" fill="var(--text-muted)">&bull; On-disk charters &amp; workspace ready</text>
-            <text x="16" y="82" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--git-text)">0 tokens consumed</text>
+            <text x="16" y="48" font-family="sans-serif" font-size="8.5" fill="var(--text-muted)">&bull; <tspan font-family="monospace" font-weight="700" fill="var(--text-main)">create-team [--harness]</tspan></text>
+            <text x="16" y="66" font-family="sans-serif" font-size="8.5" fill="var(--text-muted)">&bull; <tspan font-family="monospace" font-weight="700" fill="var(--text-main)">add-role</tspan> or blueprint hydration</text>
+            <text x="16" y="84" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--git-text)">0 active processes &middot; 0 tokens</text>
           </g>
 
           <!-- Arrow 1 -> 2 -->
-          <path d="M 255,75 L 335,75" fill="none" stroke="var(--team-base)" stroke-width="2.5" marker-end="url(#loop-arrow)" />
-          <text x="295" y="66" text-anchor="middle" font-family="sans-serif" font-size="8" font-weight="700" fill="var(--team-base)">activate-team</text>
+          <path d="M 265,80 L 335,80" fill="none" stroke="var(--team-base)" stroke-width="2.5" marker-end="url(#loop-arrow)" />
+          <text x="300" y="70" text-anchor="middle" font-family="sans-serif" font-size="8" font-weight="700" fill="var(--team-base)">spawn / activate</text>
 
           <!-- State 2: Active Execution -->
           <g transform="translate(345, 20)">
-            <rect width="250" height="110" rx="10" fill="var(--team-light)" stroke="var(--team-border)" stroke-width="2" />
-            <text x="16" y="28" font-family="sans-serif" font-size="11.5" font-weight="800" fill="var(--team-text)">2. ACTIVE EXECUTION</text>
-            <text x="16" y="50" font-family="sans-serif" font-size="9" fill="var(--text-main)">&bull; Subagents running (default <tspan font-family="monospace" font-weight="700">flash</tspan>)</text>
-            <text x="16" y="68" font-family="sans-serif" font-size="9" fill="var(--text-main)">&bull; Tasks assigned &amp; doorbelled</text>
-            <text x="16" y="86" font-family="sans-serif" font-size="9" fill="var(--text-main)">&bull; Specialists code, design, audit</text>
-            <text x="16" y="102" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--team-base)">Active Antigravity sessions</text>
+            <rect width="260" height="120" rx="10" fill="var(--team-light)" stroke="var(--team-border)" stroke-width="2" />
+            <text x="16" y="26" font-family="sans-serif" font-size="11.5" font-weight="800" fill="var(--team-text)">2. ACTIVE EXECUTION</text>
+            <text x="16" y="46" font-family="sans-serif" font-size="8.5" fill="var(--text-main)">&bull; Antigravity: Subagents invoked (flash/pro)</text>
+            <text x="16" y="64" font-family="sans-serif" font-size="8.5" fill="var(--text-main)">&bull; Claude Code: Background sessions (haiku/sonnet)</text>
+            <text x="16" y="82" font-family="sans-serif" font-size="8.5" fill="var(--text-main)">&bull; Tasks assigned via reactive doorbells</text>
+            <text x="16" y="102" font-family="sans-serif" font-size="8" font-weight="700" fill="var(--team-base)">Health polled via core.py liveness</text>
           </g>
 
           <!-- Arrow 2 -> 3 -->
-          <path d="M 600,75 L 675,75" fill="none" stroke="var(--prime-base)" stroke-width="2.5" marker-end="url(#arrow-up)" />
-          <text x="638" y="66" text-anchor="middle" font-family="sans-serif" font-size="8" font-weight="700" fill="var(--prime-base)">disable-team</text>
+          <path d="M 610,80 L 680,80" fill="none" stroke="var(--prime-base)" stroke-width="2.5" marker-end="url(#arrow-up)" />
+          <text x="645" y="70" text-anchor="middle" font-family="sans-serif" font-size="8" font-weight="700" fill="var(--prime-base)">stop / disable</text>
 
           <!-- State 3: Clean Stand-Down -->
-          <g transform="translate(685, 30)">
-            <rect width="220" height="90" rx="10" fill="var(--bg-surface)" stroke="var(--git-base)" stroke-width="1.5" />
+          <g transform="translate(690, 30)">
+            <rect width="230" height="100" rx="10" fill="var(--bg-surface)" stroke="var(--git-base)" stroke-width="1.5" />
             <text x="16" y="28" font-family="sans-serif" font-size="11" font-weight="800" fill="var(--git-text)">3. CLEAN STAND-DOWN</text>
-            <text x="16" y="48" font-family="sans-serif" font-size="9" fill="var(--text-muted)">&bull; <tspan font-family="monospace" font-weight="700" fill="var(--text-main)">manage_subagents(kill)</tspan></text>
-            <text x="16" y="66" font-family="sans-serif" font-size="9" fill="var(--text-muted)">&bull; Memory &amp; logs preserved</text>
-            <text x="16" y="82" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--git-base)">Idle resources released</text>
+            <text x="16" y="48" font-family="sans-serif" font-size="8.5" fill="var(--text-muted)">&bull; Antigravity: <tspan font-family="monospace">manage_subagents(kill)</tspan></text>
+            <text x="16" y="66" font-family="sans-serif" font-size="8.5" fill="var(--text-muted)">&bull; Claude Code: <tspan font-family="monospace">core.py stop-team</tspan></text>
+            <text x="16" y="84" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--git-base)">Idle resources released &middot; 0 state loss</text>
           </g>
 
           <!-- Curve revival from 3 back to 2 -->
-          <path d="M 795,125 C 795,150 470,150 470,135" fill="none" stroke="var(--git-base)" stroke-width="2" stroke-dasharray="4" marker-end="url(#revive-arrow)" />
-          <text x="630" y="152" text-anchor="middle" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--git-base)">Instant zero-loss re-activation with preserved memory</text>
+          <path d="M 805,135 C 805,165 475,165 475,145" fill="none" stroke="var(--git-base)" stroke-width="2" stroke-dasharray="4" marker-end="url(#revive-arrow)" />
+          <text x="640" y="166" text-anchor="middle" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--git-base)">Zero-loss re-activation with preserved memory and board logs</text>
         </svg>
       </div>
     </div>
 
+    <!-- Dual Lifecycle Steps -->
     <div class="pipeline-track">
       <div class="pipeline-stage">
-        <span class="stage-badge">1. Scaffold</span>
+        <span class="stage-badge agy">Antigravity Flow</span>
         <div class="stage-info">
-          <div class="stage-title"><code>python3 ultron/core/core.py create-team --slug &lt;slug&gt; --name &lt;name&gt; --mission &lt;mission&gt; [--parent &lt;parent&gt;]</code></div>
-          <div class="stage-desc">Scaffolds <code>ultron/hive/&lt;slug&gt;/</code>, writes <code>team.json</code> and team charter <code>AGENTS.md</code>, and creates the mandatory <code>lead</code> role.</div>
+          <div class="stage-title"><code>render-spawn &lt;slug&gt; --json</code> &rarr; Prime Invokes <code>define_subagent</code> &amp; <code>invoke_subagent</code> &rarr; <code>activate-team</code></div>
+          <div class="stage-desc">ULTRON PRIME executes spawn specs in the chat harness, then records conversation UUIDs. Stand-down uses <code>prepare-disable</code> &rarr; <code>manage_subagents(Action="kill")</code> &rarr; <code>disable-team</code>.</div>
         </div>
       </div>
 
       <div class="pipeline-stage">
-        <span class="stage-badge">2. Render Spawn</span>
+        <span class="stage-badge claude">Claude Code Flow</span>
         <div class="stage-info">
-          <div class="stage-title"><code>python3 ultron/core/core.py render-spawn &lt;slug&gt; --json</code></div>
-          <div class="stage-desc">Generates exact JSON payloads for Antigravity's <code>define_subagent</code> and <code>invoke_subagent</code>. Defaults subagent model to <code>flash</code> for token efficiency.</div>
-        </div>
-      </div>
-
-      <div class="pipeline-stage">
-        <span class="stage-badge">3. Spawn Harness</span>
-        <div class="stage-info">
-          <div class="stage-title">ULTRON PRIME Calls <code>define_subagent</code> &amp; <code>invoke_subagent</code></div>
-          <div class="stage-desc">Spawns background subagent processes. Antigravity returns live <code>conversationId</code> UUIDs for each role.</div>
-        </div>
-      </div>
-
-      <div class="pipeline-stage">
-        <span class="stage-badge">4. Activate</span>
-        <div class="stage-info">
-          <div class="stage-title"><code>python3 ultron/core/core.py activate-team &lt;slug&gt; --uuids '{...}'</code></div>
-          <div class="stage-desc">Binds live session UUIDs into gitignored <code>.runtime/sessions.json</code> and sets team status to <code>active</code>. Working tree stays clean.</div>
-        </div>
-      </div>
-
-      <div class="pipeline-stage">
-        <span class="stage-badge">5. Execute &amp; Verify</span>
-        <div class="stage-info">
-          <div class="stage-title">Task Dispatch &amp; Doorbell Execution</div>
-          <div class="stage-desc">ULTRON PRIME posts task thread and doorbells <code>&lt;team&gt;/lead</code>. The Lead delegates to flat specialist peers, reviews PRs/deliverables, and reports completion.</div>
-        </div>
-      </div>
-
-      <div class="pipeline-stage">
-        <span class="stage-badge kill">6. Prepare Disable</span>
-        <div class="stage-info">
-          <div class="stage-title"><code>python3 ultron/core/core.py prepare-disable &lt;slug&gt; [--cascade] --json</code></div>
-          <div class="stage-desc">Extracts active session UUIDs for termination. ULTRON PRIME calls Antigravity's <code>manage_subagents(Action="kill")</code> to release process resources.</div>
-        </div>
-      </div>
-
-      <div class="pipeline-stage">
-        <span class="stage-badge kill">7. Stand Down</span>
-        <div class="stage-info">
-          <div class="stage-title"><code>python3 ultron/core/core.py disable-team &lt;slug&gt; [--cascade]</code></div>
-          <div class="stage-desc">Marks team <code>disabled</code> in the registry. <strong>Zero loss:</strong> Charters, private workspaces, and JSONL thread logs remain intact on disk for immediate future re-activation!</div>
+          <div class="stage-title"><code>core.py spawn-team &lt;slug&gt;</code> &rarr; <code>core.py liveness</code> &rarr; <code>core.py stop-team &lt;slug&gt;</code></div>
+          <div class="stage-desc">CLI directly launches background workers via <code>claude --bg --dangerously-skip-permissions</code> in shared checkout. Liveness is monitored with <code>claude agents --json</code>, and teardown stops processes cleanly by session ID.</div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- Section 6: CLI Quick Reference -->
+  <!-- Section 7: CLI Quick Reference -->
   <section id="cli" class="section-card">
     <div class="section-header">
-      <h2 class="section-title">6. CLI Quick Reference (<code>ultron/core/core.py</code>)</h2>
-      <div class="section-sub">Standard commands for ULTRON PRIME, Team Leads, and Specialist Peers.</div>
+      <h2 class="section-title">7. CLI Quick Reference (<code>ultron/core/core.py</code>)</h2>
+      <div class="section-sub">Standard commands for ULTRON PRIME, Team Leads, Specialist Peers, and Multi-Harness Management.</div>
     </div>
 
     <!-- Tab navigation -->
     <div class="tab-strip">
       <button class="tab-btn active" onclick="switchTab(event, 'tab-prime')">👑 ULTRON PRIME</button>
+      <button class="tab-btn" onclick="switchTab(event, 'tab-harness')">🔌 Harness Management</button>
       <button class="tab-btn" onclick="switchTab(event, 'tab-leads')">🔷 Team Leads</button>
       <button class="tab-btn" onclick="switchTab(event, 'tab-specialists')">⚪ Specialist Peers</button>
       <button class="tab-btn" onclick="switchTab(event, 'tab-board')">📋 Board &amp; Search</button>
@@ -1576,80 +1680,81 @@
     <!-- Tab: ULTRON PRIME -->
     <div id="tab-prime" class="tab-panel active">
       <div class="cli-block">
-        <span class="cli-comment"># 1. Register PRIME session on boot</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">register-prime</span> <span class="cli-flag">--id</span> <span class="cli-val">"&lt;conversation-uuid&gt;"</span><br><br>
+        <span class="cli-comment"># 1. Register PRIME session on boot (auto-detects harness)</span><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">register-prime</span> <span class="cli-flag">--id</span> <span class="cli-val">"&lt;session-uuid&gt;"</span><br><br>
         <span class="cli-comment"># 2. Inspect full N-layer org tree, integrity &amp; stats</span><br>
         <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">org-tree</span><br>
         <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">verify</span><br>
         <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">stats</span><br><br>
-        <span class="cli-comment"># 3. Create Layer 1 and nested Layer 2..N teams</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">create-team</span> <span class="cli-flag">--slug</span> <span class="cli-val">"docs"</span> <span class="cli-flag">--name</span> <span class="cli-val">"Technical Documentation"</span> <span class="cli-flag">--mission</span> <span class="cli-val">"Public architecture docs"</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">create-team</span> <span class="cli-flag">--slug</span> <span class="cli-val">"web-viz"</span> <span class="cli-flag">--parent</span> <span class="cli-val">"docs"</span> <span class="cli-flag">--name</span> <span class="cli-val">"Visual Architecture Showcase"</span> <span class="cli-flag">--mission</span> <span class="cli-val">"Interactive HTML architecture showcase and visual diagrams"</span><br><br>
-        <span class="cli-comment"># 4. Add flat specialist roles</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">add-role</span> <span class="cli-flag">--team</span> <span class="cli-val">"web-viz"</span> <span class="cli-flag">--role</span> <span class="cli-val">"designer"</span> <span class="cli-flag">--title</span> <span class="cli-val">"HTML Specialist"</span> <span class="cli-flag">--responsibilities</span> <span class="cli-val">"Build responsive architecture showcase"</span><br><br>
-        <span class="cli-comment"># 5. Render spawn specs &amp; activate spawned sessions</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">render-spawn</span> <span class="cli-val">"web-viz"</span> <span class="cli-flag">--json</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">activate-team</span> <span class="cli-val">"web-viz"</span> <span class="cli-flag">--uuids</span> <span class="cli-val">'{"lead":"&lt;lead-uuid&gt;","designer":"&lt;designer-uuid&gt;"}'</span><br><br>
-        <span class="cli-comment"># 6. Stand down idle teams cleanly (resource conservation)</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">prepare-disable</span> <span class="cli-val">"web-viz"</span> <span class="cli-flag">--json</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">disable-team</span> <span class="cli-val">"web-viz"</span>
+        <span class="cli-comment"># 3. Create teams and assign harnesses</span><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">create-team</span> <span class="cli-flag">--slug</span> <span class="cli-val">"feature-export"</span> <span class="cli-flag">--name</span> <span class="cli-val">"Export Pod"</span> <span class="cli-flag">--mission</span> <span class="cli-val">"Export CLI"</span><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">create-team</span> <span class="cli-flag">--slug</span> <span class="cli-val">"docs"</span> <span class="cli-flag">--name</span> <span class="cli-val">"Docs"</span> <span class="cli-flag">--mission</span> <span class="cli-val">"Architecture Docs"</span> <span class="cli-flag">--harness</span> <span class="cli-val">"claude-code"</span><br><br>
+        <span class="cli-comment"># 4. Check active process health across all harnesses</span><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">liveness</span><br><br>
+        <span class="cli-comment"># 5. Clean teardown of teams</span><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">stop-team</span> <span class="cli-val">"docs"</span>
+      </div>
+    </div>
+
+    <!-- Tab: Harness Management -->
+    <div id="tab-harness" class="tab-panel">
+      <div class="cli-block">
+        <span class="cli-comment"># Set or clear team execution harness</span><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">set-harness</span> <span class="cli-val">"docs"</span> <span class="cli-val">"claude-code"</span><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">set-harness</span> <span class="cli-val">"docs"</span>  <span class="cli-comment"># clears to follow Prime's harness</span><br><br>
+        <span class="cli-comment"># Launch team on its configured harness</span><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">spawn-team</span> <span class="cli-val">"docs"</span> <span class="cli-flag">--brief</span> <span class="cli-val">"Mission brief"</span><br><br>
+        <span class="cli-comment"># Ring reactive doorbell to an agent across harnesses</span><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">doorbell</span> <span class="cli-val">"docs/lead"</span> <span class="cli-val">"Task assigned on thread t-xxx"</span> <span class="cli-flag">--from</span> <span class="cli-val">"ultron-prime"</span><br><br>
+        <span class="cli-comment"># Verify session liveness</span><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">liveness</span> <span class="cli-val">"docs"</span>
       </div>
     </div>
 
     <!-- Tab: Team Leads -->
     <div id="tab-leads" class="tab-panel">
       <div class="cli-block">
-        <span class="cli-comment"># 1. Startup hydration: verify contacts &amp; team threads</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">contacts</span> <span class="cli-val">web-viz/lead</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">list</span> <span class="cli-flag">--as</span> <span class="cli-val">web-viz/lead</span> <span class="cli-flag">--visibility</span> <span class="cli-val">team</span><br><br>
-        <span class="cli-comment"># 2. Assign tasks to specialists via new thread</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">new-thread</span> <span class="cli-flag">--author</span> <span class="cli-val">web-viz/lead</span> <span class="cli-flag">--visibility</span> <span class="cli-val">team</span> <span class="cli-flag">--category</span> <span class="cli-val">task</span> <span class="cli-flag">--title</span> <span class="cli-val">"Design Architecture HTML"</span> <span class="cli-flag">--content</span> <span class="cli-val">"Build ultron-architecture.html..."</span><br><br>
-        <span class="cli-comment"># 3. Resolve specialist UUID &amp; wake via doorbell</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">whois</span> <span class="cli-val">web-viz/designer</span> <span class="cli-flag">--id-only</span><br>
-        <span class="cli-comment"># Wake designer via Antigravity: send_message(Recipient="&lt;designer-uuid&gt;", Message="Doorbell: Assigned Thread...")</span><br><br>
-        <span class="cli-comment"># 4. Cross-layer handoff / escalation to parent lead (docs/lead)</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">new-thread</span> <span class="cli-flag">--author</span> <span class="cli-val">web-viz/lead</span> <span class="cli-flag">--visibility</span> <span class="cli-val">team</span> <span class="cli-flag">--with-team</span> <span class="cli-val">docs</span> <span class="cli-flag">--category</span> <span class="cli-val">task</span> <span class="cli-flag">--title</span> <span class="cli-val">"Visual Showcase Ready for Review"</span> <span class="cli-flag">--content</span> <span class="cli-val">"Visual showcase implementation complete and verified. Ready for docs/lead review."</span>
+        <span class="cli-comment"># 1. Startup hydration</span><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">list</span> <span class="cli-flag">--as</span> <span class="cli-val">"docs/lead"</span> <span class="cli-flag">--visibility</span> <span class="cli-val">team</span><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">contacts</span> <span class="cli-val">"docs/lead"</span><br><br>
+        <span class="cli-comment"># 2. Assign tasks on team board and ring teammate doorbell</span><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">new-thread</span> <span class="cli-flag">--author</span> <span class="cli-val">"docs/lead"</span> <span class="cli-flag">--visibility</span> <span class="cli-val">team</span> <span class="cli-flag">--title</span> <span class="cli-val">"Task: Update Showcase"</span> <span class="cli-flag">--category</span> <span class="cli-val">task</span> <span class="cli-flag">--content</span> <span class="cli-val">"..."</span><br><br>
+        <span class="cli-comment"># 3. Cross-team collaboration with child lead</span><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">new-thread</span> <span class="cli-flag">--author</span> <span class="cli-val">"docs/lead"</span> <span class="cli-flag">--visibility</span> <span class="cli-val">team</span> <span class="cli-flag">--team</span> <span class="cli-val">docs</span> <span class="cli-flag">--with-team</span> <span class="cli-val">web-viz</span> <span class="cli-flag">--title</span> <span class="cli-val">"Showcase Task"</span> <span class="cli-flag">--content</span> <span class="cli-val">"..."</span><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">doorbell</span> <span class="cli-val">"web-viz/lead"</span> <span class="cli-val">"Doorbell: Posted cross-team task"</span> <span class="cli-flag">--from</span> <span class="cli-val">"docs/lead"</span>
       </div>
     </div>
 
     <!-- Tab: Specialist Peers -->
     <div id="tab-specialists" class="tab-panel">
       <div class="cli-block">
-        <span class="cli-comment"># 1. Startup hydration: check personal memory &amp; team tasks</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">list</span> <span class="cli-flag">--as</span> <span class="cli-val">web-viz/designer</span> <span class="cli-flag">--visibility</span> <span class="cli-val">personal</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">list</span> <span class="cli-flag">--as</span> <span class="cli-val">web-viz/designer</span> <span class="cli-flag">--visibility</span> <span class="cli-val">team</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">contacts</span> <span class="cli-val">web-viz/designer</span><br><br>
-        <span class="cli-comment"># 2. View assigned task thread (accepts full ID or short hex suffix)</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">view</span> <span class="cli-val">81f92de1</span> <span class="cli-flag">--as</span> <span class="cli-val">web-viz/designer</span><br><br>
-        <span class="cli-comment"># 3. Post completion reply to team lead</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">reply</span> <span class="cli-val">81f92de1</span> <span class="cli-flag">--author</span> <span class="cli-val">web-viz/designer</span> <span class="cli-flag">--content</span> <span class="cli-val">"Showcase implementation complete. Verified self-contained HTML."</span><br><br>
-        <span class="cli-comment"># 4. Record personal reusable lesson (survives session restarts)</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">new-thread</span> <span class="cli-flag">--author</span> <span class="cli-val">web-viz/designer</span> <span class="cli-flag">--visibility</span> <span class="cli-val">personal</span> <span class="cli-flag">--category</span> <span class="cli-val">lesson</span> <span class="cli-flag">--title</span> <span class="cli-val">"SVG Dark Mode Theme Tips"</span> <span class="cli-flag">--content</span> <span class="cli-val">"Use var(--border) and var(--bg-surface) in SVG stroke/fill."</span>
+        <span class="cli-comment"># 1. Startup hydration</span><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">list</span> <span class="cli-flag">--as</span> <span class="cli-val">"feature-export/dev"</span> <span class="cli-flag">--visibility</span> <span class="cli-val">team</span><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">contacts</span> <span class="cli-val">"feature-export/dev"</span><br><br>
+        <span class="cli-comment"># 2. Collaborate directly with teammates on team threads</span><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">reply</span> <span class="cli-val">"t-20261108-7887d497"</span> <span class="cli-flag">--author</span> <span class="cli-val">"feature-export/dev"</span> <span class="cli-flag">--content</span> <span class="cli-val">"Implementation complete, tests green."</span><br><br>
+        <span class="cli-comment"># 3. Log reusable role lesson</span><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">new-thread</span> <span class="cli-flag">--author</span> <span class="cli-val">"feature-export/dev"</span> <span class="cli-flag">--visibility</span> <span class="cli-val">personal</span> <span class="cli-flag">--title</span> <span class="cli-val">"Mocking Subprocesses"</span> <span class="cli-flag">--category</span> <span class="cli-val">lesson</span> <span class="cli-flag">--content</span> <span class="cli-val">"..."</span>
       </div>
     </div>
 
     <!-- Tab: Board & Search -->
     <div id="tab-board" class="tab-panel">
       <div class="cli-block">
-        <span class="cli-comment"># 1. Search visible threads across all authorized scopes</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">search</span> <span class="cli-val">"architecture"</span> <span class="cli-flag">--as</span> <span class="cli-val">web-viz/designer</span><br><br>
-        <span class="cli-comment"># 2. Filter thread lists by status or category</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">list</span> <span class="cli-flag">--as</span> <span class="cli-val">web-viz/lead</span> <span class="cli-flag">--status</span> <span class="cli-val">open</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">list</span> <span class="cli-flag">--as</span> <span class="cli-val">web-viz/lead</span> <span class="cli-flag">--category</span> <span class="cli-val">task</span><br><br>
-        <span class="cli-comment"># 3. Update thread status (open -> resolved / blocked / closed)</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">set-status</span> <span class="cli-val">81f92de1</span> <span class="cli-val">resolved</span> <span class="cli-flag">--as</span> <span class="cli-val">web-viz/lead</span><br><br>
-        <span class="cli-comment"># 4. Reclassify thread scope (ULTRON PRIME only)</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">reclassify</span> <span class="cli-val">81f92de1</span> <span class="cli-flag">--as</span> <span class="cli-val">ultron-prime</span> <span class="cli-flag">--visibility</span> <span class="cli-val">global</span>
+        <span class="cli-comment"># Search visible threads by query</span><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">search</span> <span class="cli-val">"doorbell"</span> <span class="cli-flag">--as</span> <span class="cli-val">"ultron-prime"</span><br><br>
+        <span class="cli-comment"># View full thread transcript</span><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">view</span> <span class="cli-val">"t-20261108-7887d497"</span> <span class="cli-flag">--as</span> <span class="cli-val">"ultron-prime"</span><br><br>
+        <span class="cli-comment"># Export thread to markdown</span><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">export-thread</span> <span class="cli-val">"t-20261108-7887d497"</span> <span class="cli-flag">--as</span> <span class="cli-val">"ultron-prime"</span>
       </div>
     </div>
-
   </section>
 
   <!-- Footer -->
   <footer>
-    <div><strong>ULTRON</strong> &middot; Universal Layered Team and Role Orchestration Network</div>
-    <div class="footer-sub">Pure Git-Native Multi-Agent Coordination Engine &middot; Self-Contained Visual Architecture Showcase</div>
-    <div class="footer-sub" style="margin-top:6px;">Companion References: <a href="docs/ARCHITECTURE.md" style="color:var(--team-base); text-decoration:underline;"><code>docs/ARCHITECTURE.md</code></a> &middot; <a href="README.md" style="color:var(--team-base); text-decoration:underline;"><code>README.md</code></a> &middot; <a href="ultron/core/README.md" style="color:var(--team-base); text-decoration:underline;"><code>ultron/core/README.md</code></a></div>
+    <div>ULTRON Architecture Showcase v2.0 &middot; Universal Layered Team &amp; Role Orchestration Network</div>
+    <div class="footer-sub">Verified multi-harness implementation on Google Antigravity &amp; Anthropic Claude Code &middot; Pure Git-native storage &middot; Zero-poll reactive doorbells</div>
   </footer>
 
 </div>
