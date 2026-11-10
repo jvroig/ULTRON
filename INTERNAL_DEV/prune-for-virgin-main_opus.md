@@ -19,10 +19,9 @@ ship. Gemini executes; Opus catalogued. Checked against `main` @ `4c4b4a4`.
   `ultron-architecture.html` draws `docs`/`web-viz`/`feature-export` in the hive diagram. Both are illustrations
   and need no live team.
 
-## Commander decides
+## Decided (Commander, 14:20)
 
-- `INTERNAL_DEV/`: our dev channel, which is not product. Options: delete it from `main` (history keeps it), or
-  keep it only on `claude-code-test`.
+- `INTERNAL_DEV/` stays on `main` as it is. It is inert docs that ULTRON never reads, so it doesn't change a fresh clone.
 
 ## Checks
 
