@@ -1,7 +1,12 @@
 # ULTRON Technical Architecture Specification
 
 **Universal Layered Team and Role Orchestration Network (ULTRON)**  
-*Document Version:* 1.0.0 · *Status:* As-Implemented Specification · *Storage Engine:* Pure Git-Native (Zero SQLite)
+*Document Version:* 2.0.0 · *Status:* As-Implemented Specification · *Storage Engine:* Pure Git-Native (Zero SQLite)
+
+**New in v2:** one product, many harnesses. The core names no harness; each harness is an adapter
+(§8). Teams in one hive can run on different harnesses (mixed hives), woken across harnesses by a
+shell doorbell (§7.2). Also new: `spawn-team` / `stop-team` / `liveness` (§5), neutral model tiers,
+and a role guard on lifecycle commands (§2.3). v1 described Antigravity only; it is in git history.
 
 ---
 
@@ -19,6 +24,7 @@ Autonomous agent systems operating in complex software engineering repositories 
 - **Log-Structured Git-Native Storage:** Zero SQLite. Git-tracked JSON manifests (`team.json`, `role.json`), gitignored ephemeral session bindings (`.runtime/sessions.json`), and append-only JSONL thread event logs (`ultron/core/threads/*.jsonl`) configured with `*.jsonl merge=union` for conflict-free cross-branch merges.
 - **Strict Three-Tier Visibility:** Scoped visibility (`personal`, `team` / `--with-team`, `global`) enforced with mandatory caller identification (`--as <agent_id>`).
 - **Reactive Doorbell Protocol:** Event-driven waking (`whois --id-only`, then the harness's messaging tool) completely eliminating polling loops.
+- **Harness-Agnostic Core:** Registry, board, lifecycle state and role context are harness-neutral. Each harness (Claude Code, Antigravity) plugs in as an adapter, and one hive can mix them.
 
 ---
 
@@ -40,6 +46,7 @@ Autonomous agent systems operating in complex software engineering repositories 
                       v (Layer 1 Delegation)                      v (Layer 1 Delegation)
             +-------------------+                       +-------------------+
             |    Team A: Lead   |                       |    Team B: Lead   |
+            |   [claude-code]   |                       |   [antigravity]   |
             +---------+---------+                       +---------+---------+
                       |                                           |
      +----------------+----------------+                 +--------+--------+
@@ -55,6 +62,8 @@ Autonomous agent systems operating in complex software engineering repositories 
               | Team A1: Worker |
               +-----------------+
 ```
+
+`[harness]` marks a mixed hive: each team runs on one harness; teams under one Prime may differ (§8.4).
 
 ### 2.1 The Tripartite Role Architecture
 
@@ -127,6 +136,7 @@ Tracks the persistent organizational metadata for a team.
 {
   "created_at": "2026-11-07T10:08:13.469120Z",
   "default_model": "medium",
+  "harness": "claude-code",
   "hive_path": "ultron/hive/docs",
   "layer": 1,
   "mission": "Author and audit ULTRON's public-ready README.md, deep-dive docs/ARCHITECTURE.md, and visual HTML architecture showcase.",
@@ -145,6 +155,7 @@ Tracks the persistent organizational metadata for a team.
 - `layer` *(integer, required)*: Depth in the organizational hierarchy (1 for top-level teams reporting to Prime; `parent.layer + 1` for subteams).
 - `parent_team` *(string | null, required)*: Slug of parent team, or `null` if attached to `ultron-prime`.
 - `default_model` *(string, required)*: Default model tier (`small`, `medium`, `large`, `inherit`).
+- `harness` *(string, optional)*: Harness the team runs on (`claude-code`, `antigravity`). Absent ⇒ Prime's harness. Set by `create-team --harness` or `set-harness` (team must be stopped).
 - `workspace_mode` *(string, required)*: Session workspace isolation (`inherit`, `share`, `branch`). `branch` is not supported on Claude Code yet.
 - `hive_path` *(string, required)*: Relative POSIX directory path from repo root.
 - `created_at` *(string, ISO-8601 UTC)*: Immutable timestamp of team creation.
@@ -218,6 +229,11 @@ Located at: `ultron/core/.runtime/sessions.json`
 - `conversation_id`: the role's doorbell address (a Claude Code session name, or an Antigravity conversation UUID).
 - `session_id`: the harness's handle for stopping the session (Claude Code `--bg` ID); absent on Antigravity.
 - `harness`: which adapter bound the session.
+
+#### Generated Role Files (Claude Code)
+`spawn-team` writes two gitignored files into each Claude Code role folder:
+- `role_context.generated.md`: identity, routing, CLI path and startup hydration, rendered from `ultron/core/templates/role_context.md.tmpl`. The role's `AGENTS.md` imports it.
+- `.claude/settings.json`: `worktree.bgIsolation: none` (roles edit the shared checkout), deny rules on `Agent` and `claude` (§2.3), and `env` setting the role's `ULTRON_AGENT_ID` and `ULTRON_HARNESS`.
 
 #### Clean Git Tree Separation:
 Because live harness session addresses change whenever an agent session is terminated and respawned, storing session bindings in `team.json` or `role.json` would cause continuous, noisy diffs in `git status`. By isolating session bindings inside gitignored `.runtime/sessions.json`:
@@ -451,6 +467,7 @@ Standing down idle teams conserves harness memory and prevents unexpected backgr
    - **Planning:** `prepare-disable` validates dependencies and lists the sessions to stop.
    - **Termination:** on Claude Code, `stop-team` runs `claude stop <session_id>` per role; on Antigravity it returns a plan for ULTRON PRIME to kill the sessions with the harness tool.
    - **Deregistration:** `disable-team` sets `status="disabled"` and clears the bindings (automatic on Claude Code; the last plan step on Antigravity).
+   - **Harness:** `stop-team` uses the harness each role was activated on. A `--cascade` stop over teams on more than one harness is refused; stop the child teams first.
 4. **Zero Data Loss:** Manifests, team charters, scratch directories, and message board histories remain intact on disk. Re-activation via `spawn-team` instantly restores full operational context.
 
 ### 5.4 Ghost Session Purging & Self-Healing Across Git Checkouts
@@ -461,6 +478,15 @@ If a developer switches Git branches or runs `git checkout`, an entire team dire
   ```
 - **Self-Healing Pruning:** `python3 ultron/core/core.py verify --prune-orphans` purges orphan session keys from `sessions.json`.
 - **Automatic Scaffolding Cleanup:** Calling `create_team` or `add_role` automatically sweeps and prunes any pre-existing stale session records matching the target slug prior to initialization.
+
+### 5.5 Spawning (`spawn-team <team> [--brief]`)
+1. The harness is the team's `harness`, else Prime's (§8.1).
+2. Refused if the team is active, its parent is disabled, or Prime's harness cannot launch the team's harness (only Claude Code launches from the CLI; an Antigravity team needs an Antigravity Prime).
+3. **Claude Code:** preflight (no `CLAUDE.md`/`CLAUDE.local.md` at or above the role folder; charter contains the role-context import; `workspace_mode` is not `branch`), write the generated role files (§3.4), run `claude --bg` per role in its role folder (lead first), then `activate-team` with session names and IDs. A failed launch stops the roles already started.
+4. **Antigravity:** returns a plan (`define_subagent` / `invoke_subagent` payloads); ULTRON PRIME carries it out and binds the conversation UUIDs with `activate-team`.
+
+### 5.6 Liveness (`liveness [team]`)
+Checks every active role's session against its harness. Claude Code: the recorded `session_id` must appear in `claude agents --json` with a `pid`; a missing one is `gone` and the command exits 1. Antigravity: returns a `manage_subagents(Action="list")` check for Prime. A `gone` role is restored with `stop-team`, then `spawn-team`. ULTRON PRIME's safety heartbeat runs it.
 
 ---
 
@@ -518,7 +544,7 @@ When Team Lead A delegates work to child Team Lead A1, using `--visibility team 
 - Information flows seamlessly across the hierarchy without creating noise on global channels.
 
 ### 6.5 Caller Identity Enforcement
-Board read commands (`list`, `view`, `search`) strictly require caller identity via `--as <agent_id>` (or `ULTRON_AGENT_ID`). Missing identity raises `PermissionError`. The `--all` flag bypasses visibility filtering and is strictly restricted to `ultron-prime`.
+Board read commands (`list`, `view`, `search`) strictly require caller identity via `--as <agent_id>` (or `ULTRON_AGENT_ID`, which each Claude Code role's settings set to its own id). Missing identity raises `PermissionError`. The `--all` flag bypasses visibility filtering and is strictly restricted to `ultron-prime`.
 
 ---
 
@@ -563,19 +589,62 @@ sequenceDiagram
     Prime->>User: Reports milestone completion
 ```
 
-### Doorbell Step-by-Step Rule:
+### 7.1 Doorbell Step-by-Step Rule
 1. **Write to Datastore:** Agent appends post or status change via `python3 ultron/core/core.py new-thread` or `reply`.
 2. **Resolve the Recipient's Doorbell Address:**
    ```bash
    python3 ultron/core/core.py whois <target_agent_id> --id-only
    ```
    *Note: If the target agent is disabled, this command writes nothing to stdout, outputs an error message to stderr, and exits with code 1, immediately informing the caller that the recipient must be activated first.*
-3. **Trigger Reactive Wakeup:** Send "Doorbell: ..." to the resolved address with the harness's messaging tool (`SendMessage` on Claude Code, `send_message` on Antigravity).
+3. **Trigger Reactive Wakeup:** Send "Doorbell: ..." to the resolved address with the harness's messaging tool (`SendMessage` on Claude Code, `send_message` on Antigravity). For an agent outside the sender's team, use the shell doorbell (§7.2).
 4. **End Turn Immediately:** Once the doorbell message is dispatched, the sending agent calls no more tools and yields execution. The harness wakes the recipient, and will subsequently resume the sender when a return doorbell arrives.
+
+### 7.2 Shell Doorbell (Cross-Harness)
+A harness's messaging tool reaches only its own sessions. `doorbell <agent_id> "<msg>" [--from <id>]` wakes an agent on any harness from a shell, using the harness recorded for that agent:
+
+| Target harness | Delivery |
+|---|---|
+| `claude-code` | Headless `claude -p --tools SendMessage --model haiku`, run outside the hive with no Claude session env. Succeeds only if it replies `sent`. One small model call, a few seconds. |
+| `antigravity` | `agentapi send-message <uuid> <msg>`, no shell. Daemon address and token come from the environment or the newest `~/.gemini/antigravity/daemon/hub_*.json` whose `pid` is alive, and are passed in env, never argv. |
+
+`--from` prefixes `Doorbell from <id>:` so the receiver knows the sender. Roles use their native tool inside their team and the shell doorbell for parent/child leads and `ultron-prime`, which may be on another harness. Both deliveries are machine-local.
 
 ---
 
-## 8. Verification & Test Suite Architecture
+## 8. Harness Layer
+
+### 8.1 Harness Selection
+`render-spawn`, `register-prime` and `activate-team` resolve the harness from `--harness`, then `$ULTRON_HARNESS`, then auto-detection (`$ANTIGRAVITY_AGENT` / `$ANTIGRAVITY_CONVERSATION_ID` ⇒ `antigravity`; `$CLAUDE_CODE_SESSION_ID` ⇒ `claude-code`), then the harness Prime registered with. `spawn-team` uses the team's `harness` first. `stop-team`, `liveness` and `doorbell` use the harness recorded per agent in `.runtime/sessions.json`.
+
+### 8.2 Adapter Contract
+`HarnessAdapter` subclasses in `ultron/core/core.py`, registered in `HARNESS_ADAPTERS`, supply:
+
+| Member | Purpose |
+|---|---|
+| `tools`, `model_for_tier` | Harness tool names; tier → model (Claude Code: haiku/sonnet/opus; Antigravity: flash_lite/flash/pro) |
+| `build_spec`, `charters_block`, `role_paths`, `core_cmd`, `target_repo_summary` | Render one role's launch spec and role context |
+| `spawn`, `stop` | Performed (Claude Code) or returned as a plan for Prime (Antigravity) |
+| `probe` | Liveness per role |
+| `doorbell_address`, `doorbell_call`, `shell_doorbell` | Native and shell doorbells |
+| `launches_from_cli` | Whether a Prime on another harness can spawn this harness's teams |
+
+`HarnessAdapterContractTestCase` fails any adapter that leaves a member to the base class.
+
+### 8.3 Role Context Delivery
+All harnesses render one template, `role_context.md.tmpl`, with harness placeholders.
+- **Antigravity:** the rendered context plus all inherited and role charters go into the subagent's `SystemPrompt`. The `@role_context.generated.md` import line is dropped from that copy.
+- **Claude Code:** charters arrive through the `AGENTS.md` chain (root → team → role), which Claude Code loads only if no `CLAUDE.md` / `CLAUDE.local.md` exists at or above the role folder. The role's `AGENTS.md` ends with `@role_context.generated.md`; imports resolve only in the working directory's own file, so the import must live there. Reading files in another folder can load that folder's `AGENTS.md`; role context and `ULTRON_PRIME.md` state that other agents' charters do not apply to the reader.
+- **Claude Code session env:** the first `claude --bg` starts a shared `claude daemon` whose environment later `--bg` sessions inherit. Per-role values therefore go in the role's `.claude/settings.json` `env`, never in the launch environment.
+
+### 8.4 Mixed Hives
+- Each team runs on one harness; teams under one Prime may differ (`create-team --harness`, `set-harness`).
+- Prime spawns a team on another harness only if that harness launches from the CLI (today: Claude Code).
+- Cross-team doorbells use the shell doorbell (§7.2), so all harnesses must run on one machine.
+- `liveness` probes each harness separately; `stop-team --cascade` refuses a subtree spanning harnesses.
+
+---
+
+## 9. Verification & Test Suite Architecture
 
 The ULTRON Core engine includes a comprehensive, automated test suite located at [`tests/test_ultron_core.py`](../tests/test_ultron_core.py).
 
@@ -590,6 +659,10 @@ The ULTRON Core engine includes a comprehensive, automated test suite located at
 8. **Real Git Union Merging (`test_real_git_branch_union_merge_conflict_free`):**
    Initializes a real Git repository, creates two divergent branches (`branch-a` and `branch-b`), concurrently appends replies and status changes to the *exact same* thread file, and executes `git merge`. Asserts zero merge conflicts, 100% preservation of posts, and deterministic status resolution.
 9. **Ghost Session Purging:** Simulates external branch checkouts deleting Hive folders and validates fail-loud detection and `--prune-orphans` healing.
+10. **Golden Spawn Output:** `render-spawn` output for each harness must match `tests/golden/render_spawn_<harness>.json` byte for byte.
+11. **Adapter Contract:** every adapter maps every tier, implements the full contract, reports identical role identity fields, and leaks no other harness's tool names.
+12. **Claude Code Lifecycle (fake `claude` binary):** spawn/stop/liveness, launch rollback, preflight refusals, per-role settings env, role guard on lifecycle commands.
+13. **Mixed Hives:** per-team harness, cross-harness spawn rules, shell doorbells for both harnesses (fake `agentapi` with live and stale daemon files), cascade refusal across harnesses.
 
 Run the test suite anytime:
 ```bash
@@ -598,9 +671,6 @@ python3 -W error -m unittest discover -s tests -v
 
 ---
 
-## 9. Extensibility & Portability Guide
+## 10. Extensibility & Portability Guide
 
-The core is harness-neutral; each harness is an adapter (`HarnessAdapter` in `ultron/core/core.py`).
-[`HARNESSES.md`](HARNESSES.md) covers harness selection, per-harness actions and requirements, and
-the adapter contract for adding a harness. Because the organizational graph, charters and threads
-live in Git, adding a harness requires no schema translation.
+Adding a harness is one adapter (§8.2) plus its foreign tool names in `HarnessAdapterContractTestCase`. A harness qualifies only if a session can be woken from outside (§7.2); ULTRON agents never poll. [`HARNESSES.md`](HARNESSES.md) is the operator's per-harness reference. Because the organizational graph, charters and threads live in Git, a new harness needs no schema translation.
