@@ -8,6 +8,8 @@ short-ID resolution, visibility isolation, authorization, and CLI contracts.
 
 from __future__ import annotations
 
+from contextlib import redirect_stderr, redirect_stdout
+import io
 import json
 import os
 from pathlib import Path
@@ -410,7 +412,7 @@ class UltronCoreTestCase(unittest.TestCase):
                 tid, visibility="personal", owner_agent="ghost-team/coder", show_all=True
             )
 
-    def test_punctuation_and_multitoken_search_plus_contacts_warning(self) -> None:
+    def test_punctuation_and_multitoken_search_plus_directory_warning(self) -> None:
         self.core.register_prime("uuid-prime-live")
         self.core.create_team(slug="parent-t", name="Parent", mission="Parent")
         self.core.create_team(
@@ -418,9 +420,10 @@ class UltronCoreTestCase(unittest.TestCase):
         )
 
         self.core.activate_team("child-t", {"lead": "uuid-child"}, allow_detached=True)
-        contacts = self.core.get_contacts("child-t/lead")
-        self.assertTrue(contacts["parent_disabled_warning"])
-        self.assertEqual(contacts["prime_fallback"]["conversation_id"], "uuid-prime-live")
+        dir_entry = self.core.directory("child-t/lead")
+        self.assertTrue(dir_entry["superior_disabled"])
+        self.assertTrue(dir_entry["parent_disabled_warning"])
+        self.assertEqual(dir_entry["prime_fallback"]["conversation_id"], "uuid-prime-live")
 
         self.core.create_thread(
             title="JSON Config Syntax",
@@ -537,12 +540,13 @@ class UltronCoreTestCase(unittest.TestCase):
         assert surviving is not None
         self.assertEqual(surviving["title"], "Persistent Knowledge")
 
-    def test_tier2_audit_regressions_ghost_sessions_partial_and_contacts(self) -> None:
-        # 1. Layer-1 lead contacts before register-prime must warn parent_disabled_warning=True
+    def test_tier2_audit_regressions_ghost_sessions_partial_and_directory(self) -> None:
+        # 1. Layer-1 lead directory before register-prime must warn superior_disabled=True
         self.core.create_team(slug="ghost", name="Ghost Team", mission="Test ghost sessions")
         self.core.add_role("ghost", "coder", "Coder", "Write code")
-        c_unreg = self.core.get_contacts("ghost/lead")
-        self.assertIsNone(c_unreg["reports_to"])
+        c_unreg = self.core.directory("ghost/lead")
+        self.assertEqual(c_unreg["superior"], "ultron-prime")
+        self.assertTrue(c_unreg["superior_disabled"])
         self.assertTrue(c_unreg["parent_disabled_warning"])
 
         # 2. activate_team --partial MUST still reject inactive lead unless --allow-detached
@@ -716,12 +720,13 @@ class UltronCoreTestCase(unittest.TestCase):
             ["alpha-code/lead", "alpha-code/dev", "alpha-code/qa", "alpha-code/spec"],
         )
 
-        # Verify direct intra-team peer contacts
-        dev_contacts = self.core.get_contacts("alpha-code/dev")
-        self.assertTrue(dev_contacts["direct_peers_allowed"])
+        # Verify direct intra-team peer discovery via directory
+        dev_dir = self.core.directory("alpha-code/dev")
+        self.assertEqual(dev_dir["superior"], "alpha-code/lead")
+        team_members = self.core.directory(team_slug="alpha-code", include_all=True)
         self.assertEqual(
-            [p["agent_id"] for p in dev_contacts["team_peers"]],
-            ["alpha-code/lead", "alpha-code/qa", "alpha-code/spec"],
+            [m["agent_id"] for m in team_members],
+            ["alpha-code/lead", "alpha-code/dev", "alpha-code/qa", "alpha-code/spec"],
         )
 
         # Verify render-spawn includes blueprint workflow & role-specific protocols
@@ -1461,6 +1466,137 @@ class HarnessAdapterContractTestCase(unittest.TestCase):
                 with self.subTest(harness=adapter.name, method=method):
                     self.assertIsNot(getattr(type(adapter), method), getattr(HarnessAdapter, method))
             self.assertIsInstance(adapter.launches_from_cli, bool)
+
+
+class DirectoryAndBoardUseTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+        (self.root / "ultron" / "core" / "threads").mkdir(parents=True)
+        (self.root / "ultron" / "hive").mkdir(parents=True)
+        shutil.copytree(REPO_ROOT / "ultron" / "core" / "templates", self.root / "ultron" / "core" / "templates")
+        shutil.copytree(REPO_ROOT / "ultron" / "core" / "blueprints", self.root / "ultron" / "core" / "blueprints")
+        self.core = UltronCore(repo_root=self.root)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_directory_lists_a_team_created_after_spawn(self) -> None:
+        self.core.register_prime("uuid-prime")
+        self.core.create_team(slug="team-one", name="Team One", mission="First team")
+        self.core.activate_team("team-one", {"lead": "uuid-one"})
+
+        # Team one is spawned and active. Now create a second team.
+        self.core.create_team(slug="team-two", name="Team Two", mission="Second team created later")
+        self.core.activate_team("team-two", {"lead": "uuid-two"})
+
+        # Live directory lookup must find team-two immediately
+        entries = self.core.directory(no_probe=True)
+        agent_ids = [e["agent_id"] for e in entries]
+        self.assertIn("team-one/lead", agent_ids)
+        self.assertIn("team-two/lead", agent_ids)
+
+        entry_two = self.core.directory("team-two/lead", no_probe=True)
+        self.assertEqual(entry_two["team"], "team-two")
+        self.assertEqual(entry_two["mission"], "Second team created later")
+
+    def test_owns_matches_a_mission_and_charters(self) -> None:
+        self.core.register_prime("uuid-prime")
+        self.core.create_team(slug="data-eng", name="Data Engineering", mission="High throughput Postgres stream pipelines")
+        self.core.add_role("data-eng", "pipeline", "Stream Developer", "Kafka and Postgres CDC")
+        self.core.activate_team("data-eng", {"lead": "uuid-lead", "pipeline": "uuid-pipe"})
+
+        self.core.create_team(slug="web-ui", name="Web UI", mission="Frontend React dashboard")
+        self.core.activate_team("web-ui", {"lead": "uuid-web"})
+
+        # Matches team mission
+        matches_postgres = self.core.directory(owns="postgres", no_probe=True)
+        ids = [m["agent_id"] for m in matches_postgres]
+        self.assertIn("data-eng/lead", ids)
+        self.assertIn("data-eng/pipeline", ids)
+        self.assertNotIn("web-ui/lead", ids)
+
+        # Matches role responsibilities
+        matches_kafka = self.core.directory(owns="kafka", no_probe=True)
+        kafka_ids = [m["agent_id"] for m in matches_kafka]
+        self.assertEqual(kafka_ids, ["data-eng/pipeline"])
+
+        # No match
+        self.assertEqual(self.core.directory(owns="nonexistent-xyz", no_probe=True), [])
+
+    def test_disabled_superior_falls_back_to_prime(self) -> None:
+        self.core.register_prime("uuid-prime-live")
+        self.core.create_team(slug="parent-pod", name="Parent Pod", mission="Parent")
+        self.core.create_team(slug="child-pod", name="Child Pod", mission="Child", parent_team="parent-pod")
+        self.core.activate_team("child-pod", {"lead": "uuid-child"}, allow_detached=True)
+
+        entry = self.core.directory("child-pod/lead", no_probe=True)
+        self.assertEqual(entry["superior"], "parent-pod/lead")
+        self.assertTrue(entry["superior_disabled"])
+        self.assertTrue(entry["fallback_to_prime"])
+        self.assertEqual(entry["prime_fallback"]["conversation_id"], "uuid-prime-live")
+
+    def test_startup_step_reads_global_threads(self) -> None:
+        self.core.create_team(slug="sample", name="Sample", mission="Sample mission")
+        # Check rendered startup prompt across both harnesses
+        for harness in ("antigravity", "claude-code"):
+            specs = self.core.render_spawn("sample", harness=harness)
+            for sp in specs:
+                prompt_to_check = sp.get("role_context") or sp.get("define_subagent", {}).get("SystemPrompt", "")
+                self.assertIn("list --as sample/lead --visibility global --status open", prompt_to_check)
+                self.assertIn("directory sample/lead", prompt_to_check)
+
+    def test_set_campaign_is_prime_only(self) -> None:
+        from ultron.core.core import main, ROLE_ID_ENV
+        self.core.create_team(slug="camp-test", name="Campaign Test", mission="Mission")
+
+        # Prime sets campaign on
+        res = self.core.set_campaign("camp-test", "on")
+        self.assertEqual(res["campaign"], "active")
+        team = self.core.get_team("camp-test")
+        self.assertEqual(team["campaign"], "active")
+
+        # Prime sets campaign off
+        res_off = self.core.set_campaign("camp-test", "off")
+        self.assertEqual(res_off["campaign"], "off")
+
+        # Role attempting to run set-campaign via CLI must be rejected
+        old_env = os.environ.get(ROLE_ID_ENV)
+        try:
+            os.environ[ROLE_ID_ENV] = "camp-test/coder"
+            out = io.StringIO()
+            err = io.StringIO()
+            with redirect_stdout(out), redirect_stderr(err):
+                code = main(["--root", str(self.root), "set-campaign", "camp-test", "on"])
+            self.assertEqual(code, 1)
+            self.assertIn("is for ultron-prime only", err.getvalue())
+        finally:
+            if old_env is None:
+                os.environ.pop(ROLE_ID_ENV, None)
+            else:
+                os.environ[ROLE_ID_ENV] = old_env
+
+    def test_rendered_prompt_contains_no_other_agent_id(self) -> None:
+        self.core.create_team(slug="alpha", name="Alpha", mission="Alpha mission")
+        self.core.add_role("alpha", "coder", "Coder", "Code")
+        self.core.add_role("alpha", "reviewer", "Reviewer", "Audit", write_tools=False)
+        self.core.create_team(slug="sub", name="Sub", parent_team="alpha", mission="Child")
+        self.core.add_role("sub", "worker", "Worker", "Work")
+
+        specs = self.core.render_spawn("alpha", harness="claude-code")
+        spec_by_role = {s["role"]: s for s in specs}
+
+        # For lead: no member agent IDs ('alpha/coder', 'alpha/reviewer') and no child lead ('sub/lead')
+        lead_prompt = spec_by_role["lead"]["role_context"]
+        self.assertNotIn("alpha/coder", lead_prompt)
+        self.assertNotIn("alpha/reviewer", lead_prompt)
+        self.assertNotIn("sub/lead", lead_prompt)
+
+        # For coder: no peer specialist IDs ('alpha/reviewer') and no external team IDs ('sub/lead', 'sub/worker')
+        coder_prompt = spec_by_role["coder"]["role_context"]
+        self.assertNotIn("alpha/reviewer", coder_prompt)
+        self.assertNotIn("sub/lead", coder_prompt)
+        self.assertNotIn("sub/worker", coder_prompt)
 
 
 if __name__ == "__main__":

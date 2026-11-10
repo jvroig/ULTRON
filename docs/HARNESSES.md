@@ -23,8 +23,9 @@ delivery, mixed hives, shell doorbell) is in [ARCHITECTURE.md §7.2 and §8](ARC
   Code ignore every `AGENTS.md`. `spawn-team` refuses to launch if one exists.
 - **Prime runs with permissions bypassed**, like the roles. Messages between sessions in different
   permission modes are held for approval.
-- **Signed in:** every role and every Claude Code shell doorbell is a Claude call. Renew with
-  `claude auth login`, or use `claude setup-token` for unattended hives.
+- **Signed in:** every role and every Claude Code shell doorbell is a Claude call. `spawn-team`
+  validates login status via `claude auth status` and warns if login expiry is within 48 hours.
+  Renew with `claude auth login`, or use `claude setup-token` for unattended hives.
 - `workspace_mode: branch` is not supported yet.
 
 Sessions are named `ultron--<team>--<role>`; that name is the role's doorbell address.
@@ -33,6 +34,10 @@ Sessions are named `ultron--<team>--<role>`; that name is the role's doorbell ad
 
 - **Shell doorbell:** `agentapi` on `PATH` or at `~/.gemini/antigravity/bin/agentapi`, and a running
   Antigravity (a `~/.gemini/antigravity/daemon/hub_*.json` with a live `pid`).
+- **Liveness probing:** Shell-based probes (`core.py liveness`, `core.py directory`) report `unknown`
+  for Antigravity roles because `agentapi` does not expose a conversation/subagent listing command
+  (it only supports `get-conversation-metadata`, `new-conversation`, and `send-message`). Within an
+  Antigravity Prime conversation, live subagent status is inspected using `manage_subagents(Action="list")`.
 - An Antigravity team is spawned by an Antigravity Prime only.
 
 ## Mixed hives

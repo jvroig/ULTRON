@@ -71,7 +71,7 @@ CLAUDE_DOORBELL_MODEL = "haiku"
 ROLE_ID_ENV = "ULTRON_AGENT_ID"
 PRIME_ONLY_COMMANDS = frozenset({
     "activate-agent", "activate-team", "add-role", "create-team", "disable-agent", "disable-team",
-    "register-prime", "remove-team", "set-harness", "set-target-repo", "spawn-team", "stop-team",
+    "register-prime", "remove-team", "set-campaign", "set-harness", "set-target-repo", "spawn-team", "stop-team",
 })
 SUPPRESSING_MEMORY_FILES = ("CLAUDE.md", "CLAUDE.local.md")
 ROLE_CLAUDE_SETTINGS = {
@@ -248,6 +248,8 @@ class HarnessAdapter:
     def doorbell_address(self, ctx: Mapping[str, Any]) -> str:
         raise NotImplementedError
 
+    cron_tool: str = ""
+
     def doorbell_call(self) -> str:
         raise NotImplementedError
 
@@ -276,6 +278,7 @@ class HarnessAdapter:
                 "ROUTING_SUMMARY": self.routing_summary(core, ctx),
                 "DOORBELL_CALL": self.doorbell_call(),
                 "TOOL_DOORBELL": self.tools["doorbell"],
+                "CRON_TOOL": self.cron_tool,
                 "CHARTERS_BLOCK": self.charters_block(ctx),
             },
         )
@@ -295,6 +298,7 @@ class AntigravityAdapter(HarnessAdapter):
     name = "antigravity"
     tools = HARNESS_TOOLS["antigravity"]
     model_for_tier = ANTIGRAVITY_MODEL_FOR_TIER
+    cron_tool = "schedule"
 
     def spawn(self, core: "UltronCore", team: Mapping[str, Any], specs: List[Dict[str, Any]]) -> Dict[str, Any]:
         return {
@@ -410,7 +414,7 @@ class AntigravityAdapter(HarnessAdapter):
         initial_prompt = (
             f"Boot sequence for `{aid}` ({r['title']}):\n"
             f"1. Run your startup hydration commands (`list --as {aid} --visibility personal`, "
-            f"`list --as {aid} --visibility team`, and `contacts {aid}`).\n"
+            f"`list --as {aid} --visibility team`, `list --as {aid} --visibility global --status open`, and `directory {aid}`).\n"
         )
         if repo_abs:
             initial_prompt += (
@@ -456,6 +460,35 @@ class ClaudeCodeAdapter(HarnessAdapter):
     name = "claude-code"
     tools = HARNESS_TOOLS["claude-code"]
     model_for_tier = CLAUDE_MODEL_FOR_TIER
+    cron_tool = "CronCreate"
+
+    @staticmethod
+    def check_auth_expiry(claude_bin: str) -> None:
+        if os.environ.get("FAKE_CLAUDE_LOG"):
+            return
+        try:
+            res = subprocess.run([claude_bin, "auth", "status"], capture_output=True, text=True, timeout=10)
+            if res.returncode == 0 and res.stdout.strip():
+                data = json.loads(res.stdout)
+                if not data.get("loggedIn"):
+                    raise RuntimeError("Claude Code is not logged in. Renew with 'claude auth login' or use 'claude setup-token'.")
+                expires_at_str = data.get("loginExpiresAt")
+                if expires_at_str:
+                    from datetime import datetime, timezone
+                    exp_dt = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+                    now_dt = datetime.now(timezone.utc)
+                    remaining = (exp_dt - now_dt).total_seconds()
+                    if remaining < 48 * 3600:
+                        hours = max(0, int(remaining / 3600))
+                        print(
+                            f"[ULTRON Warning] Claude Code login expires soon ({hours}h remaining at {expires_at_str}). "
+                            f"Renew with 'claude auth login' or use 'claude setup-token' for unattended hives.",
+                            file=sys.stderr,
+                        )
+        except (RuntimeError, ValueError):
+            raise
+        except Exception:
+            pass
 
     @staticmethod
     def claude_bin() -> str:
@@ -531,6 +564,7 @@ class ClaudeCodeAdapter(HarnessAdapter):
         return {"harness": self.name, "agents": results, "next_steps": []}
 
     def spawn(self, core: "UltronCore", team: Mapping[str, Any], specs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        self.check_auth_expiry(self.claude_bin())
         if team["workspace_mode"] == "branch":
             raise ValueError(
                 f"Team '{team['slug']}' uses workspace_mode 'branch', which the claude-code harness does not support yet."
@@ -976,6 +1010,7 @@ class UltronCore:
 
             teams_by_slug[slug] = {
                 "blueprint": str(raw_t.get("blueprint", "")).strip(),
+                "campaign": str(raw_t.get("campaign", "off")).strip().lower() or "off",
                 "created_at": created_at,
                 "default_model": model,
                 "harness": team_harness,
@@ -1343,6 +1378,7 @@ class UltronCore:
 
             team_manifest: Dict[str, Any] = {
                 "blueprint": clean_bp,
+                "campaign": "off",
                 "created_at": iso,
                 "default_model": model,
                 "hive_path": hive_rel,
@@ -1675,76 +1711,179 @@ class UltronCore:
             return items
 
     # ------------------------------------------------------------------
-    # Lifecycle Operations: Contacts, Render-Spawn, Activate, Disable, Remove
+    # Lifecycle Operations: Directory, Render-Spawn, Activate, Disable, Remove
     # ------------------------------------------------------------------
 
-    def get_contacts(self, agent_id: str) -> Dict[str, Any]:
-        aid = normalize_agent_id(agent_id)
-        with self._lock(exclusive=False):
-            teams_by_slug, agents_by_id, _ = self._scan_state_unlocked()
-            agent = agents_by_id.get(aid)
-            if not agent and aid != PRIME_ID:
-                raise ValueError(f"Agent '{aid}' is not registered.")
+    def set_campaign(self, team_slug: str, state: str) -> Dict[str, Any]:
+        """Set team campaign mode ('active' or 'off') for safety cron activation."""
+        clean_team = validate_slug(team_slug, "team slug")
+        st = state.strip().lower()
+        if st in ("on", "active", "true", "1"):
+            target_state = "active"
+        elif st in ("off", "inactive", "false", "0"):
+            target_state = "off"
+        else:
+            raise ValueError(f"Invalid campaign state '{state}'. Expected 'on' or 'off'.")
 
-            prime_info = agents_by_id.get(PRIME_ID)
+        with self._lock(exclusive=True):
+            teams_by_slug, _, _ = self._scan_state_unlocked()
+            team_obj = teams_by_slug.get(clean_team)
+            if not team_obj:
+                raise ValueError(f"Team '{clean_team}' does not exist.")
+
+            manifest_path = self._abs_from_rel(team_obj["hive_path"]) / "team.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["campaign"] = target_state
+            manifest["updated_at"] = now_iso()
+            atomic_write_json(manifest_path, manifest)
+            teams_after, _, _ = self._scan_state_unlocked()
+            return teams_after[clean_team]
+
+    def directory(
+        self,
+        agent_id: Optional[str] = None,
+        team_slug: Optional[str] = None,
+        owns: Optional[str] = None,
+        include_all: bool = False,
+        no_probe: bool = False,
+    ) -> Any:
+        with self._lock(exclusive=False):
+            teams_by_slug, agents_by_id, sessions = self._scan_state_unlocked()
+
+        clean_aid = normalize_agent_id(agent_id) if agent_id else None
+        if clean_aid and clean_aid not in agents_by_id:
+            raise ValueError(f"Agent '{clean_aid}' is not registered.")
+
+        clean_team = validate_slug(team_slug, "team slug") if team_slug else None
+        clean_owns = owns.strip().lower() if owns else None
+
+        liveness_map: Dict[str, str] = {}
+        if not no_probe:
+            try:
+                probe_res = self.probe_liveness(team_slug=clean_team)
+                for a_id, p_info in probe_res.get("agents", {}).items():
+                    liveness_map[a_id] = p_info.get("state", "unknown")
+            except Exception:
+                pass
+
+        prime_info = agents_by_id.get(PRIME_ID)
+
+        results: List[Dict[str, Any]] = []
+
+        for aid, agent in agents_by_id.items():
+            t_slug = agent.get("team_slug")
+            team = teams_by_slug.get(t_slug) if t_slug else None
+
+            if clean_aid and aid != clean_aid:
+                continue
+            if clean_team and t_slug != clean_team:
+                continue
+            if not include_all and not clean_aid and agent.get("status") != "active":
+                continue
+
+            if clean_owns:
+                charter_texts = [
+                    agent.get("responsibilities", ""),
+                    agent.get("title", ""),
+                ]
+                if team:
+                    charter_texts.append(team.get("mission", ""))
+                    team_agents_f = self._abs_from_rel(team["hive_path"]) / "AGENTS.md"
+                    if team_agents_f.is_file():
+                        try:
+                            charter_texts.append(team_agents_f.read_text(encoding="utf-8"))
+                        except Exception:
+                            pass
+                role_path = agent.get("role_path")
+                if role_path:
+                    role_agents_f = self._abs_from_rel(role_path) / "AGENTS.md"
+                    if role_agents_f.is_file():
+                        try:
+                            charter_texts.append(role_agents_f.read_text(encoding="utf-8"))
+                        except Exception:
+                            pass
+
+                matched = any(clean_owns in txt.lower() for txt in charter_texts)
+                if not matched:
+                    continue
+
+            superior: Optional[str] = None
+            superior_status: Optional[str] = None
+            superior_disabled: bool = False
+            fallback_to_prime: bool = False
+            prime_fallback: Optional[Dict[str, Any]] = None
 
             if aid == PRIME_ID:
-                l1_leads = [
-                    agents_by_id[f"{t['slug']}/lead"]
-                    for t in sorted(teams_by_slug.values(), key=lambda x: x["slug"])
-                    if t["parent_team"] is None and f"{t['slug']}/lead" in agents_by_id
-                ]
-                return {
-                    "agent_id": PRIME_ID,
-                    "role": "prime",
-                    "reports_to": "user",
-                    "layer1_team_leads": l1_leads,
-                }
-
-            assert agent is not None
-            t_slug = agent["team_slug"]
-            team = teams_by_slug[t_slug]
-            layer = team["layer"]
-
-            if agent["role"] != "lead":
-                team_peers = [r for r in team["roles"] if r["agent_id"] != aid]
-                return {
-                    "agent_id": aid,
-                    "team_slug": t_slug,
-                    "layer": layer,
-                    "role": agent["role"],
-                    "reports_to": agents_by_id.get(f"{t_slug}/lead"),
-                    "direct_peers_allowed": True,
-                    "team_peers": team_peers,
-                    "note": (
-                        f"Collaborate directly with intra-team peers on '--visibility team --team {t_slug}' threads. "
-                        f"Escalate blockers and route all external communication strictly through your Team Lead ('{t_slug}/lead')."
-                    ),
-                }
-
-            if team["parent_team"]:
-                superior = agents_by_id.get(f"{team['parent_team']}/lead")
+                superior = "user"
+                superior_status = "active"
+                campaign = "off"
+            elif agent["role"] == "lead":
+                campaign = team.get("campaign", "off") if team else "off"
+                if team and team.get("parent_team"):
+                    parent_lead = f"{team['parent_team']}/lead"
+                    parent_agent = agents_by_id.get(parent_lead)
+                    superior = parent_lead
+                    superior_status = parent_agent.get("status") if parent_agent else "disabled"
+                    superior_disabled = bool(superior_status != "active")
+                    fallback_to_prime = superior_disabled
+                    prime_fallback = prime_info if fallback_to_prime else None
+                else:
+                    superior = PRIME_ID
+                    prime_status = prime_info.get("status") if prime_info else "disabled"
+                    superior_status = prime_status
+                    superior_disabled = bool(prime_status != "active")
+                    fallback_to_prime = False
+                    prime_fallback = prime_info if superior_disabled else None
             else:
-                superior = prime_info
+                campaign = team.get("campaign", "off") if team else "off"
+                lead_id = f"{t_slug}/lead"
+                lead_agent = agents_by_id.get(lead_id)
+                superior = lead_id
+                superior_status = lead_agent.get("status") if lead_agent else "disabled"
+                superior_disabled = bool(superior_status != "active")
+                fallback_to_prime = superior_disabled
+                prime_fallback = prime_info if fallback_to_prime else None
 
-            teammates = [r for r in team["roles"] if r["role"] != "lead"]
-            child_leads = [
-                agents_by_id[f"{ct['slug']}/lead"]
-                for ct in team["child_teams"]
-                if f"{ct['slug']}/lead" in agents_by_id
-            ]
-            parent_disabled = bool(superior is None or superior["status"] != "active")
-            return {
+            if agent.get("status") == "active":
+                if aid == PRIME_ID:
+                    running = "alive"
+                else:
+                    running = liveness_map.get(aid, "unknown")
+            else:
+                running = "gone"
+
+            entry = {
                 "agent_id": aid,
-                "team_slug": t_slug,
-                "layer": layer,
-                "role": "lead",
-                "reports_to": superior,
-                "parent_disabled_warning": parent_disabled,
-                "prime_fallback": prime_info if parent_disabled else None,
-                "team_members": teammates,
-                "child_team_leads": child_leads,
+                "team": t_slug or ("HQ" if aid == PRIME_ID else None),
+                "role": agent.get("role", "prime" if aid == PRIME_ID else "unknown"),
+                "title": agent.get("title", ""),
+                "harness": agent.get("harness", "") or (self.get_prime_harness() if aid == PRIME_ID else ""),
+                "status": agent.get("status", "disabled"),
+                "campaign": campaign,
+                "running": running,
+                "superior": superior,
+                "superior_status": superior_status,
+                "superior_disabled": superior_disabled,
+                "fallback_to_prime": fallback_to_prime,
+                "prime_fallback": prime_fallback,
+                "parent_disabled_warning": superior_disabled,
+                "mission": team.get("mission", "") if team else "",
+                "responsibilities": agent.get("responsibilities", ""),
             }
+            results.append(entry)
+
+        results.sort(
+            key=lambda r: (
+                0 if r["agent_id"] == PRIME_ID else 1,
+                r["team"] or "",
+                0 if r["role"] == "lead" else 1,
+                r["role"],
+            )
+        )
+
+        if clean_aid:
+            return results[0]
+        return results
 
     def render_spawn(
         self,
@@ -1790,9 +1929,6 @@ class UltronCore:
                 "\n\n".join(charter_blocks) if charter_blocks else "(No team charters found)"
             )
 
-            teammate_ids = [r["agent_id"] for r in team["roles"] if r["role"] != "lead"]
-            child_lead_ids = [f"{ct['slug']}/lead" for ct in team["child_teams"]]
-
         specs: List[Dict[str, Any]] = []
 
         for r in role_objs:
@@ -1808,39 +1944,18 @@ class UltronCore:
             )
 
             if r_slug == "lead":
-                superior_id = (
-                    f"{team['parent_team']}/lead" if team["parent_team"] else PRIME_ID
-                )
-                members_str = (
-                    ", ".join(f"`{m}`" for m in teammate_ids)
-                    if teammate_ids
-                    else "(none provisioned yet)"
-                )
-                children_str = (
-                    ", ".join(f"`{c}`" for c in child_lead_ids)
-                    if child_lead_ids
-                    else "(none)"
-                )
                 routing_summary = (
                     f"- **Role Type:** Team Leader (`{aid}`)\n"
-                    f"- **Report & Escalate UP to:** `{superior_id}`\n"
-                    f"- **Orchestrate Within Your Team:** {members_str}\n"
-                    f"- **Coordinate Child Team Leads:** {children_str}\n"
+                    f"- **Report & Escalate UP to your superior:** query `directory {aid}`, or escalate to `{PRIME_ID}` if disabled.\n"
+                    f"- **Orchestrate Within Your Team:** discover active teammates with `directory --team {clean_team}`.\n"
+                    f"- **Cross-Team & Hierarchy Routing:** Doorbell any other team's lead directly. Reach another team's specialists through their lead. Find owners with `directory --owns <text>`. Query `directory` each time you route; never rely on an earlier answer.\n"
                     f"- **Cross-Team Board Rule:** Use `--visibility team --team {clean_team} --with-team <other-team>` for parent/child handoffs."
                 )
             else:
-                peer_ids = [
-                    m["agent_id"] for m in team["roles"] if m["agent_id"] != aid
-                ]
-                peers_str = (
-                    ", ".join(f"`{p}`" for p in peer_ids)
-                    if peer_ids
-                    else f"`{clean_team}/lead`"
-                )
                 routing_summary = (
                     f"- **Role Type:** Specialist (`{aid}`)\n"
-                    f"- **Collaborate Directly Within Your Team:** {peers_str} (post on `--visibility team --team {clean_team}` and doorbell the next peer in your workflow directly)\n"
-                    f"- **Escalate Blockers & Route External Comms Through Team Lead:** `{clean_team}/lead`\n"
+                    f"- **Collaborate Directly Within Your Team:** discover active teammates with `directory --team {clean_team}` (post on `--visibility team --team {clean_team}` and doorbell the next peer in your workflow directly).\n"
+                    f"- **Escalate Blockers & Route External Comms Through Team Lead:** `{clean_team}/lead` (posting a global lesson on the ULTRON board is allowed and does not count as cross-team messaging).\n"
                     f"- **Strict External Boundary:** Never doorbell external teams or `{PRIME_ID}` directly."
                 )
 
@@ -2051,6 +2166,7 @@ class UltronCore:
             raise ValueError(f"Team '{clean_team}' does not exist.")
         with self._lock(exclusive=False):
             sessions = self._read_sessions_unlocked()
+            teams_by_slug, _, _ = self._scan_state_unlocked()
         agents = {
             aid: entry
             for aid, entry in sessions["agents"].items()
@@ -2066,6 +2182,10 @@ class UltronCore:
             res = harness_adapter(name).probe(group)
             merged["agents"].update(res["agents"])
             merged["next_steps"] += res["next_steps"]
+        for aid, a_res in merged["agents"].items():
+            t_slug = aid.split("/")[0] if "/" in aid else None
+            t_obj = teams_by_slug.get(t_slug) if t_slug else None
+            a_res["campaign"] = t_obj.get("campaign", "off") if t_obj else "off"
         return merged
 
     def doorbell(self, target_id: str, message: str, sender: str = "") -> Dict[str, Any]:
@@ -2162,6 +2282,19 @@ class UltronCore:
                         "last_seen": iso,
                         "status": "disabled",
                     }
+            for t_slug in plan["teams_affected"]:
+                t_obj = teams_by_slug.get(t_slug)
+                if t_obj:
+                    t_manifest_path = self._abs_from_rel(t_obj["hive_path"]) / "team.json"
+                    if t_manifest_path.is_file():
+                        try:
+                            t_data = json.loads(t_manifest_path.read_text(encoding="utf-8"))
+                            if t_data.get("campaign") != "off":
+                                t_data["campaign"] = "off"
+                                t_data["updated_at"] = iso
+                                atomic_write_json(t_manifest_path, t_data)
+                        except Exception:
+                            pass
             self._write_sessions_unlocked(sessions)
             return plan
 
@@ -3552,11 +3685,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print ONLY the raw address to stdout (errors go strictly to stderr)",
     )
 
-    # contacts
-    p_con = add_cmd(
-        "contacts", "Show chain-of-command contacts and doorbell addresses for an agent"
+    # set-campaign
+    p_sc = add_cmd("set-campaign", "Set team campaign mode (on|off) for safety cron activation (Prime-only)")
+    p_sc.add_argument("team", help="Team slug")
+    p_sc.add_argument("state", choices=["on", "off", "active", "inactive"], help="Campaign state: on|off")
+
+    # directory
+    p_dir = add_cmd(
+        "directory", "Query live Hive directory and agent routing information"
     )
-    p_con.add_argument("agent_id", help="Agent ID (e.g. platform/lead)")
+    p_dir.add_argument("agent_id", nargs="?", default=None, help="Optional agent ID to inspect")
+    p_dir.add_argument("--team", default=None, help="Filter by team slug")
+    p_dir.add_argument("--owns", default=None, help="Filter by keyword ownership in mission, responsibilities, or charters")
+    p_dir.add_argument("--all", action="store_true", help="Include disabled agents (default: active only)")
+    p_dir.add_argument("--no-probe", action="store_true", help="Skip live process probe for instant execution")
 
     # new-thread
     p_new = add_cmd("new-thread", "Create a visibility-scoped JSONL board thread")
@@ -3977,7 +4119,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 if not res["agents"]:
                     print("[ULTRON] No active roles.")
                 for aid, r in sorted(res["agents"].items()):
-                    print(f"  {aid:<28} {r['state']:<8} {r['detail']}")
+                    camp = r.get("campaign", "off")
+                    print(f"  {aid:<28} {r['state']:<8} campaign:{camp:<7} {r['detail']}")
                 for step in res["next_steps"]:
                     print(f"  - {step}")
             if any(r["state"] == "gone" for r in res["agents"].values()):
@@ -4094,9 +4237,53 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"  Conversation ID: {agent['conversation_id']}")
                 print(f"  Role Path:       {agent['role_path']}")
 
-        elif cmd == "contacts":
-            res = core.get_contacts(args.agent_id)
-            print(json.dumps(res, indent=2, sort_keys=True))
+        elif cmd == "set-campaign":
+            res = core.set_campaign(args.team, args.state)
+            if args.json:
+                print(json.dumps(res, indent=2, sort_keys=True))
+            else:
+                print(f"[ULTRON] Team '{res['slug']}' campaign -> {res['campaign']}")
+
+        elif cmd == "directory":
+            res = core.directory(
+                agent_id=args.agent_id,
+                team_slug=args.team,
+                owns=args.owns,
+                include_all=args.all,
+                no_probe=args.no_probe,
+            )
+            if args.json:
+                print(json.dumps(res, indent=2, sort_keys=True))
+            elif args.agent_id:
+                print(f"[ULTRON Directory] Agent: {res['agent_id']}")
+                print(f"  Title:            {res['title']}")
+                print(f"  Team:             {res['team'] or '-'}")
+                print(f"  Role:             {res['role']}")
+                print(f"  Status:           {res['status']}")
+                print(f"  Campaign:         {res['campaign']}")
+                print(f"  Running:          {res['running']}")
+                print(f"  Harness:          {res['harness'] or '-'}")
+                if res['superior']:
+                    if res['superior_disabled']:
+                        if res['fallback_to_prime']:
+                            print(f"  Superior:         {res['superior']} (DISABLED -> fallback to {PRIME_ID})")
+                        else:
+                            print(f"  Superior:         {res['superior']} (DISABLED)")
+                    else:
+                        print(f"  Superior:         {res['superior']} ({res['superior_status']})")
+                print(f"  Mission:          {res['mission'] or '-'}")
+                print(f"  Responsibilities: {res['responsibilities'] or '-'}")
+            else:
+                if not res:
+                    print("[ULTRON Directory] No agents found.")
+                else:
+                    print(f"{'AGENT ID':<24} {'STATUS':<10} {'CAMPAIGN':<10} {'RUNNING':<9} {'HARNESS':<14} {'SUPERIOR':<24} {'TITLE'}")
+                    print("-" * 110)
+                    for e in res:
+                        sup_disp = e['superior'] or "-"
+                        if e['superior_disabled']:
+                            sup_disp += " (!)"
+                        print(f"{e['agent_id']:<24} {e['status']:<10} {e['campaign']:<10} {e['running']:<9} {e['harness'] or '-':<14} {sup_disp:<24} {e['title']}")
 
         elif cmd == "new-thread":
             res = core.create_thread(

@@ -76,10 +76,10 @@ ULTRON defines three distinct tiers of agent responsibility:
 | **Domain Specialist** | `<team-slug>/<role-slug>` | Intra-team role workspace | Autonomous domain execution (`coder`, `designer`, `tester`, `writer`); reports strictly to `<team-slug>/lead`; records private lessons in `personal` memory. |
 
 ### 2.2 Chain-of-Command Routing Rules
-The organizational graph enforces strict routing invariants verified by `python3 ultron/core/core.py contacts <agent_id>`:
-1. **Specialist Boundary:** Specialists have `direct_peers_allowed: true`: they work directly with teammates on `--visibility team` threads and doorbell them. They never message external teams or `ultron-prime`; that traffic goes through `<team-slug>/lead`.
+The organizational graph enforces strict routing invariants verified live by `python3 ultron/core/core.py directory <agent_id>`:
+1. **Specialist Boundary:** Specialists collaborate directly with intra-team peers discovered via `directory --team <team>` on `--visibility team` threads. They never message external teams or `ultron-prime` directly; that traffic goes through `<team-slug>/lead` (except posting a global lesson on the ULTRON board).
 2. **Team Lead Spokesperson:** The Team Lead is the team's sole communication bridge:
-   - **Upward:** Reports progress, blockers, and headcount/subteam requests to its superior (either parent `<parent-slug>/lead` or `ultron-prime`).
+   - **Upward:** Reports progress, blockers, and headcount/subteam requests to its superior (queried via `directory <agent_id>`, falling back to `ultron-prime` if the superior is disabled).
    - **Downward:** Delegates tasks to direct child team leads using `--visibility team --team <team-slug> --with-team <child-slug>`.
 3. **Escalation Protocol:** If an unresolvable technical conflict, schema incompatibility, or lifecycle need arises, it escalates strictly upward along the chain of command until it reaches `ultron-prime`.
 
@@ -399,8 +399,8 @@ ULTRON provides ACID-like transaction guarantees over standard POSIX filesystems
 
 ### 4.1 POSIX File Locking (`fcntl.flock`)
 The engine serializes concurrent access via `ultron/core/.runtime/.lock`:
-- **Shared Lock (`fcntl.LOCK_SH`):** Acquired during read-only operations (`list_threads`, `get_thread`, `search`, `get_contacts`, `whois`, `get_team`, `list_teams`, `list_agents`, `stats`, `prepare_disable`). Multiple agents read concurrently without contention.
-- **Exclusive Lock (`fcntl.LOCK_EX`):** Acquired during state-mutating operations (`register_prime`, `create_team`, `add_role`, `activate_team`, `activate_agent`, `disable_team`, `disable_agent`, `remove_team`, `create_thread`, `add_post`, `set_thread_status`, `reclassify_thread`, `verify(prune_orphans=True)`). Blocks all other concurrent reads and writes until completion.
+- **Shared Lock (`fcntl.LOCK_SH`):** Acquired during read-only operations (`list_threads`, `get_thread`, `search`, `directory`, `whois`, `get_team`, `list_teams`, `list_agents`, `stats`, `prepare_disable`). Multiple agents read concurrently without contention.
+- **Exclusive Lock (`fcntl.LOCK_EX`):** Acquired during state-mutating operations (`register_prime`, `create_team`, `add_role`, `set_campaign`, `set_team_harness`, `set_target_repo`, `activate_team`, `activate_agent`, `disable_team`, `disable_agent`, `remove_team`, `create_thread`, `add_post`, `set_thread_status`, `reclassify_thread`, `verify(prune_orphans=True)`). Blocks all other concurrent reads and writes until completion.
 
 ### 4.2 Atomic Manifest & Session Writes (`atomic_write_json`)
 To eliminate torn writes or corrupted state during power loss or abrupt process kills:

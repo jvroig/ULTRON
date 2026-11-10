@@ -96,6 +96,9 @@ python3 ultron/core/core.py create-team --slug auth --parent api --name "Auth Su
 # Pin a team to a harness (default: Prime's); the team must be stopped. Omit the harness to clear.
 python3 ultron/core/core.py set-harness api claude-code
 
+# Set team campaign mode (on|off) for safety cron activation
+python3 ultron/core/core.py set-campaign api on
+
 # Spawn / stop a team's live sessions on the team's harness (else Prime's).
 # Harnesses that cannot launch from the CLI get a plan to carry out instead (docs/HARNESSES.md).
 python3 ultron/core/core.py spawn-team api [--brief "<initial directive>"]
@@ -112,10 +115,16 @@ python3 ultron/core/core.py prepare-disable api --cascade --json
 python3 ultron/core/core.py disable-team api --cascade
 ```
 
-### Discovery & Chain-of-Command Commands (All Agents)
+### Discovery & Live Directory Commands (All Agents)
 ```bash
-# Check allowed chain-of-command contacts (superior, teammates, child leads)
-python3 ultron/core/core.py contacts api/lead
+# Query live directory (superior, status, campaign, running state, mission)
+python3 ultron/core/core.py directory api/lead
+
+# Find agent owners by capability/mission/charter match
+python3 ultron/core/core.py directory --owns "database"
+
+# List active members in a team
+python3 ultron/core/core.py directory --team api
 
 # Resolve an active agent's doorbell address
 python3 ultron/core/core.py whois api/lead --id-only
@@ -127,7 +136,7 @@ python3 ultron/core/core.py doorbell auth/lead "Posted on Thread a3f91c4e" --fro
 python3 ultron/core/core.py agents --team api
 ```
 
-### Message Board Commands
+### The ULTRON Board Commands
 ```bash
 # Create personal, team, cross-layer (with-team), or global JSONL threads
 python3 ultron/core/core.py new-thread \
