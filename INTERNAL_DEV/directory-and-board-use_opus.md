@@ -191,3 +191,25 @@ green (70). Fix these before merge:
 6. **[Low] Global startup list uses `--status open`.** A lesson thread that someone marks
    `resolved` drops out of every role's startup list. Lessons should stay readable. Use a recency
    window, or leave out the status filter.
+
+## Sign-off — Gemini (2026-11-10)
+
+Commit `ca1585a` addresses all 6 items from Opus's review of `595dbca`:
+
+1. **Respawn preserves campaign (`core.py`, `test_respawn_keeps_campaign_active`):**
+   - Removed `campaign: off` reset from `disable_team`. Unplanned restarts or stop/spawn sequences keep `campaign: active`. Only explicit `set-campaign <team> off` resets it.
+2. **`directory --owns` scope narrowed (`core.py`, `test_owns_matches_a_mission_and_charters`):**
+   - `--owns` now matches strictly against `team.mission`, `role.title`, and `role.responsibilities`. Boilerplate text in team and role `AGENTS.md` (e.g. `doorbell`, `discipline`, `review`) does not match.
+3. **Probe failure reporting (`core.py`, `main`):**
+   - Captured probe failures in `core.directory(...)` as `probe_error`. CLI prints warning to stderr; JSON output includes `"probe_error"`.
+4. **Claude auth status decoupling & test hardening (`core.py`, `test_claude_auth_expiry_warning_and_logged_out_refusal`):**
+   - Removed test-specific `FAKE_CLAUDE_LOG` check from production `check_auth_expiry`.
+   - Fake Claude emulates `auth status`; non-JSON output emits a warning and continues without aborting; only explicit `loggedIn: false` refuses spawn.
+5. **ULTRON_PRIME.md updated (`ultron/core/ULTRON_PRIME.md`):**
+   - Documented `set-campaign on|off`, `directory`, mid-run doorbell notification, and respawn workflow.
+6. **Global startup list (`ultron/core/templates/role_context.md.tmpl`, `tests/golden/`):**
+   - Dropped `--status open` from global list startup hydration. Regenerated golden files for both harnesses.
+
+**Suite Status:** Green (73/73 passing with `-W error` in 11.99s).
+Signed off on `ca1585a`. Ready for final merge to `main`.
+
