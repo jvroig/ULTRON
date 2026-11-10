@@ -2,7 +2,7 @@
 
 **Universal Layered Team and Role Orchestration Network (ULTRON)** is an open-source, pure Git-native multi-agent orchestration framework engineered for high-autonomy software engineering and complex operational campaigns.
 
-ULTRON runs on top of an agentic harness. **Claude Code** and **Google Antigravity** are supported today through harness adapters; [`docs/HARNESSES.md`](docs/HARNESSES.md) maps every ULTRON action to each harness's tools and explains how to add another.
+ULTRON runs on top of an agentic harness. **Claude Code** and **Google Antigravity** are supported today through harness adapters, and one hive can mix them: each team runs on its own harness. [`docs/HARNESSES.md`](docs/HARNESSES.md) maps every ULTRON action to each harness's tools; [`docs/ARCHITECTURE.md` §8](docs/ARCHITECTURE.md#8-harness-layer) covers the adapter design and how to add a harness.
 
 ---
 
@@ -31,7 +31,7 @@ Furthermore, workspace sessions maintain a **neutral engineering baseline**:
 
 ### 2. Sole Lifecycle & Provisioning Authority on ULTRON PRIME
 To prevent runaway agent proliferation and cascading costs, provisioning authority is strictly centralized:
-- **Centralized Spawning**: Only ULTRON PRIME creates teams, adds roles, and spawns or stops sessions (`spawn-team`, `stop-team`). Spawned Team Leads and Specialists never spawn agents.
+- **Centralized Spawning**: Only ULTRON PRIME creates teams, adds roles, and spawns or stops sessions (`spawn-team`, `stop-team`). Spawned Team Leads and Specialists never spawn agents; each harness enforces this, and `core.py` refuses lifecycle commands from a role's shell.
 - **Token Efficiency & Model Tiering**: Roles take a neutral tier (`small`, `medium`, `large`, or `inherit`) that each harness maps to its own models. Roles default to `medium`; heavier tiers are reserved for ULTRON PRIME or explicit User-authorized deep dives.
 - **Dynamic Lifecycle Conservation**: Teams are not kept running indefinitely. When a team finishes its assigned milestone, ULTRON PRIME stands it down (`stop-team`). Charters, code, and persistent memory remain intact on disk, ready to be reactivated on demand in milliseconds.
 
@@ -58,7 +58,7 @@ To prevent context dilution across large multi-agent networks, communication is 
 - **Reactive Doorbell Protocol**: Because JSONL files are passive on-disk logs and agents never poll in loops, collaboration follows a strict 3-step reactive protocol:
   1. Post message to thread via `python3 ultron/core/core.py new-thread` or `reply`.
   2. Resolve the recipient's doorbell address: `python3 ultron/core/core.py whois <target-agent> --id-only`.
-  3. Wake the recipient immediately with the harness's messaging tool ([`docs/HARNESSES.md`](docs/HARNESSES.md)).
+  3. Wake the recipient immediately with the harness's messaging tool ([`docs/HARNESSES.md`](docs/HARNESSES.md)), or, for an agent on another harness, `python3 ultron/core/core.py doorbell <target-agent> "<msg>" --from <you>`.
 
 ---
 
@@ -71,20 +71,22 @@ ULTRON/
 ├── ultron-architecture.html           # Interactive visual architecture diagram & showcase
 ├── docs/
 │   ├── ARCHITECTURE.md                # Deep-dive as-implemented technical specification
-│   └── HARNESSES.md                   # Per-harness actions, requirements & adapter contract
+│   └── HARNESSES.md                   # Per-harness actions & requirements (operator reference)
 ├── tests/
-│   └── test_ultron_core.py            # Comprehensive unit, lifecycle & Git union-merge test suite
+│   ├── test_ultron_core.py            # Unit, lifecycle, harness-adapter & Git union-merge test suite
+│   └── golden/                        # Expected render-spawn output per harness
 └── ultron/                            # Portable drop-in ULTRON orchestration engine
     ├── core/
     │   ├── ULTRON_PRIME.md            # Boot persona & operational manual for ULTRON PRIME
     │   ├── README.md                  # CLI reference & data model summary
-    │   ├── core.py                    # Pure Git-native registry, scaffolder & JSONL board CLI
+    │   ├── core.py                    # Registry, scaffolder, JSONL board CLI & harness adapters
     │   ├── .gitignore                 # Ignores ephemeral .runtime/ sessions & file locks
     │   ├── templates/                 # Code generation templates for teams, roles & role context
     │   │   ├── team_agents.md.tmpl    # Team charter template
     │   │   ├── lead_role.md.tmpl      # Team Leader charter template
     │   │   ├── member_role.md.tmpl    # Specialist role charter template
     │   │   └── role_context.md.tmpl   # Per-role identity, routing & hydration (rendered per harness)
+    │   ├── blueprints/                # Turnkey team blueprints (roster, charters, workflow)
     │   ├── .runtime/                  # GITIGNORED runtime directory
     │   │   ├── sessions.json          # Live doorbell addresses, session IDs & agent statuses
     │   │   └── .lock                  # POSIX fcntl shared/exclusive file lock
@@ -99,6 +101,8 @@ ULTRON/
             │   ├── lead/              # Mandatory coordinator & external communication bridge
             │   │   ├── role.json      # Git-tracked role manifest
             │   │   ├── AGENTS.md      # Role charter & specialist protocol
+            │   │   ├── role_context.generated.md  # GITIGNORED, Claude Code: rendered by spawn-team
+            │   │   ├── .claude/settings.json      # GITIGNORED, Claude Code: guards & role env
             │   │   └── workspace/     # Private scratchpad for <team>/lead
             │   └── <role-slug>/       # Specialist role (e.g., coder, reviewer, writer)
             │       ├── role.json
@@ -160,7 +164,10 @@ python3 ultron/core/core.py add-role \
   --responsibilities "Conduct rigorous Tier-2 edge case audits" \
   --read-only
 
-# 3. (Optional) Create a nested Layer-2 subteam
+# 3. (Optional) Pin a team to a harness (default: Prime's): add --harness claude-code|antigravity
+#    to create-team, or run `set-harness backend <harness>` while the team is stopped.
+
+# 4. (Optional) Create a nested Layer-2 subteam
 python3 ultron/core/core.py create-team \
   --slug auth \
   --parent backend \
@@ -177,7 +184,7 @@ ULTRON PRIME spawns one live session per role and binds their doorbell addresses
 python3 ultron/core/core.py spawn-team backend
 ```
 
-On Claude Code this launches and binds every role. On Antigravity it prints a launch plan that PRIME carries out, ending with `activate-team`.
+On Claude Code this launches and binds every role. On Antigravity it prints a launch plan that PRIME carries out, ending with `activate-team`. `python3 ultron/core/core.py liveness backend` later checks every role's session is still running.
 
 ---
 
@@ -196,6 +203,9 @@ python3 ultron/core/core.py new-thread \
 
 # Resolve backend/lead's doorbell address, then doorbell it with the harness's messaging tool
 python3 ultron/core/core.py whois backend/lead --id-only
+
+# Or, if backend runs on another harness than PRIME:
+python3 ultron/core/core.py doorbell backend/lead "Assigned Thread <id>" --from ultron-prime
 ```
 
 The Team Lead hydrates its startup context, decomposes tasks for `backend/coder`, reviews results with `backend/reviewer`, updates the thread status (`set-status resolved`), and reports back up to ULTRON PRIME.
@@ -232,8 +242,8 @@ python3 -W error -m unittest discover -s tests -v
 
 | Document | Description |
 | :--- | :--- |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | **Deep-Dive Architecture Specification:** Comprehensive treatise covering trust models, data schemas, locking mechanisms, deterministic event folding, lifecycle invariants, and Mermaid sequence diagrams. |
-| [`docs/HARNESSES.md`](docs/HARNESSES.md) | **Harness Reference:** How ULTRON picks a harness, each action mapped to Claude Code and Antigravity tools, harness requirements, and the adapter contract for adding one. |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | **Architecture Specification (v2):** Trust model, data schemas, locking, deterministic event folding, lifecycle, visibility, doorbells, and the harness layer (adapters, mixed hives). |
+| [`docs/HARNESSES.md`](docs/HARNESSES.md) | **Harness Reference:** Each action mapped to Claude Code and Antigravity tools, and each harness's requirements. |
 | [`ultron/core/README.md`](ultron/core/README.md) | **CLI & Storage Reference:** Command-line syntax, flag definitions, and schema details for `ultron/core/core.py`. |
 | [`ultron/core/ULTRON_PRIME.md`](ultron/core/ULTRON_PRIME.md) | **Operational Manual for ULTRON PRIME:** Boot persona, hierarchy management, lifecycle workflows, and safety crons. |
 | [`ultron-architecture.html`](ultron-architecture.html) | **Visual Architecture Showcase:** Single-page interactive HTML overview illustrating hierarchy and message board design. |

@@ -28,7 +28,7 @@
 ### 5. Multi-Agent Collaboration via ULTRON Core & Reactive Doorbell
 * **Shared Registry & Message Board (`ultron/core/`):** Use the ULTRON core CLI, `ultron/core/core.py` (your role assignment gives the exact command; see [`ultron/core/README.md`](ultron/core/README.md)) as the persistent source of truth for org hierarchy, team/role definitions, specs, reviews, and lessons learned.
 * **Visibility Discipline (`personal` | `team` | `global`):** Scope board threads appropriately (`personal` for role-only lessons, `team` for intra-team or `--with-team` parent/child coordination, `global` for org-wide context) and always pass `--as <team>/<role>` when querying.
-* **Reactive Doorbell Pattern:** Because JSON/JSONL board files are passive datastores and agents do not poll in loops, **always** resolve the recipient's doorbell address (`whois <agent_id> --id-only`) and doorbell them immediately ("Doorbell: Posted on Thread <thread_id> ('Title')..."). [`docs/HARNESSES.md`](docs/HARNESSES.md) names the doorbell tool for each harness.
+* **Reactive Doorbell Pattern:** Because JSON/JSONL board files are passive datastores and agents do not poll in loops, **always** resolve the recipient's doorbell address (`whois <agent_id> --id-only`) and doorbell them immediately ("Doorbell: Posted on Thread <thread_id> ('Title')..."). [`docs/HARNESSES.md`](docs/HARNESSES.md) names the doorbell tool for each harness; for an agent on another harness, use the core CLI's `doorbell <agent_id> "<msg>" --from <you>`.
 
 ### 6. Fail-Fast Execution & Process Hygiene
 * **Bounded Subprocess Execution:** Ensure CLI scripts, test runners, and headless tools fail fast on unhandled errors and run under explicit timeouts rather than idling indefinitely.

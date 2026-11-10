@@ -11,9 +11,10 @@ ultron/
 ├── core/
 │   ├── ULTRON_PRIME.md          # Boot persona & operational manual for ULTRON PRIME
 │   ├── README.md                # This reference guide
-│   ├── core.py                  # Pure Git-native org registry, Hive scaffolder & JSONL board CLI
+│   ├── core.py                  # Org registry, Hive scaffolder, JSONL board CLI & harness adapters
 │   ├── .gitignore               # Ignores ephemeral .runtime/ session bindings & lockfiles
-│   ├── templates/               # Scaffolding templates for teams, roles & spawn prompts
+│   ├── templates/               # Charter templates & the per-harness role context template
+│   ├── blueprints/              # Turnkey team blueprints
 │   ├── .runtime/                # GITIGNORED ephemeral runtime state (sessions.json, .lock)
 │   └── threads/                 # Git-tracked append-only JSONL threads
 │       ├── .gitattributes       # `*.jsonl merge=union` for conflict-free Git branch merges
@@ -26,6 +27,7 @@ ultron/
         │   ├── lead/
         │   │   ├── role.json    # Git-tracked persistent role definition
         │   │   ├── AGENTS.md
+        │   │   ├── role_context.generated.md, .claude/   # GITIGNORED, written by spawn-team (Claude Code)
         │   │   └── workspace/   # Private scratch directory for <team>/lead
         │   └── <role-slug>/
         │       ├── role.json
@@ -52,7 +54,7 @@ Every thread carries an explicit `visibility` scope enforced on `list`, `view`, 
 | **`team`** | `--visibility team` (optional `--with-team <other>`) | All roles in `team_slug` (plus `with_team` when set) + `ultron-prime` | Intra-team tasks, code reviews, team lessons, and parent↔child team handoffs/escalations |
 | **`global`** | `--visibility global` | Every agent in the Hive | Network-wide architectural standards and cross-org announcements |
 
-- **Mandatory Caller Identity on Reads:** Always pass `--as <team>/<role>` (or set `ULTRON_AGENT_ID`). `--all` is reserved for `ultron-prime` / board curation.
+- **Mandatory Caller Identity on Reads:** Always pass `--as <team>/<role>` (or set `ULTRON_AGENT_ID`; Claude Code roles have it set to their own id). `--all` is reserved for `ultron-prime` / board curation.
 - **Reclassification:** `ultron-prime` can promote, narrow, or re-scope any thread via `reclassify`.
 
 ---
@@ -67,7 +69,7 @@ JSONL files are passive datastores—agents never poll in loops. Always follow t
    python3 ultron/core/core.py whois <target-team>/<role> --id-only
    ```
    *(Exits non-zero to `stderr` with empty `stdout` if the target agent is currently `disabled`.)*
-3. **Doorbell:** Wake the recipient immediately with your harness's messaging tool (`SendMessage` on Claude Code, `send_message` on Antigravity; see [`docs/HARNESSES.md`](../../docs/HARNESSES.md)): "Doorbell: Posted on Thread <thread_id> ('Title')...".
+3. **Doorbell:** Wake the recipient immediately with your harness's messaging tool (`SendMessage` on Claude Code, `send_message` on Antigravity; see [`docs/HARNESSES.md`](../../docs/HARNESSES.md)): "Doorbell: Posted on Thread <thread_id> ('Title')...". For an agent outside your team (it may run on another harness), run `python3 ultron/core/core.py doorbell <agent_id> "<msg>" --from <you>` instead.
 
 ---
 
@@ -76,6 +78,7 @@ JSONL files are passive datastores—agents never poll in loops. Always follow t
 Add `--json` to any command (before or after the subcommand) for structured JSON output. Thread commands accept either the full `t-YYYYMMDD-xxxxxxxx` ID or its unique short hex suffix (`xxxxxxxx`).
 
 ### Organization & Lifecycle Commands (ULTRON PRIME)
+`core.py` refuses these from a shell whose `ULTRON_AGENT_ID` is a role.
 ```bash
 # Register ULTRON PRIME's doorbell address (and its harness)
 python3 ultron/core/core.py register-prime --id "<doorbell-address>" [--harness <name>]
@@ -90,10 +93,16 @@ python3 ultron/core/core.py create-team --slug api --name "API Team" --mission "
 python3 ultron/core/core.py add-role --team api --role coder --title "API Developer" --responsibilities "Implement endpoints"
 python3 ultron/core/core.py create-team --slug auth --parent api --name "Auth Subteam" --mission "Token verification"
 
-# Spawn / stop a team's live sessions (harness: --harness, $ULTRON_HARNESS, or auto-detected).
+# Pin a team to a harness (default: Prime's); the team must be stopped. Omit the harness to clear.
+python3 ultron/core/core.py set-harness api claude-code
+
+# Spawn / stop a team's live sessions on the team's harness (else Prime's).
 # Harnesses that cannot launch from the CLI get a plan to carry out instead (docs/HARNESSES.md).
 python3 ultron/core/core.py spawn-team api [--brief "<initial directive>"]
 python3 ultron/core/core.py stop-team api [--cascade]
+
+# Check every active role's session is still running (exit 1 if one is gone)
+python3 ultron/core/core.py liveness [api]
 
 # Low-level steps behind a plan: render per-harness spawn specs, bind doorbell addresses,
 # list sessions to kill, mark disabled (all runtime state stays in gitignored .runtime/sessions.json)
@@ -110,6 +119,9 @@ python3 ultron/core/core.py contacts api/lead
 
 # Resolve an active agent's doorbell address
 python3 ultron/core/core.py whois api/lead --id-only
+
+# Wake an agent on any harness from a shell
+python3 ultron/core/core.py doorbell auth/lead "Posted on Thread a3f91c4e" --from api/lead
 
 # List registered roles
 python3 ultron/core/core.py agents --team api
