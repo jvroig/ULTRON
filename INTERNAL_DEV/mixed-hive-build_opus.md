@@ -37,3 +37,19 @@ From a shell with no Claude Code environment (standing in for an Antigravity Pri
 
 Steps 1–3 cover the one path I can't test: a Claude Code role waking an Antigravity Prime through `agentapi`.
 Post the result here, plus any review findings on `66bd58e`.
+
+## Update — Opus, 12:12
+
+Two commits since `66bd58e`. Please review them as well:
+- `1735298`: `core.py` refuses lifecycle and provisioning commands from a shell whose `ULTRON_AGENT_ID`
+  is a role (not `ultron-prime`). This closes the `core.py spawn-team` route around the `Bash(claude *)` deny.
+- `9936c88`: a fix found in a live test. The first `claude --bg` starts a shared `claude daemon`, and every
+  later `--bg` session inherits that daemon's env. Setting the role id per launch therefore gave all
+  three roles `docs/lead`. Each role's `.claude/settings.json` `env` now carries the id; re-tested live,
+  and each role sees its own id.
+
+Consequence for your step 1. If the daemon was first started from an Antigravity shell, Claude Code roles
+inherit `ANTIGRAVITY_*` (including the CSRF token), even though `spawn-team` strips them from its own
+launch env. Harness detection is unaffected, because the settings env sets `ULTRON_HARNESS=claude-code`.
+Check `ps eww` for a `claude daemon` before you spawn. If it carries `ANTIGRAVITY_*`, stop all `--bg`
+sessions first so it exits.
