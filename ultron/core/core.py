@@ -62,7 +62,8 @@ HARNESS_TOOLS = {
 }
 CLAUDE_BIN_ENV = "ULTRON_CLAUDE_BIN"
 HARNESS_ENV = "ULTRON_HARNESS"
-BG_SESSION_ID_RE = re.compile(r"claude attach ([0-9a-f]{8})\b")
+BG_SESSION_ID_RE = re.compile(r"claude attach\s+([A-Za-z0-9_-]+)")
+ANTIGRAVITY_ENV_MARKERS = ("ANTIGRAVITY_AGENT", "ANTIGRAVITY_CONVERSATION_ID")
 SUPPRESSING_MEMORY_FILES = ("CLAUDE.md", "CLAUDE.local.md")
 ROLE_CLAUDE_SETTINGS = {
     "worktree": {"bgIsolation": "none"},
@@ -122,6 +123,10 @@ def with_role_context_import(charter_md: str) -> str:
     if ROLE_CONTEXT_IMPORT in charter_md.splitlines():
         return charter_md
     return charter_md.rstrip("\n") + f"\n\n{ROLE_CONTEXT_IMPORT}\n"
+
+
+def without_role_context_import(charter_md: str) -> str:
+    return "\n".join(l for l in charter_md.splitlines() if l.strip() != ROLE_CONTEXT_IMPORT).rstrip()
 
 
 def session_name_for(agent_id: str) -> str:
@@ -317,7 +322,7 @@ class AntigravityAdapter(HarnessAdapter):
     def charters_block(self, ctx: Mapping[str, Any]) -> str:
         return (
             f"\n---\n\n## Inherited Team & Ancestor Charters\n{ctx['inherited_charters']}\n\n---\n\n"
-            f"## Role Charter (`{ctx['role']['role_path']}/AGENTS.md`)\n{ctx['role_charter']}"
+            f"## Role Charter (`{ctx['role']['role_path']}/AGENTS.md`)\n{without_role_context_import(ctx['role_charter'])}"
         )
 
     def target_repo_summary(self, core: "UltronCore", ctx: Mapping[str, Any]) -> str:
@@ -549,10 +554,14 @@ class ClaudeCodeAdapter(HarnessAdapter):
 HARNESS_ADAPTERS = {a.name: a for a in (AntigravityAdapter(), ClaudeCodeAdapter())}
 
 
-def resolve_harness(explicit: Optional[str] = None) -> str:
+def resolve_harness(explicit: Optional[str] = None, core: Optional["UltronCore"] = None) -> str:
     chosen = (explicit or os.environ.get(HARNESS_ENV, "")).strip()
+    if not chosen and any(os.environ.get(v) for v in ANTIGRAVITY_ENV_MARKERS):
+        chosen = "antigravity"
     if not chosen and os.environ.get("CLAUDE_CODE_SESSION_ID"):
         chosen = "claude-code"
+    if not chosen and core is not None:
+        chosen = core.get_prime_harness()
     if not chosen:
         raise ValueError(
             f"Cannot tell which harness runs ULTRON. Pass --harness or set {HARNESS_ENV} "
@@ -560,6 +569,15 @@ def resolve_harness(explicit: Optional[str] = None) -> str:
         )
     harness_adapter(chosen)
     return chosen
+
+
+def resolve_harness_or_blank(explicit: Optional[str] = None, core: Optional["UltronCore"] = None) -> str:
+    if explicit:
+        return resolve_harness(explicit)
+    try:
+        return resolve_harness(None, core)
+    except ValueError:
+        return ""
 
 
 def harness_adapter(harness: str) -> HarnessAdapter:
@@ -1833,7 +1851,7 @@ class UltronCore:
     def spawn_team(
         self, team_slug: str, mission_brief: str = "", harness: Optional[str] = None
     ) -> Dict[str, Any]:
-        adapter = harness_adapter(resolve_harness(harness))
+        adapter = harness_adapter(resolve_harness(harness, self))
         clean_team = validate_slug(team_slug, "team slug")
         team = self.get_team(clean_team)
         if not team:
@@ -1858,7 +1876,7 @@ class UltronCore:
     def stop_team(
         self, team_slug: str, cascade: bool = False, harness: Optional[str] = None
     ) -> Dict[str, Any]:
-        adapter = harness_adapter(resolve_harness(harness))
+        adapter = harness_adapter(resolve_harness(harness, self))
         clean_team = validate_slug(team_slug, "team slug")
         plan = self.prepare_disable(clean_team, cascade=cascade)
         with self._lock(exclusive=False):
@@ -3258,6 +3276,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Allow activation even if parent team is disabled",
     )
     p_at.add_argument("--partial", action="store_true", help="Allow partial role activation")
+    p_at.add_argument("--harness", default=None, help=f"Harness running the roles (default: ${HARNESS_ENV}, auto-detect, then Prime's)")
 
     # activate-agent
     p_aa = add_cmd("activate-agent", "Bind a live doorbell address to a single role")
@@ -3501,12 +3520,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         cmd = args.command
 
         if cmd == "register-prime":
-            try:
-                prime_harness = resolve_harness(args.harness)
-            except ValueError:
-                if args.harness:
-                    raise
-                prime_harness = ""
+            prime_harness = resolve_harness_or_blank(args.harness)
             res = core.register_prime(args.id, harness=prime_harness)
             if args.json:
                 print(json.dumps(res, indent=2, sort_keys=True))
@@ -3663,7 +3677,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(json.dumps(res, indent=2, sort_keys=True))
 
         elif cmd in ("render-spawn", "prepare-spawn"):
-            harness = resolve_harness(args.harness)
+            harness = resolve_harness(args.harness, core)
             specs = core.render_spawn(
                 team_slug=args.team, role=args.role, mission_brief=args.brief, harness=harness
             )
@@ -3710,7 +3724,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             if args.json:
                 print(json.dumps(res, indent=2, sort_keys=True))
             elif res["next_steps"]:
-                print(f"[ULTRON] Stop plan for {res['teams_affected']} on {res['harness']}. Next:")
+                print(f"[ULTRON] Stop plan for {res['teams_affected']} on {res['harness']}; "
+                      f"the team stays active until disable-team runs. Next:")
                 for step in res["next_steps"]:
                     print(f"  - {step}")
             else:
@@ -3735,6 +3750,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 role_uuids=uuid_map,
                 allow_detached=args.allow_detached,
                 partial=args.partial,
+                harness=resolve_harness_or_blank(args.harness, core),
             )
             if args.json:
                 print(json.dumps(res, indent=2, sort_keys=True))

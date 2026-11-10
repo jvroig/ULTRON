@@ -21,7 +21,7 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from ultron.core.core import PRIME_ID, ROLE_CONTEXT_FILENAME, ROLE_CONTEXT_IMPORT, UltronCore  # noqa: E402
+from ultron.core.core import BG_SESSION_ID_RE, PRIME_ID, ROLE_CONTEXT_FILENAME, ROLE_CONTEXT_IMPORT, UltronCore  # noqa: E402
 
 
 class UltronCoreTestCase(unittest.TestCase):
@@ -1011,7 +1011,8 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, env)
         patcher.start()
         self.addCleanup(patcher.stop)
-        os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+        for marker in ("CLAUDE_CODE_SESSION_ID", "ANTIGRAVITY_AGENT", "ANTIGRAVITY_CONVERSATION_ID"):
+            os.environ.pop(marker, None)
         self.core.create_team(slug="api", name="API", mission="m", default_model="large")
         self.core.add_role(team_slug="api", role="coder", title="Coder", responsibilities="r", model="small")
 
@@ -1168,6 +1169,36 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
                 res = self.run_cli("render-spawn", "api", "--harness", harness)
                 self.assertEqual(res.returncode, 0, res.stderr)
                 self.assertIn(marker, res.stdout)
+
+    def test_an_antigravity_session_needs_no_harness_flag(self) -> None:
+        del os.environ["ULTRON_HARNESS"]
+        os.environ["ANTIGRAVITY_CONVERSATION_ID"] = "conv-1"
+        res = self.run_cli("render-spawn", "api")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("TypeName=ultron--api--coder", res.stdout)
+
+    def test_without_env_markers_the_harness_follows_prime(self) -> None:
+        self.core.register_prime("prime-uuid", harness="antigravity")
+        del os.environ["ULTRON_HARNESS"]
+        res = self.run_cli("stop-team", "api")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("on antigravity", res.stdout)
+
+    def test_activate_team_records_the_harness(self) -> None:
+        self.core.register_prime("prime-uuid", harness="antigravity")
+        del os.environ["ULTRON_HARNESS"]
+        res = self.run_cli("activate-team", "api", "--uuids", json.dumps({"lead": "u1", "coder": "u2"}))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        sessions = json.loads((self.core.sessions_file).read_text(encoding="utf-8"))
+        self.assertEqual(sessions["agents"]["api/coder"]["harness"], "antigravity")
+
+    def test_antigravity_system_prompt_omits_the_claude_import_line(self) -> None:
+        for spec in self.core.render_spawn("api", harness="antigravity"):
+            self.assertNotIn(ROLE_CONTEXT_IMPORT, spec["define_subagent"]["SystemPrompt"])
+
+    def test_session_id_parsing_accepts_non_hex_ids(self) -> None:
+        match = BG_SESSION_ID_RE.search("  claude attach 3f2a9c1e-bg_Z7    open in this terminal")
+        self.assertEqual(match.group(1), "3f2a9c1e-bg_Z7")
 
     def test_spawn_refuses_an_already_active_team(self) -> None:
         self.core.spawn_team("api")

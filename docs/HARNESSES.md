@@ -5,11 +5,14 @@ supported harness has an adapter in `ultron/core/core.py` (`HarnessAdapter` subc
 
 ## Which harness is used
 
-`spawn-team`, `stop-team` and `register-prime` pick the harness from, in order:
+`spawn-team`, `stop-team`, `render-spawn`, `activate-team` and `register-prime` pick the harness
+from, in order:
 
 1. `--harness <name>`
 2. `$ULTRON_HARNESS`
-3. auto-detection: `$CLAUDE_CODE_SESSION_ID` set ⇒ `claude-code`
+3. auto-detection: `$ANTIGRAVITY_AGENT` or `$ANTIGRAVITY_CONVERSATION_ID` set ⇒ `antigravity`;
+   `$CLAUDE_CODE_SESSION_ID` set ⇒ `claude-code`
+4. the harness Prime registered with
 
 If none applies, the command fails and names the options. `spawn-team` refuses a harness other than
 the one Prime registered with: sessions on different harnesses cannot doorbell each other.
@@ -48,7 +51,8 @@ Sessions are named `ultron--<team>--<role>`; that name is the role's doorbell ad
 
 Roles are Antigravity subagents. `render-spawn <team> --json` (also inside `spawn-team`'s plan)
 returns `define_subagent` / `invoke_subagent` payloads whose system prompt carries the role context
-and all charters. Prime binds the returned conversation UUIDs with `activate-team`.
+and all charters. Prime binds the returned conversation UUIDs with `activate-team`. `stop-team` prints a plan;
+the team stays active until Prime runs `disable-team`.
 
 ## Adding a harness
 
