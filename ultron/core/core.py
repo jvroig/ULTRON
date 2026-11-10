@@ -68,6 +68,11 @@ ANTIGRAVITY_ENV_MARKERS = ("ANTIGRAVITY_AGENT", "ANTIGRAVITY_CONVERSATION_ID")
 AGENTAPI_BIN_ENV = "ULTRON_AGENTAPI_BIN"
 ANTIGRAVITY_DAEMON_DIR_ENV = "ULTRON_ANTIGRAVITY_DAEMON_DIR"
 CLAUDE_DOORBELL_MODEL = "haiku"
+ROLE_ID_ENV = "ULTRON_AGENT_ID"
+PRIME_ONLY_COMMANDS = frozenset({
+    "activate-agent", "activate-team", "add-role", "create-team", "disable-agent", "disable-team",
+    "register-prime", "remove-team", "set-harness", "set-target-repo", "spawn-team", "stop-team",
+})
 SUPPRESSING_MEMORY_FILES = ("CLAUDE.md", "CLAUDE.local.md")
 ROLE_CLAUDE_SETTINGS = {
     "worktree": {"bgIsolation": "none"},
@@ -475,9 +480,10 @@ class ClaudeCodeAdapter(HarnessAdapter):
     launches_from_cli = True
 
     @staticmethod
-    def role_env() -> Dict[str, str]:
+    def role_env(agent_id: str) -> Dict[str, str]:
         env = {k: v for k, v in os.environ.items() if not k.startswith("ANTIGRAVITY_")}
         env[HARNESS_ENV] = "claude-code"
+        env[ROLE_ID_ENV] = agent_id
         return env
 
     def shell_doorbell(self, address: str, text: str) -> None:
@@ -552,7 +558,7 @@ class ClaudeCodeAdapter(HarnessAdapter):
             if sp["target_repo_abs"]:
                 cmd.append(f"--add-dir={sp['target_repo_abs']}")
             res = subprocess.run(
-                cmd, cwd=sp["role_dir"], capture_output=True, text=True, timeout=120, env=self.role_env()
+                cmd, cwd=sp["role_dir"], capture_output=True, text=True, timeout=120, env=self.role_env(sp["agent_id"])
             )
             match = BG_SESSION_ID_RE.search(res.stdout)
             if res.returncode != 0 or not match:
@@ -3726,6 +3732,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         core = UltronCore(repo_root=args.root)
         cmd = args.command
+        role_id = os.environ.get(ROLE_ID_ENV, "").strip()
+        if role_id and role_id != PRIME_ID and cmd in PRIME_ONLY_COMMANDS:
+            raise PermissionError(f"'{cmd}' is for {PRIME_ID} only; this shell belongs to role '{role_id}'.")
 
         if cmd == "register-prime":
             prime_harness = resolve_harness_or_blank(args.harness)

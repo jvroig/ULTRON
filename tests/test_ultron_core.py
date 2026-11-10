@@ -980,7 +980,7 @@ FAKE_CLAUDE = """#!/usr/bin/env python3
 import json, os, sys
 args = sys.argv[1:]
 with open(os.environ["FAKE_CLAUDE_LOG"], "a") as log:
-    log.write(json.dumps({"args": args, "cwd": os.getcwd(), "harness_env": os.environ.get("ULTRON_HARNESS"),
+    log.write(json.dumps({"args": args, "cwd": os.getcwd(), "harness_env": os.environ.get("ULTRON_HARNESS"), "role_env": os.environ.get("ULTRON_AGENT_ID"),
                           "antigravity_env": sorted(k for k in os.environ if k.startswith("ANTIGRAVITY_"))}) + "\\n")
 if args[0] == "-p":
     print("network error" if os.environ.get("FAKE_CLAUDE_DOORBELL_FAIL") else "sent")
@@ -1175,6 +1175,25 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
         for c in launches:
             self.assertEqual(c["harness_env"], "claude-code")
             self.assertEqual(c["antigravity_env"], [])
+
+    def test_roles_are_launched_marked_with_their_agent_id(self) -> None:
+        self.core.spawn_team("api")
+        marks = sorted(c["role_env"] for c in self.calls() if c["args"][0] == "--bg")
+        self.assertEqual(marks, ["api/coder", "api/lead"])
+
+    def test_a_role_shell_cannot_run_lifecycle_commands_but_can_doorbell(self) -> None:
+        self.core.spawn_team("api")
+        role = {"ULTRON_AGENT_ID": "api/coder"}
+        for args in (("stop-team", "api"), ("spawn-team", "api"), ("create-team", "--slug", "x", "--name", "X", "--mission", "m")):
+            with self.subTest(cmd=args[0]):
+                res = self.run_cli(*args, env_extra=role)
+                self.assertEqual(res.returncode, 1)
+                self.assertIn("ultron-prime only", res.stderr)
+        self.assertEqual(self.core.get_team("api")["status"], "active")
+        res = self.run_cli("doorbell", "api/lead", "hi", "--from", "api/coder", env_extra=role)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        res = self.run_cli("stop-team", "api", env_extra={"ULTRON_AGENT_ID": "ultron-prime"})
+        self.assertEqual(res.returncode, 0, res.stderr)
 
     def test_claude_code_prime_cannot_spawn_an_antigravity_team(self) -> None:
         self.core.register_prime("prime-session", harness="claude-code")

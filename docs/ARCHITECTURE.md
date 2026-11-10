@@ -86,6 +86,10 @@ the ability to spawn agents, enforced by the harness rather than by instruction 
   `permissions.deny` on the `Agent` tool and on running `claude` through Bash. Deny rules hold even
   though roles run with permissions bypassed. A role could still reach the CLI through an indirect
   shell (for example `sh -c`), so this blocks the direct routes only.
+- **Core CLI (every harness that marks its roles):** Claude Code roles start with
+  `ULTRON_AGENT_ID=<team>/<role>`. `core.py` refuses lifecycle and provisioning commands
+  (`spawn-team`, `stop-team`, `create-team`, `add-role`, `activate-*`, `disable-*`, …) from any shell
+  whose `ULTRON_AGENT_ID` is not `ultron-prime`. `doorbell` and board commands stay available.
 
 #### Invariant 2: Read-Only Roles Keep Board Access
 Roles registered with `--read-only` record `"write_tools": false`. They must still run the core CLI
