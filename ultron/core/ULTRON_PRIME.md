@@ -31,7 +31,8 @@ Execute these steps immediately upon loading this document:
    python3 ultron/core/core.py org-tree
    python3 ultron/core/core.py blueprints
    python3 ultron/core/core.py stats
-   python3 ultron/core/core.py list --all --status open
+   python3 ultron/core/core.py directory
+   python3 ultron/core/core.py list --all
    ```
 3. Report a concise readiness summary to the User (current teams, available Team Blueprints, active vs. disabled sessions, open threads) and await objectives—or begin executing if the User already supplied an objective.
 
@@ -91,12 +92,17 @@ python3 ultron/core/core.py save-blueprint platform \
 
 Activate parent teams before child teams so chain-of-command links are live:
 
-1. **Spawn the team** (it runs on its `team.json` harness, or yours if none is set; `create-team --harness` / `set-harness` choose it):
+1. **Arm Campaign Mode (if part of an active campaign):**
+   ```bash
+   python3 ultron/core/core.py set-campaign <team-slug> on
+   ```
+   Roles spawned with campaign active will automatically arm their safety heartbeats upon wakeup. (If enabling campaign mode mid-run on an already-running team, doorbell the lead: "Campaign active; arm your safety cron now").
+2. **Spawn the team** (it runs on its `team.json` harness, or yours if none is set; `create-team --harness` / `set-harness` choose it):
    ```bash
    python3 ultron/core/core.py spawn-team <team-slug> [--brief "<initial directive>"]
    ```
    If your harness can launch sessions from the CLI, this starts one session per role and binds their doorbell addresses. Otherwise it prints a launch plan (`--json` for the full specs); carry out its `next_steps`, which end with `activate-team`.
-2. **Dispatch Work to the Team Lead:**
+3. **Dispatch Work to the Team Lead:**
    - Post the mission/task spec on the board:
      ```bash
      python3 ultron/core/core.py new-thread \
@@ -113,9 +119,13 @@ Activate parent teams before child teams so chain-of-command links are live:
 
 ## 5. Disabling ("Standing Down") Teams to Save Resources
 
-Whenever a team completes its assigned work and has no immediate follow-up tasks, stand it down cleanly (pass `--cascade` to include active child teams):
+Whenever a team completes its assigned work and has no immediate follow-up tasks, clear its campaign mode and stand it down cleanly (pass `--cascade` to include active child teams):
 
 ```bash
+# Clear campaign mode when campaign completes
+python3 ultron/core/core.py set-campaign <team-slug> off
+
+# Stop live sessions and disable the team
 python3 ultron/core/core.py stop-team <team-slug> [--cascade]
 ```
 
@@ -125,13 +135,17 @@ If your harness can stop sessions from the CLI, this stops them and marks the te
 
 ## 6. Escalation, Board Curation & Campaign Liveness
 
-- **Chain of Command:** Direct your orders to Layer-1 Team Leads (`<team>/lead`). Let Team Leads orchestrate their own specialists and child Team Leads. Intervene directly inside deeper layers only when handling escalations, lifecycle requests (creating/enabling/disabling teams or roles), or audits.
-- **Board Visibility & Curation:**
+- **Chain of Command & Live Directory:** Direct your orders to Layer-1 Team Leads (`<team>/lead`). Let Team Leads orchestrate their own specialists and child Team Leads. Agents discover peers dynamically via `python3 ultron/core/core.py directory` (and `--owns <topic>`); prompts carry rules, never hardcoded peer lists.
+- **Board Visibility & Curation (The ULTRON Board):**
   - `personal`: Single-role lessons persisted across respawns (`owner_agent = <team>/<role>`).
   - `team`: Intra-team coordination & lessons (`--with-team <child-or-parent>` for cross-layer handoffs without global noise).
-  - `global`: Network-wide standards and cross-cutting discoveries.
+  - `global`: Network-wide standards and cross-cutting discoveries. Roles read open and resolved lessons on wakeup.
   - Promote or tidy thread scopes anytime via:
     ```bash
     python3 ultron/core/core.py reclassify <thread_id> --as ultron-prime --visibility <personal|team|global> [--team <slug>] [--with-team <slug>] [--owner <agent_id>]
     ```
-- **Safety Cron:** For multi-stage autonomous campaigns, keep a recurring safety heartbeat with your harness's scheduler (e.g., `*/15 * * * *` or `*/30 * * * *`) that runs `python3 ultron/core/core.py liveness` and `python3 ultron/core/core.py list --all`. A role reported `gone` has stopped: `stop-team` its team, then `spawn-team` it again. Cancel it once User goals are verified complete.
+- **Safety Cron & Respawns:** For multi-stage autonomous campaigns, keep a recurring safety heartbeat with your harness's scheduler (e.g., `*/15 * * * *` or `*/30 * * * *`) that runs `python3 ultron/core/core.py liveness` and `python3 ultron/core/core.py list --all`. A role reported `gone` has stopped:
+  1. Run `python3 ultron/core/core.py stop-team <team-slug>`.
+  2. Run `python3 ultron/core/core.py spawn-team <team-slug>`.
+  *(Because `stop-team` leaves `campaign: active` intact on disk, the respawned role detects the live campaign and automatically re-arms its safety cron).*
+  Cancel the heartbeat cron once User goals are verified complete.

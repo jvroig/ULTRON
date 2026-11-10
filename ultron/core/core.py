@@ -414,7 +414,7 @@ class AntigravityAdapter(HarnessAdapter):
         initial_prompt = (
             f"Boot sequence for `{aid}` ({r['title']}):\n"
             f"1. Run your startup hydration commands (`list --as {aid} --visibility personal`, "
-            f"`list --as {aid} --visibility team`, `list --as {aid} --visibility global --status open`, and `directory {aid}`).\n"
+            f"`list --as {aid} --visibility team`, `list --as {aid} --visibility global`, and `directory {aid}`).\n"
         )
         if repo_abs:
             initial_prompt += (
@@ -464,17 +464,24 @@ class ClaudeCodeAdapter(HarnessAdapter):
 
     @staticmethod
     def check_auth_expiry(claude_bin: str) -> None:
-        if os.environ.get("FAKE_CLAUDE_LOG"):
-            return
         try:
             res = subprocess.run([claude_bin, "auth", "status"], capture_output=True, text=True, timeout=10)
-            if res.returncode == 0 and res.stdout.strip():
-                data = json.loads(res.stdout)
-                if not data.get("loggedIn"):
-                    raise RuntimeError("Claude Code is not logged in. Renew with 'claude auth login' or use 'claude setup-token'.")
-                expires_at_str = data.get("loginExpiresAt")
-                if expires_at_str:
-                    from datetime import datetime, timezone
+            if res.returncode != 0:
+                return
+            out = res.stdout.strip()
+            if not out:
+                return
+            try:
+                data = json.loads(out)
+            except Exception:
+                print(f"[ULTRON Warning] Could not parse 'claude auth status' output: {out[:100]}", file=sys.stderr)
+                return
+            if not data.get("loggedIn"):
+                raise RuntimeError("Claude Code is not logged in. Renew with 'claude auth login' or use 'claude setup-token'.")
+            expires_at_str = data.get("loginExpiresAt")
+            if expires_at_str:
+                from datetime import datetime, timezone
+                try:
                     exp_dt = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
                     now_dt = datetime.now(timezone.utc)
                     remaining = (exp_dt - now_dt).total_seconds()
@@ -485,7 +492,9 @@ class ClaudeCodeAdapter(HarnessAdapter):
                             f"Renew with 'claude auth login' or use 'claude setup-token' for unattended hives.",
                             file=sys.stderr,
                         )
-        except (RuntimeError, ValueError):
+                except Exception:
+                    pass
+        except RuntimeError:
             raise
         except Exception:
             pass
@@ -564,7 +573,6 @@ class ClaudeCodeAdapter(HarnessAdapter):
         return {"harness": self.name, "agents": results, "next_steps": []}
 
     def spawn(self, core: "UltronCore", team: Mapping[str, Any], specs: List[Dict[str, Any]]) -> Dict[str, Any]:
-        self.check_auth_expiry(self.claude_bin())
         if team["workspace_mode"] == "branch":
             raise ValueError(
                 f"Team '{team['slug']}' uses workspace_mode 'branch', which the claude-code harness does not support yet."
@@ -577,6 +585,7 @@ class ClaudeCodeAdapter(HarnessAdapter):
                 raise ValueError(
                     f"'{charter}' must contain the line '{ROLE_CONTEXT_IMPORT}' so the role loads its context."
                 )
+        self.check_auth_expiry(self.claude_bin())
         for sp in specs:
             role_dir = Path(sp["role_dir"])
             (role_dir / ROLE_CONTEXT_FILENAME).write_text(sp["role_context"], encoding="utf-8")
@@ -1758,13 +1767,14 @@ class UltronCore:
         clean_owns = owns.strip().lower() if owns else None
 
         liveness_map: Dict[str, str] = {}
+        probe_error: Optional[str] = None
         if not no_probe:
             try:
                 probe_res = self.probe_liveness(team_slug=clean_team)
                 for a_id, p_info in probe_res.get("agents", {}).items():
                     liveness_map[a_id] = p_info.get("state", "unknown")
-            except Exception:
-                pass
+            except Exception as exc:
+                probe_error = str(exc)
 
         prime_info = agents_by_id.get(PRIME_ID)
 
@@ -1788,21 +1798,6 @@ class UltronCore:
                 ]
                 if team:
                     charter_texts.append(team.get("mission", ""))
-                    team_agents_f = self._abs_from_rel(team["hive_path"]) / "AGENTS.md"
-                    if team_agents_f.is_file():
-                        try:
-                            charter_texts.append(team_agents_f.read_text(encoding="utf-8"))
-                        except Exception:
-                            pass
-                role_path = agent.get("role_path")
-                if role_path:
-                    role_agents_f = self._abs_from_rel(role_path) / "AGENTS.md"
-                    if role_agents_f.is_file():
-                        try:
-                            charter_texts.append(role_agents_f.read_text(encoding="utf-8"))
-                        except Exception:
-                            pass
-
                 matched = any(clean_owns in txt.lower() for txt in charter_texts)
                 if not matched:
                     continue
@@ -1869,6 +1864,7 @@ class UltronCore:
                 "parent_disabled_warning": superior_disabled,
                 "mission": team.get("mission", "") if team else "",
                 "responsibilities": agent.get("responsibilities", ""),
+                "probe_error": probe_error,
             }
             results.append(entry)
 
@@ -2282,19 +2278,6 @@ class UltronCore:
                         "last_seen": iso,
                         "status": "disabled",
                     }
-            for t_slug in plan["teams_affected"]:
-                t_obj = teams_by_slug.get(t_slug)
-                if t_obj:
-                    t_manifest_path = self._abs_from_rel(t_obj["hive_path"]) / "team.json"
-                    if t_manifest_path.is_file():
-                        try:
-                            t_data = json.loads(t_manifest_path.read_text(encoding="utf-8"))
-                            if t_data.get("campaign") != "off":
-                                t_data["campaign"] = "off"
-                                t_data["updated_at"] = iso
-                                atomic_write_json(t_manifest_path, t_data)
-                        except Exception:
-                            pass
             self._write_sessions_unlocked(sessions)
             return plan
 
@@ -4255,6 +4238,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             if args.json:
                 print(json.dumps(res, indent=2, sort_keys=True))
             elif args.agent_id:
+                if res.get("probe_error"):
+                    print(f"[ULTRON Directory] Warning: Liveness probe failed: {res['probe_error']}", file=sys.stderr)
                 print(f"[ULTRON Directory] Agent: {res['agent_id']}")
                 print(f"  Title:            {res['title']}")
                 print(f"  Team:             {res['team'] or '-'}")
@@ -4274,6 +4259,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"  Mission:          {res['mission'] or '-'}")
                 print(f"  Responsibilities: {res['responsibilities'] or '-'}")
             else:
+                probe_err = next((e.get("probe_error") for e in res if e.get("probe_error")), None)
+                if probe_err:
+                    print(f"[ULTRON Directory] Warning: Liveness probe failed: {probe_err}", file=sys.stderr)
                 if not res:
                     print("[ULTRON Directory] No agents found.")
                 else:

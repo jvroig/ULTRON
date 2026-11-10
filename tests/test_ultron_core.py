@@ -990,12 +990,22 @@ with open(os.environ["FAKE_CLAUDE_LOG"], "a") as log:
                           "sessions": json.load(open(os.environ["FAKE_SESSIONS_FILE"])) if os.path.exists(os.environ.get("FAKE_SESSIONS_FILE", "")) else None}) + "\\n")
 if args[0] == "-p":
     print("network error" if os.environ.get("FAKE_CLAUDE_DOORBELL_FAIL") else "sent")
+elif args[:2] == ["auth", "status"]:
+    if os.environ.get("FAKE_CLAUDE_AUTH_LOGGED_OUT"):
+        print(json.dumps({"loggedIn": False}))
+    elif os.environ.get("FAKE_CLAUDE_AUTH_EXPIRES_SOON"):
+        print(json.dumps({"loggedIn": True, "loginExpiresAt": "2026-11-10T20:00:00.000Z"}))
+    elif os.environ.get("FAKE_CLAUDE_AUTH_GARBAGE"):
+        print("not json output")
+    else:
+        print(json.dumps({"loggedIn": True, "loginExpiresAt": "2030-01-01T00:00:00.000Z"}))
 elif args[0] == "--bg":
     name = args[args.index("-n") + 1]
     if name == os.environ.get("FAKE_CLAUDE_FAIL_NAME"):
         print("launch refused", file=sys.stderr)
         sys.exit(1)
-    count = sum(1 for _ in open(os.environ["FAKE_CLAUDE_LOG"]))
+    calls = [json.loads(l)["args"] for l in open(os.environ["FAKE_CLAUDE_LOG"])]
+    count = sum(1 for c in calls if c and c[0] == "--bg")
     print(f"  claude attach {count:08x}    open in this terminal")
 elif args[0] == "stop":
     if args[1] == os.environ.get("FAKE_CLAUDE_FAIL_STOP"):
@@ -1007,8 +1017,9 @@ elif args[0] == "agents":
         print("not signed in", file=sys.stderr)
         sys.exit(1)
     calls = [json.loads(l)["args"] for l in open(os.environ["FAKE_CLAUDE_LOG"])]
-    launched = {f"{i:08x}": c[c.index("-n") + 1] for i, c in enumerate(calls, 1) if c[0] == "--bg"}
-    stopped = {c[1] for c in calls if c[0] == "stop"} | set(os.environ.get("FAKE_CLAUDE_DEAD", "").split())
+    bg_calls = [c for c in calls if c and c[0] == "--bg"]
+    launched = {f"{i:08x}": c[c.index("-n") + 1] for i, c in enumerate(bg_calls, 1)}
+    stopped = {c[1] for c in calls if c and c[0] == "stop"} | set(os.environ.get("FAKE_CLAUDE_DEAD", "").split())
     print(json.dumps([{"pid": 1, "id": i, "name": n, "kind": "background", "status": "idle"}
                       for i, n in launched.items() if i not in stopped]))
 """
@@ -1037,7 +1048,11 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
     def calls(self) -> list[dict]:
         if not self.call_log.exists():
             return []
-        return [json.loads(line) for line in self.call_log.read_text(encoding="utf-8").splitlines()]
+        return [
+            json.loads(line)
+            for line in self.call_log.read_text(encoding="utf-8").splitlines()
+            if json.loads(line).get("args", [])[:2] != ["auth", "status"]
+        ]
 
     def role_dir(self, role: str) -> Path:
         return self.root / "ultron" / "hive" / "api" / "roles" / role
@@ -1523,6 +1538,9 @@ class DirectoryAndBoardUseTestCase(unittest.TestCase):
 
         # No match
         self.assertEqual(self.core.directory(owns="nonexistent-xyz", no_probe=True), [])
+        # Template boilerplate words from AGENTS.md must NOT match
+        self.assertEqual(self.core.directory(owns="doorbell", no_probe=True), [])
+        self.assertEqual(self.core.directory(owns="discipline", no_probe=True), [])
 
     def test_disabled_superior_falls_back_to_prime(self) -> None:
         self.core.register_prime("uuid-prime-live")
@@ -1543,8 +1561,64 @@ class DirectoryAndBoardUseTestCase(unittest.TestCase):
             specs = self.core.render_spawn("sample", harness=harness)
             for sp in specs:
                 prompt_to_check = sp.get("role_context") or sp.get("define_subagent", {}).get("SystemPrompt", "")
-                self.assertIn("list --as sample/lead --visibility global --status open", prompt_to_check)
+                self.assertIn("list --as sample/lead --visibility global\n", prompt_to_check)
+                self.assertNotIn("--status open", prompt_to_check)
                 self.assertIn("directory sample/lead", prompt_to_check)
+
+    def test_respawn_keeps_campaign_active(self) -> None:
+        self.core.register_prime("uuid-prime")
+        self.core.create_team(slug="respawn-team", name="Respawn Team", mission="Mission")
+        self.core.set_campaign("respawn-team", "on")
+        self.core.activate_team("respawn-team", {"lead": "uuid-1"})
+        self.assertEqual(self.core.get_team("respawn-team")["campaign"], "active")
+
+        # Stopping / disabling the team must preserve campaign: active
+        self.core.disable_team("respawn-team")
+        self.assertEqual(self.core.get_team("respawn-team")["campaign"], "active")
+
+        # Respawning the team
+        self.core.activate_team("respawn-team", {"lead": "uuid-2"})
+        entry = self.core.directory("respawn-team/lead", no_probe=True)
+        self.assertEqual(entry["campaign"], "active")
+
+        # Only set-campaign off clears it
+        self.core.set_campaign("respawn-team", "off")
+        self.assertEqual(self.core.get_team("respawn-team")["campaign"], "off")
+
+    def test_probe_failure_reports_warning_and_error_field(self) -> None:
+        self.core.register_prime("uuid-prime")
+        self.core.create_team(slug="probe-t", name="Probe Team", mission="Probe")
+        self.core.activate_team("probe-t", {"lead": "uuid-lead"})
+
+        with mock.patch.object(self.core, "probe_liveness", side_effect=RuntimeError("Claude process crashed")):
+            entry = self.core.directory("probe-t/lead", no_probe=False)
+            self.assertEqual(entry["running"], "unknown")
+            self.assertEqual(entry["probe_error"], "Claude process crashed")
+
+    def test_claude_auth_expiry_warning_and_logged_out_refusal(self) -> None:
+        from ultron.core.core import ClaudeCodeAdapter
+        fake_bin = self.root / "fake_claude"
+        fake_bin.write_text(FAKE_CLAUDE, encoding="utf-8")
+        fake_bin.chmod(0o755)
+
+        # 1. Logged out raises RuntimeError
+        with mock.patch.dict(os.environ, {"FAKE_CLAUDE_AUTH_LOGGED_OUT": "1", "FAKE_CLAUDE_LOG": str(self.root / "log.jsonl")}):
+            with self.assertRaisesRegex(RuntimeError, "not logged in"):
+                ClaudeCodeAdapter.check_auth_expiry(str(fake_bin))
+
+        # 2. Expiry within 48h prints warning
+        with mock.patch.dict(os.environ, {"FAKE_CLAUDE_AUTH_EXPIRES_SOON": "1", "FAKE_CLAUDE_LOG": str(self.root / "log.jsonl")}):
+            err = io.StringIO()
+            with redirect_stderr(err):
+                ClaudeCodeAdapter.check_auth_expiry(str(fake_bin))
+            self.assertIn("expires soon", err.getvalue())
+
+        # 3. Unparseable output warns and continues without raising
+        with mock.patch.dict(os.environ, {"FAKE_CLAUDE_AUTH_GARBAGE": "1", "FAKE_CLAUDE_LOG": str(self.root / "log.jsonl")}):
+            err = io.StringIO()
+            with redirect_stderr(err):
+                ClaudeCodeAdapter.check_auth_expiry(str(fake_bin))
+            self.assertIn("Could not parse 'claude auth status'", err.getvalue())
 
     def test_set_campaign_is_prime_only(self) -> None:
         from ultron.core.core import main, ROLE_ID_ENV
