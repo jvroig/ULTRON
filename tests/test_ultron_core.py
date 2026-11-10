@@ -981,7 +981,8 @@ import json, os, sys
 args = sys.argv[1:]
 with open(os.environ["FAKE_CLAUDE_LOG"], "a") as log:
     log.write(json.dumps({"args": args, "cwd": os.getcwd(), "harness_env": os.environ.get("ULTRON_HARNESS"), "role_env": os.environ.get("ULTRON_AGENT_ID"),
-                          "antigravity_env": sorted(k for k in os.environ if k.startswith("ANTIGRAVITY_"))}) + "\\n")
+                          "antigravity_env": sorted(k for k in os.environ if k.startswith("ANTIGRAVITY_")),
+                          "sessions": json.load(open(os.environ["FAKE_SESSIONS_FILE"])) if os.path.exists(os.environ.get("FAKE_SESSIONS_FILE", "")) else None}) + "\\n")
 if args[0] == "-p":
     print("network error" if os.environ.get("FAKE_CLAUDE_DOORBELL_FAIL") else "sent")
 elif args[0] == "--bg":
@@ -1110,6 +1111,16 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, ROLE_CONTEXT_IMPORT):
             self.core.spawn_team("api")
         self.assertEqual(self.calls(), [])
+
+    def test_every_teammate_is_doorbellable_before_the_first_role_starts(self) -> None:
+        os.environ["FAKE_SESSIONS_FILE"] = str(self.core.sessions_file)
+        self.core.spawn_team("api")
+        first = next(c for c in self.calls() if c["args"][0] == "--bg")
+        self.assertIn("ultron--api--lead", first["args"])
+        agents = first["sessions"]["agents"]
+        for role in ("lead", "coder"):
+            self.assertEqual(agents[f"api/{role}"]["status"], "active")
+            self.assertEqual(agents[f"api/{role}"]["conversation_id"], f"ultron--api--{role}")
 
     def test_a_failed_launch_stops_the_roles_already_launched_and_leaves_team_disabled(self) -> None:
         with mock.patch.dict(os.environ, {"FAKE_CLAUDE_FAIL_NAME": "ultron--api--coder"}):

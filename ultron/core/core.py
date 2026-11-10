@@ -551,6 +551,8 @@ class ClaudeCodeAdapter(HarnessAdapter):
                 {**ROLE_CLAUDE_SETTINGS, "env": {ROLE_ID_ENV: sp["agent_id"], HARNESS_ENV: self.name}},
             )
 
+        addresses = {sp["role"]: sp["session_name"] for sp in specs}
+        core.activate_team(team["slug"], addresses, harness=self.name)
         launched: Dict[str, str] = {}
         for sp in specs:
             cmd = [self.claude_bin(), "--bg", sp["initial_prompt"], "-n", sp["session_name"],
@@ -567,6 +569,7 @@ class ClaudeCodeAdapter(HarnessAdapter):
                 cleanup_errors = {
                     role: err for role, sid in launched.items() if (err := self.stop_session(sid))
                 }
+                core.disable_team(team["slug"])
                 raise RuntimeError(
                     f"Launching '{sp['agent_id']}' failed (exit {res.returncode}): "
                     f"{(res.stderr or res.stdout).strip()}. Stopped already-launched roles {sorted(launched)}"
@@ -574,12 +577,7 @@ class ClaudeCodeAdapter(HarnessAdapter):
                 )
             launched[sp["role"]] = match.group(1)
 
-        team_after = core.activate_team(
-            team["slug"],
-            {sp["role"]: sp["session_name"] for sp in specs},
-            session_ids=launched,
-            harness=self.name,
-        )
+        team_after = core.activate_team(team["slug"], addresses, session_ids=launched, harness=self.name)
         return {
             "harness": self.name,
             "team_slug": team["slug"],
