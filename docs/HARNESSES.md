@@ -63,7 +63,8 @@ Requirements:
 - `workspace_mode: branch` is not supported yet.
 
 `spawn-team` writes two gitignored files into each role folder: `role_context.generated.md` and
-`.claude/settings.json` (`worktree.bgIsolation: none`, so roles can edit the shared checkout).
+`.claude/settings.json` (`worktree.bgIsolation: none`, so roles can edit the shared checkout; the
+`Agent` / `claude` deny rules; `env` with the role's `ULTRON_AGENT_ID` and `ULTRON_HARNESS`).
 Sessions are named `ultron--<team>--<role>`; that name is the role's doorbell address.
 
 ## Antigravity

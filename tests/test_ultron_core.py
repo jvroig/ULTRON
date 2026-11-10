@@ -1176,10 +1176,13 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
             self.assertEqual(c["harness_env"], "claude-code")
             self.assertEqual(c["antigravity_env"], [])
 
-    def test_roles_are_launched_marked_with_their_agent_id(self) -> None:
+    def test_each_role_identity_lives_in_its_own_settings_not_the_launch_env(self) -> None:
+        os.environ["ULTRON_AGENT_ID"] = "ultron-prime"
         self.core.spawn_team("api")
-        marks = sorted(c["role_env"] for c in self.calls() if c["args"][0] == "--bg")
-        self.assertEqual(marks, ["api/coder", "api/lead"])
+        self.assertEqual({c["role_env"] for c in self.calls() if c["args"][0] == "--bg"}, {None})
+        for role in ("lead", "coder"):
+            settings = json.loads((self.role_dir(role) / ".claude" / "settings.json").read_text(encoding="utf-8"))
+            self.assertEqual(settings["env"], {"ULTRON_AGENT_ID": f"api/{role}", "ULTRON_HARNESS": "claude-code"})
 
     def test_a_role_shell_cannot_run_lifecycle_commands_but_can_doorbell(self) -> None:
         self.core.spawn_team("api")

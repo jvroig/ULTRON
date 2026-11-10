@@ -480,10 +480,9 @@ class ClaudeCodeAdapter(HarnessAdapter):
     launches_from_cli = True
 
     @staticmethod
-    def role_env(agent_id: str) -> Dict[str, str]:
-        env = {k: v for k, v in os.environ.items() if not k.startswith("ANTIGRAVITY_")}
+    def launch_env() -> Dict[str, str]:
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ANTIGRAVITY_") and k != ROLE_ID_ENV}
         env[HARNESS_ENV] = "claude-code"
-        env[ROLE_ID_ENV] = agent_id
         return env
 
     def shell_doorbell(self, address: str, text: str) -> None:
@@ -547,7 +546,10 @@ class ClaudeCodeAdapter(HarnessAdapter):
         for sp in specs:
             role_dir = Path(sp["role_dir"])
             (role_dir / ROLE_CONTEXT_FILENAME).write_text(sp["role_context"], encoding="utf-8")
-            atomic_write_json(role_dir / ".claude" / "settings.json", ROLE_CLAUDE_SETTINGS)
+            atomic_write_json(
+                role_dir / ".claude" / "settings.json",
+                {**ROLE_CLAUDE_SETTINGS, "env": {ROLE_ID_ENV: sp["agent_id"], HARNESS_ENV: self.name}},
+            )
 
         launched: Dict[str, str] = {}
         for sp in specs:
@@ -558,7 +560,7 @@ class ClaudeCodeAdapter(HarnessAdapter):
             if sp["target_repo_abs"]:
                 cmd.append(f"--add-dir={sp['target_repo_abs']}")
             res = subprocess.run(
-                cmd, cwd=sp["role_dir"], capture_output=True, text=True, timeout=120, env=self.role_env(sp["agent_id"])
+                cmd, cwd=sp["role_dir"], capture_output=True, text=True, timeout=120, env=self.launch_env()
             )
             match = BG_SESSION_ID_RE.search(res.stdout)
             if res.returncode != 0 or not match:
