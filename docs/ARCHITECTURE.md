@@ -68,7 +68,7 @@ ULTRON defines three distinct tiers of agent responsibility:
 
 ### 2.2 Chain-of-Command Routing Rules
 The organizational graph enforces strict routing invariants verified by `python3 ultron/core/core.py contacts <agent_id>`:
-1. **Specialist Boundary:** Specialists have `direct_peers_allowed: false`. They report exclusively to `<team-slug>/lead`. Specialists never directly message sibling specialists, external teams, or `ultron-prime`.
+1. **Specialist Boundary:** Specialists have `direct_peers_allowed: true`: they work directly with teammates on `--visibility team` threads and doorbell them. They never message external teams or `ultron-prime`; that traffic goes through `<team-slug>/lead`.
 2. **Team Lead Spokesperson:** The Team Lead is the team's sole communication bridge:
    - **Upward:** Reports progress, blockers, and headcount/subteam requests to its superior (either parent `<parent-slug>/lead` or `ultron-prime`).
    - **Downward:** Delegates tasks to direct child team leads using `--visibility team --team <team-slug> --with-team <child-slug>`.
