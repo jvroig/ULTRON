@@ -1031,7 +1031,7 @@
           <span class="letter-char">U</span>
           <span class="letter-word">Universal</span>
         </div>
-        <div class="letter-body">Not bound to a single vertical or harness. Runs identically on Antigravity, Claude Code, or mixed multi-host hives.</div>
+        <div class="letter-body">Not bound to a single vertical or harness. Runs identically on Antigravity, Claude Code, or co-located mixed hives (single host, shared filesystem &amp; local IPC).</div>
       </div>
       <div class="letter-card">
         <div class="letter-header">
@@ -1066,7 +1066,7 @@
           <span class="letter-char">N</span>
           <span class="letter-word">Network</span>
         </div>
-        <div class="letter-body">Pure Git-native append-only event board (<code>threads/*.jsonl</code>) and doorbells linking all operational nodes across runtimes.</div>
+        <div class="letter-body">Pure Git-native append-only event board (<code>ultron/core/threads/*.jsonl</code>) and doorbells linking all operational nodes across runtimes.</div>
       </div>
     </div>
   </section>
@@ -1192,7 +1192,7 @@
               <text x="12" y="20" font-family="monospace" font-size="10.5" font-weight="700" fill="var(--team-text)">docs/lead</text>
               <text x="12" y="36" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--team-base)">Team Leader</text>
               <text x="12" y="52" font-family="sans-serif" font-size="7.5" fill="var(--text-muted)">Sole External Bridge &amp; Coordinator</text>
-              <text x="12" y="67" font-family="monospace" font-size="7" fill="var(--text-subtle)">haiku &middot; shared checkout</text>
+              <text x="12" y="67" font-family="monospace" font-size="7" fill="var(--text-subtle)">sonnet &middot; shared checkout</text>
             </g>
 
             <line x1="206" y1="80" x2="232" y2="80" stroke="var(--git-base)" stroke-width="2" stroke-dasharray="3" />
@@ -1203,7 +1203,7 @@
               <text x="12" y="20" font-family="monospace" font-size="10.5" font-weight="700" fill="var(--spec-text)">docs/writer</text>
               <text x="12" y="36" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--spec-text)">Technical Writer</text>
               <text x="12" y="52" font-family="sans-serif" font-size="7.5" fill="var(--text-muted)">Flat Peer Specialist &middot; Direct Collab</text>
-              <text x="12" y="67" font-family="monospace" font-size="7" fill="var(--text-subtle)">haiku &middot; permissions.deny</text>
+              <text x="12" y="67" font-family="monospace" font-size="7" fill="var(--text-subtle)">sonnet &middot; permissions.deny</text>
             </g>
           </g>
 
@@ -1291,7 +1291,7 @@
           </li>
           <li>
             <span class="feature-bullet">&bull;</span>
-            <div><strong>Neutral Model Tiers:</strong> <code>small</code> &rarr; <code>flash</code>, <code>medium</code> &rarr; <code>flash</code>, <code>large</code> &rarr; <code>pro</code>.</div>
+            <div><strong>Neutral Model Tiers:</strong> <code>small</code> &rarr; <code>flash_lite</code>, <code>medium</code> &rarr; <code>flash</code>, <code>large</code> &rarr; <code>pro</code>.</div>
           </li>
           <li>
             <span class="feature-bullet">&bull;</span>
@@ -1325,11 +1325,11 @@
           </li>
           <li>
             <span class="feature-bullet">&bull;</span>
-            <div><strong>Neutral Model Tiers:</strong> <code>small</code> &rarr; <code>haiku</code>, <code>medium</code> &rarr; <code>haiku</code>, <code>large</code> &rarr; <code>sonnet</code>.</div>
+            <div><strong>Neutral Model Tiers:</strong> <code>small</code> &rarr; <code>haiku</code>, <code>medium</code> &rarr; <code>sonnet</code>, <code>large</code> &rarr; <code>opus</code>.</div>
           </li>
           <li>
             <span class="feature-bullet">&bull;</span>
-            <div><strong>Intra-Team Doorbell:</strong> Native <code>SendMessage(recipient="&lt;uuid&gt;", ...)</code> delivered across background sessions.</div>
+            <div><strong>Intra-Team Doorbell:</strong> Native <code>SendMessage(to="ultron--&lt;team&gt;--&lt;role&gt;", message=...)</code> delivered across background sessions.</div>
           </li>
           <li>
             <span class="feature-bullet">&bull;</span>
@@ -1357,7 +1357,7 @@
       <p>
         <strong>1. Zero Cross-Harness Tool Leaks:</strong> Antigravity agents never see Claude Code tools (e.g. <code>SendMessage</code>) in their generated instructions, and Claude Code roles never see Antigravity tools (e.g. <code>send_message</code>).<br>
         <strong>2. Role Sandbox Boundary:</strong> Worker roles are denied subagent spawning tools (<code>permissions.deny: ["Agent"]</code> or <code>Subagents=False</code>), and <code>core.py</code> strictly denies lifecycle subcommands (<code>create-team</code>, <code>spawn-team</code>, <code>stop-team</code>) when invoked under a worker identity.<br>
-        <strong>3. Fail-Loud Doorbell Verification:</strong> If a doorbell cannot be delivered or the recipient fails to acknowledge, the operation exits with an explicit error rather than silently failing.
+        <strong>3. Fail-Loud Doorbell Delivery:</strong> Claude Code shell doorbell fails unless the headless sender confirms <code>sent</code>. Antigravity shell doorbell fails on a non-zero <code>agentapi</code> exit. Delivery fails loud without waiting for bidirectional recipient replies.
       </p>
     </div>
   </section>
@@ -1370,7 +1370,7 @@
     </div>
 
     <p style="font-size:0.88rem; color:var(--text-muted);">
-      ULTRON enforces a strict physical split between <strong>Git-Tracked persistent assets</strong> (org charters, roles, code, and append-only event logs) and <strong>Gitignored ephemeral runtime state</strong> (harness session UUIDs, daemon files, and lockfiles).
+      ULTRON enforces a strict physical split between <strong>Git-Tracked persistent assets</strong> (org charters, roles, code, and append-only event logs) and <strong>Gitignored ephemeral runtime state</strong> (harness session IDs, doorbell addresses, and lockfiles).
     </p>
 
     <div class="storage-grid">
@@ -1400,13 +1400,13 @@
         </div>
 
         <div class="file-item highlight-git">
-          <div class="file-name">ultron/board/threads/&lt;id&gt;.jsonl</div>
+          <div class="file-name">ultron/core/threads/t-YYYYMMDD-xxxxxxxx.jsonl</div>
           <div class="file-desc">Append-only discussion threads with atomic <code>fcntl.flock</code> locking and <code>merge=union</code>.</div>
         </div>
 
         <div class="file-item highlight-git">
-          <div class="file-name">.gitattributes</div>
-          <div class="file-desc">Configures <code>merge=union</code> for all <code>*.jsonl</code> files to guarantee conflict-free branch merges.</div>
+          <div class="file-name">ultron/core/threads/.gitattributes</div>
+          <div class="file-desc">Configures <code>merge=union</code> for all <code>*.jsonl</code> thread files to guarantee conflict-free branch merges.</div>
         </div>
       </div>
 
@@ -1416,18 +1416,18 @@
         <div class="zone-title">Live Process Sessions &amp; Locks</div>
 
         <div class="file-item highlight-runtime">
-          <div class="file-name">.runtime/sessions.json</div>
-          <div class="file-desc">Maps role IDs to live session UUIDs per team, along with recorded harness bindings.</div>
+          <div class="file-name">ultron/core/.runtime/sessions.json</div>
+          <div class="file-desc">Maps role IDs to live doorbell addresses (Antigravity UUIDs or Claude Code session names) and harnesses.</div>
         </div>
 
         <div class="file-item highlight-runtime">
-          <div class="file-name">.runtime/locks/*.lock</div>
-          <div class="file-desc">Process concurrency locks for atomic file appends and session registry mutations.</div>
+          <div class="file-name">ultron/core/.runtime/.lock</div>
+          <div class="file-desc">Process concurrency lock for atomic thread appends and session registry mutations.</div>
         </div>
 
         <div class="file-item highlight-runtime">
-          <div class="file-name">~/.gemini/antigravity/daemon/hub_*.json</div>
-          <div class="file-desc">Discovered daemon metadata (HTTP port, CSRF token, live PID) for Antigravity RPC doorbells.</div>
+          <div class="file-name">ultron/hive/.../.claude/settings.json</div>
+          <div class="file-desc">Per-role deny guards (Agent, Bash) and ULTRON_AGENT_ID env isolation (gitignored).</div>
         </div>
 
         <div class="file-item highlight-runtime">
@@ -1463,25 +1463,25 @@
         <tbody>
           <tr>
             <td><span class="scope-pill scope-personal">personal</span></td>
-            <td><code>threads/t-&lt;date&gt;-&lt;hex&gt;.jsonl</code></td>
+            <td><code>ultron/core/threads/t-&lt;date&gt;-&lt;hex&gt;.jsonl</code></td>
             <td>Strictly author role only</td>
             <td>Role-specific debugging techniques, AST recipes, private lessons learned</td>
           </tr>
           <tr>
             <td><span class="scope-pill scope-team">team</span></td>
-            <td><code>threads/t-&lt;date&gt;-&lt;hex&gt;.jsonl</code></td>
+            <td><code>ultron/core/threads/t-&lt;date&gt;-&lt;hex&gt;.jsonl</code></td>
             <td>All roles inside <code>&lt;team&gt;</code></td>
             <td>Task assignments, specs, PR reviews, QA verification, peer handoffs</td>
           </tr>
           <tr>
             <td><span class="scope-pill scope-cross">team (with-team)</span></td>
-            <td><code>threads/t-&lt;date&gt;-&lt;hex&gt;.jsonl</code></td>
+            <td><code>ultron/core/threads/t-&lt;date&gt;-&lt;hex&gt;.jsonl</code></td>
             <td>Both teams' roles</td>
             <td>Parent-child task delegation and upward escalation (e.g. <code>docs</code> &harr; <code>web-viz</code>)</td>
           </tr>
           <tr>
             <td><span class="scope-pill scope-global">global</span></td>
-            <td><code>threads/t-&lt;date&gt;-&lt;hex&gt;.jsonl</code></td>
+            <td><code>ultron/core/threads/t-&lt;date&gt;-&lt;hex&gt;.jsonl</code></td>
             <td>All Hive agents &amp; PRIME</td>
             <td>Hive-wide announcements, standard architectural patterns, system policies</td>
           </tr>
@@ -1511,7 +1511,7 @@
 
             <rect x="16" y="122" width="388" height="52" rx="6" fill="var(--code-bg)" />
             <text x="26" y="142" font-family="monospace" font-size="8" fill="#f59e0b">// Claude Code intra-team:</text>
-            <text x="26" y="158" font-family="monospace" font-size="8" fill="#34d399">SendMessage(recipient="&lt;uuid&gt;", content="Doorbell: ...")</text>
+            <text x="26" y="158" font-family="monospace" font-size="8" fill="#34d399">SendMessage(to="ultron--&lt;team&gt;--&lt;role&gt;", message="Doorbell: ...")</text>
 
             <text x="16" y="192" font-family="sans-serif" font-size="8" font-weight="700" fill="var(--git-text)">&check; Native harness routing &middot; Sub-second direct delivery</text>
           </g>
@@ -1528,13 +1528,13 @@
             <!-- Dispatch split -->
             <rect x="16" y="112" width="195" height="70" rx="6" fill="var(--agy-light)" stroke="var(--agy-border)" />
             <text x="26" y="130" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--agy-text)">Target: Antigravity</text>
-            <text x="26" y="146" font-family="sans-serif" font-size="7.5" fill="var(--text-muted)">Reads hub_*.json daemon,</text>
+            <text x="26" y="146" font-family="sans-serif" font-size="7.5" fill="var(--text-muted)">Discovers hub_*.json daemon in $HOME,</text>
             <text x="26" y="160" font-family="monospace" font-size="7" fill="var(--agy-base)">agentapi send-message</text>
             <text x="26" y="174" font-family="sans-serif" font-size="7" font-weight="700" fill="var(--git-text)">&lt;100ms local RPC</text>
 
             <rect x="225" y="112" width="199" height="70" rx="6" fill="var(--claude-light)" stroke="var(--claude-border)" />
             <text x="235" y="130" font-family="sans-serif" font-size="8.5" font-weight="700" fill="var(--claude-text)">Target: Claude Code</text>
-            <text x="235" y="146" font-family="sans-serif" font-size="7.5" fill="var(--text-muted)">Headless sender,</text>
+            <text x="235" y="146" font-family="sans-serif" font-size="7.5" fill="var(--text-muted)">Headless sender confirming "sent",</text>
             <text x="235" y="160" font-family="monospace" font-size="7" fill="var(--claude-base)">claude -p --tools SendMessage</text>
             <text x="235" y="174" font-family="sans-serif" font-size="7" font-weight="700" fill="var(--git-text)">~4s headless delivery</text>
           </g>
@@ -1557,7 +1557,7 @@
         <div class="step-number">2</div>
         <div class="step-title">Resolve Live Address</div>
         <div class="step-desc">
-          Agent resolves recipient's active session UUID and recorded harness:
+          Agent resolves recipient's active doorbell address (Antigravity UUID or Claude Code session name):
           <div style="margin-top:6px;"><code class="code-pill">core.py whois &lt;agent_id&gt; --id-only</code></div>
         </div>
       </div>
@@ -1615,8 +1615,8 @@
           <g transform="translate(345, 20)">
             <rect width="260" height="120" rx="10" fill="var(--team-light)" stroke="var(--team-border)" stroke-width="2" />
             <text x="16" y="26" font-family="sans-serif" font-size="11.5" font-weight="800" fill="var(--team-text)">2. ACTIVE EXECUTION</text>
-            <text x="16" y="46" font-family="sans-serif" font-size="8.5" fill="var(--text-main)">&bull; Antigravity: Subagents invoked (flash/pro)</text>
-            <text x="16" y="64" font-family="sans-serif" font-size="8.5" fill="var(--text-main)">&bull; Claude Code: Background sessions (haiku/sonnet)</text>
+            <text x="16" y="46" font-family="sans-serif" font-size="8.5" fill="var(--text-main)">&bull; Antigravity: Subagents invoked (flash_lite/flash/pro)</text>
+            <text x="16" y="64" font-family="sans-serif" font-size="8.5" fill="var(--text-main)">&bull; Claude Code: Background sessions (haiku/sonnet/opus)</text>
             <text x="16" y="82" font-family="sans-serif" font-size="8.5" fill="var(--text-main)">&bull; Tasks assigned via reactive doorbells</text>
             <text x="16" y="102" font-family="sans-serif" font-size="8" font-weight="700" fill="var(--team-base)">Health polled via core.py liveness</text>
           </g>
@@ -1681,7 +1681,7 @@
     <div id="tab-prime" class="tab-panel active">
       <div class="cli-block">
         <span class="cli-comment"># 1. Register PRIME session on boot (auto-detects harness)</span><br>
-        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">register-prime</span> <span class="cli-flag">--id</span> <span class="cli-val">"&lt;session-uuid&gt;"</span><br><br>
+        <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">register-prime</span> <span class="cli-flag">--id</span> <span class="cli-val">"&lt;doorbell-address&gt;"</span><br><br>
         <span class="cli-comment"># 2. Inspect full N-layer org tree, integrity &amp; stats</span><br>
         <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">org-tree</span><br>
         <span class="cli-cmd">python3 ultron/core/core.py</span> <span class="cli-arg">verify</span><br>
