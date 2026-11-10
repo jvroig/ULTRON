@@ -993,8 +993,11 @@ if args[0] == "-p":
 elif args[:2] == ["auth", "status"]:
     if os.environ.get("FAKE_CLAUDE_AUTH_LOGGED_OUT"):
         print(json.dumps({"loggedIn": False}))
+        sys.exit(1)
     elif os.environ.get("FAKE_CLAUDE_AUTH_EXPIRES_SOON"):
-        print(json.dumps({"loggedIn": True, "loginExpiresAt": "2026-11-10T20:00:00.000Z"}))
+        import datetime
+        soon = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=5)
+        print(json.dumps({"loggedIn": True, "loginExpiresAt": soon.strftime("%Y-%m-%dT%H:%M:%S.000Z")}))
     elif os.environ.get("FAKE_CLAUDE_AUTH_GARBAGE"):
         print("not json output")
     else:
@@ -1611,7 +1614,7 @@ class DirectoryAndBoardUseTestCase(unittest.TestCase):
             err = io.StringIO()
             with redirect_stderr(err):
                 ClaudeCodeAdapter.check_auth_expiry(str(fake_bin))
-            self.assertIn("expires soon", err.getvalue())
+            self.assertIn("expires soon (4h remaining", err.getvalue())
 
         # 3. Unparseable output warns and continues without raising
         with mock.patch.dict(os.environ, {"FAKE_CLAUDE_AUTH_GARBAGE": "1", "FAKE_CLAUDE_LOG": str(self.root / "log.jsonl")}):

@@ -466,8 +466,6 @@ class ClaudeCodeAdapter(HarnessAdapter):
     def check_auth_expiry(claude_bin: str) -> None:
         try:
             res = subprocess.run([claude_bin, "auth", "status"], capture_output=True, text=True, timeout=10)
-            if res.returncode != 0:
-                return
             out = res.stdout.strip()
             if not out:
                 return
