@@ -980,8 +980,11 @@ FAKE_CLAUDE = """#!/usr/bin/env python3
 import json, os, sys
 args = sys.argv[1:]
 with open(os.environ["FAKE_CLAUDE_LOG"], "a") as log:
-    log.write(json.dumps({"args": args, "cwd": os.getcwd()}) + "\\n")
-if args[0] == "--bg":
+    log.write(json.dumps({"args": args, "cwd": os.getcwd(), "harness_env": os.environ.get("ULTRON_HARNESS"),
+                          "antigravity_env": sorted(k for k in os.environ if k.startswith("ANTIGRAVITY_"))}) + "\\n")
+if args[0] == "-p":
+    print("network error" if os.environ.get("FAKE_CLAUDE_DOORBELL_FAIL") else "sent")
+elif args[0] == "--bg":
     name = args[args.index("-n") + 1]
     if name == os.environ.get("FAKE_CLAUDE_FAIL_NAME"):
         print("launch refused", file=sys.stderr)
@@ -1161,11 +1164,112 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
         self.assertEqual(self.calls(), [])
         self.assertEqual(self.core.get_team("api")["status"], "active")
 
-    def test_spawn_refuses_a_harness_other_than_prime_runs_on(self) -> None:
-        self.core.register_prime("prime-session", harness="antigravity")
-        with self.assertRaisesRegex(ValueError, "cannot doorbell each other"):
-            self.core.spawn_team("api", harness="claude-code")
+    def test_antigravity_prime_launches_a_claude_code_team_without_leaking_its_env(self) -> None:
+        self.core.register_prime("prime-uuid", harness="antigravity")
+        self.core.set_team_harness("api", "claude-code")
+        os.environ["ANTIGRAVITY_CSRF_TOKEN"] = "secret"
+        res = self.core.spawn_team("api")
+        self.assertEqual(res["harness"], "claude-code")
+        launches = [c for c in self.calls() if c["args"][0] == "--bg"]
+        self.assertEqual(len(launches), 2)
+        for c in launches:
+            self.assertEqual(c["harness_env"], "claude-code")
+            self.assertEqual(c["antigravity_env"], [])
+
+    def test_claude_code_prime_cannot_spawn_an_antigravity_team(self) -> None:
+        self.core.register_prime("prime-session", harness="claude-code")
+        self.core.set_team_harness("api", "antigravity")
+        with self.assertRaisesRegex(ValueError, "cannot launch 'antigravity'"):
+            self.core.spawn_team("api")
+
+    def test_team_harness_beats_the_environment(self) -> None:
+        self.core.register_prime("prime-uuid", harness="antigravity")
+        self.core.set_team_harness("api", "antigravity")
+        res = self.core.spawn_team("api")
+        self.assertEqual(res["status"], "awaiting_prime")
         self.assertEqual(self.calls(), [])
+
+    def test_create_team_records_harness_and_rejects_unknown(self) -> None:
+        res = self.run_cli("create-team", "--slug", "web", "--name", "Web", "--mission", "m", "--harness", "antigravity")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.core.get_team("web")["harness"], "antigravity")
+        with self.assertRaisesRegex(ValueError, "Unknown harness"):
+            self.core.set_team_harness("web", "codex")
+
+    def test_set_harness_refuses_an_active_team(self) -> None:
+        self.core.spawn_team("api")
+        with self.assertRaisesRegex(ValueError, "stop-team"):
+            self.core.set_team_harness("api", "antigravity")
+
+    def test_stop_team_uses_the_team_recorded_harness(self) -> None:
+        self.core.activate_team("api", {"lead": "u1", "coder": "u2"}, harness="antigravity")
+        res = self.core.stop_team("api")
+        self.assertEqual(res["harness"], "antigravity")
+        self.assertEqual(self.calls(), [])
+
+    def test_cascade_stop_across_harnesses_is_refused(self) -> None:
+        self.core.spawn_team("api")
+        self.core.create_team(slug="web", name="Web", mission="m", parent_team="api")
+        self.core.activate_team("web", {"lead": "u3"}, harness="antigravity")
+        with self.assertRaisesRegex(ValueError, "more than one harness"):
+            self.core.stop_team("api", cascade=True)
+
+    def test_liveness_covers_a_mixed_hive(self) -> None:
+        self.core.spawn_team("api")
+        self.core.create_team(slug="web", name="Web", mission="m")
+        self.core.activate_team("web", {"lead": "u3"}, harness="antigravity")
+        res = self.core.probe_liveness()
+        self.assertEqual(res["agents"]["api/lead"]["state"], "alive")
+        self.assertEqual(res["agents"]["web/lead"]["state"], "unknown")
+        self.assertEqual(res["harnesses"], ["antigravity", "claude-code"])
+
+    def test_doorbell_to_claude_code_sends_the_exact_text_via_a_headless_sender(self) -> None:
+        self.core.spawn_team("api")
+        res = self.run_cli("doorbell", "api/coder", 'see "thread" $X', "--from", "web/lead")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        call = self.calls()[-1]
+        self.assertEqual(call["args"][0], "-p")
+        self.assertIn('to="ultron--api--coder"', call["args"][1])
+        self.assertIn('\nDoorbell from web/lead: see "thread" $X\n', call["args"][1])
+        self.assertEqual(call["args"][call["args"].index("--tools") + 1], "SendMessage")
+        self.assertEqual(Path(call["cwd"]).resolve(), Path(tempfile.gettempdir()).resolve())
+
+    def test_doorbell_fails_loudly_when_the_sender_does_not_confirm(self) -> None:
+        self.core.spawn_team("api")
+        os.environ["FAKE_CLAUDE_DOORBELL_FAIL"] = "1"
+        res = self.run_cli("doorbell", "api/coder", "hi")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("network error", res.stderr)
+
+    def test_doorbell_refuses_a_disabled_agent(self) -> None:
+        with self.assertRaisesRegex(ValueError, "DISABLED"):
+            self.core.doorbell("api/lead", "hi")
+
+    def test_doorbell_to_antigravity_uses_agentapi_with_a_live_daemon(self) -> None:
+        log = self.root / "agentapi.jsonl"
+        fake = self.root / "agentapi"
+        fake.write_text(
+            "#!/usr/bin/env python3\nimport json, os, sys\n"
+            f"open({str(log)!r}, 'a').write(json.dumps({{'argv': sys.argv[1:], "
+            "'addr': os.environ.get('ANTIGRAVITY_LS_ADDRESS'), 'csrf': os.environ.get('ANTIGRAVITY_CSRF_TOKEN')}) + '\\n')\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        daemon = self.root / "daemon"
+        daemon.mkdir()
+        (daemon / "hub_1.json").write_text(json.dumps({"pid": os.getpid(), "httpPort": 111, "csrfToken": "live"}))
+        stale = daemon / "hub_2.json"
+        stale.write_text(json.dumps({"pid": 2**22 + 12345, "httpPort": 222, "csrfToken": "stale"}))
+        os.utime(stale, (2_000_000_000, 2_000_000_000))
+        for k in ("ANTIGRAVITY_LS_ADDRESS", "ANTIGRAVITY_CSRF_TOKEN"):
+            os.environ.pop(k, None)
+        os.environ.update({"ULTRON_AGENTAPI_BIN": str(fake), "ULTRON_ANTIGRAVITY_DAEMON_DIR": str(daemon)})
+        self.core.register_prime("prime-uuid", harness="antigravity")
+        res = self.run_cli("doorbell", "ultron-prime", "done", "--from", "api/lead")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        sent = json.loads(log.read_text(encoding="utf-8"))
+        self.assertEqual(sent["argv"], ["send-message", "prime-uuid", "Doorbell from api/lead: done"])
+        self.assertEqual((sent["addr"], sent["csrf"]), ("localhost:111", "live"))
 
     def test_register_prime_records_the_detected_harness(self) -> None:
         res = self.run_cli("register-prime", "--id", "prime-session")

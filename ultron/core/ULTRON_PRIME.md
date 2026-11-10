@@ -91,7 +91,7 @@ python3 ultron/core/core.py save-blueprint platform \
 
 Activate parent teams before child teams so chain-of-command links are live:
 
-1. **Spawn the team:**
+1. **Spawn the team** (it runs on its `team.json` harness, or yours if none is set; `create-team --harness` / `set-harness` choose it):
    ```bash
    python3 ultron/core/core.py spawn-team <team-slug> [--brief "<initial directive>"]
    ```
@@ -107,7 +107,7 @@ Activate parent teams before child teams so chain-of-command links are live:
        --title "<Objective Title>" \
        --content "<Detailed scope, deliverables, and acceptance criteria>"
      ```
-   - Resolve `<team-slug>/lead` with `python3 ultron/core/core.py whois <team-slug>/lead --id-only` and doorbell it: "Assigned Thread <thread_id> ('<Title>'). Coordinate your team and report back when verified."
+   - Resolve `<team-slug>/lead` with `python3 ultron/core/core.py whois <team-slug>/lead --id-only` and doorbell it (if the team runs on another harness than you, use `python3 ultron/core/core.py doorbell <team-slug>/lead "<message>" --from ultron-prime`): "Assigned Thread <thread_id> ('<Title>'). Coordinate your team and report back when verified."
 
 ---
 

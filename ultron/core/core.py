@@ -26,6 +26,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Set, Tuple
 
 try:
@@ -64,6 +65,9 @@ CLAUDE_BIN_ENV = "ULTRON_CLAUDE_BIN"
 HARNESS_ENV = "ULTRON_HARNESS"
 BG_SESSION_ID_RE = re.compile(r"claude attach\s+([A-Za-z0-9_-]+)")
 ANTIGRAVITY_ENV_MARKERS = ("ANTIGRAVITY_AGENT", "ANTIGRAVITY_CONVERSATION_ID")
+AGENTAPI_BIN_ENV = "ULTRON_AGENTAPI_BIN"
+ANTIGRAVITY_DAEMON_DIR_ENV = "ULTRON_ANTIGRAVITY_DAEMON_DIR"
+CLAUDE_DOORBELL_MODEL = "haiku"
 SUPPRESSING_MEMORY_FILES = ("CLAUDE.md", "CLAUDE.local.md")
 ROLE_CLAUDE_SETTINGS = {
     "worktree": {"bgIsolation": "none"},
@@ -228,7 +232,12 @@ class HarnessAdapter:
     def role_paths(self, core: "UltronCore", ctx: Mapping[str, Any]) -> Tuple[str, str, str]:
         raise NotImplementedError
 
+    launches_from_cli = False
+
     def probe(self, agents: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any]:
+        raise NotImplementedError
+
+    def shell_doorbell(self, address: str, text: str) -> None:
         raise NotImplementedError
 
     def doorbell_address(self, ctx: Mapping[str, Any]) -> str:
@@ -319,6 +328,43 @@ class AntigravityAdapter(HarnessAdapter):
                 f"manage_subagents(Action=\"list\") and check these conversation IDs are listed: {ids}",
             ],
         }
+
+    @staticmethod
+    def agentapi_bin() -> str:
+        explicit = os.environ.get(AGENTAPI_BIN_ENV, "").strip()
+        if explicit:
+            return explicit
+        return shutil.which("agentapi") or str(Path.home() / ".gemini" / "antigravity" / "bin" / "agentapi")
+
+    @staticmethod
+    def live_daemon_env() -> Dict[str, str]:
+        if os.environ.get("ANTIGRAVITY_LS_ADDRESS") and os.environ.get("ANTIGRAVITY_CSRF_TOKEN"):
+            return {}
+        daemon_dir = Path(
+            os.environ.get(ANTIGRAVITY_DAEMON_DIR_ENV, "").strip()
+            or Path.home() / ".gemini" / "antigravity" / "daemon"
+        )
+        hubs = sorted(daemon_dir.glob("hub_*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+        for hub in hubs:
+            try:
+                meta = json.loads(hub.read_text(encoding="utf-8"))
+                os.kill(int(meta["pid"]), 0)
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            return {
+                "ANTIGRAVITY_LS_ADDRESS": f"localhost:{meta['httpPort']}",
+                "ANTIGRAVITY_CSRF_TOKEN": str(meta["csrfToken"]),
+            }
+        raise RuntimeError(f"No running Antigravity daemon found in '{daemon_dir}' (hub_*.json with a live pid).")
+
+    def shell_doorbell(self, address: str, text: str) -> None:
+        env = {**os.environ, **self.live_daemon_env()}
+        res = subprocess.run(
+            [self.agentapi_bin(), "send-message", address, text],
+            capture_output=True, text=True, timeout=60, env=env, stdin=subprocess.DEVNULL,
+        )
+        if res.returncode != 0:
+            raise RuntimeError(f"agentapi send-message failed (exit {res.returncode}): {(res.stderr or res.stdout).strip()}")
 
     def core_cmd(self, core: "UltronCore") -> str:
         return "python3 ultron/core/core.py"
@@ -426,6 +472,36 @@ class ClaudeCodeAdapter(HarnessAdapter):
             return (res.stderr or res.stdout).strip() or f"exit code {res.returncode}"
         return None
 
+    launches_from_cli = True
+
+    @staticmethod
+    def role_env() -> Dict[str, str]:
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ANTIGRAVITY_")}
+        env[HARNESS_ENV] = "claude-code"
+        return env
+
+    def shell_doorbell(self, address: str, text: str) -> None:
+        prompt = (
+            f'Call the SendMessage tool once, with to="{address}" and message set to the text between '
+            "the markers, copied byte for byte.\n<<<ULTRON_MSG\n"
+            f"{text}\nULTRON_MSG>>>\n"
+            'Then reply with exactly "sent", or the exact error text.'
+        )
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("CLAUDE_CODE_SESSION_ID", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
+        res = subprocess.run(
+            [self.claude_bin(), "-p", prompt, "--model", CLAUDE_DOORBELL_MODEL,
+             "--dangerously-skip-permissions", "--tools", "SendMessage"],
+            capture_output=True, text=True, timeout=180, env=env, cwd=tempfile.gettempdir(),
+            stdin=subprocess.DEVNULL,
+        )
+        lines = res.stdout.strip().splitlines()
+        if res.returncode != 0 or not lines or lines[-1].strip() != "sent":
+            raise RuntimeError(
+                f"Claude Code doorbell to '{address}' failed (exit {res.returncode}): "
+                f"{(res.stdout + res.stderr).strip()}"
+            )
+
     def live_sessions(self) -> List[Dict[str, Any]]:
         res = subprocess.run([self.claude_bin(), "agents", "--json"], capture_output=True, text=True, timeout=60)
         if res.returncode != 0:
@@ -475,7 +551,9 @@ class ClaudeCodeAdapter(HarnessAdapter):
                 cmd += ["--model", sp["claude_model"]]
             if sp["target_repo_abs"]:
                 cmd.append(f"--add-dir={sp['target_repo_abs']}")
-            res = subprocess.run(cmd, cwd=sp["role_dir"], capture_output=True, text=True, timeout=120)
+            res = subprocess.run(
+                cmd, cwd=sp["role_dir"], capture_output=True, text=True, timeout=120, env=self.role_env()
+            )
             match = BG_SESSION_ID_RE.search(res.stdout)
             if res.returncode != 0 or not match:
                 cleanup_errors = {
@@ -770,6 +848,7 @@ class UltronCore:
                 "role": "prime",
                 "role_path": "ultron/core",
                 "status": p_status,
+                "harness": str(p_sess.get("harness", "")) if p_status == "active" else "",
                 "target_repo": "",
                 "target_repo_abs": "",
                 "team_slug": None,
@@ -808,6 +887,9 @@ class UltronCore:
             ws = str(raw_t.get("workspace_mode", "inherit")).strip().lower()
             if ws not in VALID_WORKSPACES:
                 raise ValueError(f"Invalid workspace_mode '{ws}' in '{t_manifest}'.")
+            team_harness = str(raw_t.get("harness", "")).strip()
+            if team_harness and team_harness not in HARNESS_ADAPTERS:
+                raise ValueError(f"Invalid harness '{team_harness}' in '{t_manifest}'.")
 
             curr_lineage = [*lineage, slug]
             hive_rel = self._rel_posix(team_dir)
@@ -869,6 +951,7 @@ class UltronCore:
                         "role": r_slug,
                         "role_path": self._rel_posix(role_dir),
                         "status": r_status,
+                        "harness": str(sess.get("harness", "")) if r_status == "active" else "",
                         "target_repo": r_target_repo,
                         "target_repo_abs": r_target_repo_abs,
                         "team_slug": slug,
@@ -889,6 +972,7 @@ class UltronCore:
                 "blueprint": str(raw_t.get("blueprint", "")).strip(),
                 "created_at": created_at,
                 "default_model": model,
+                "harness": team_harness,
                 "hive_path": hive_rel,
                 "layer": len(curr_lineage),
                 "lineage": curr_lineage,
@@ -1168,8 +1252,10 @@ class UltronCore:
         lead_responsibilities: str = "",
         target_repo: str = "",
         blueprint: Optional[str] = None,
+        harness: str = "",
     ) -> Dict[str, Any]:
         clean_slug = validate_slug(slug, "team slug")
+        clean_harness = harness_adapter(harness.strip()).name if harness.strip() else ""
         bp_obj = self.get_blueprint(blueprint) if blueprint else None
         clean_bp = bp_obj["slug"] if bp_obj else ""
 
@@ -1263,6 +1349,8 @@ class UltronCore:
                 "updated_at": iso,
                 "workspace_mode": ws,
             }
+            if clean_harness:
+                team_manifest["harness"] = clean_harness
             atomic_write_json(team_dir / "team.json", team_manifest)
 
             if bp_obj:
@@ -1497,6 +1585,27 @@ class UltronCore:
                 t_manifest["updated_at"] = iso
                 atomic_write_json(t_manifest_path, t_manifest)
 
+            teams_after, _, _ = self._scan_state_unlocked()
+            return teams_after[clean_team]
+
+    def set_team_harness(self, team_slug: str, harness: str = "") -> Dict[str, Any]:
+        clean_team = validate_slug(team_slug, "team slug")
+        clean_harness = harness_adapter(harness.strip()).name if harness.strip() else ""
+        with self._lock(exclusive=True):
+            teams_by_slug, _, _ = self._scan_state_unlocked()
+            team_obj = teams_by_slug.get(clean_team)
+            if not team_obj:
+                raise ValueError(f"Team '{clean_team}' does not exist.")
+            if team_obj["status"] == "active":
+                raise ValueError(f"Team '{clean_team}' is active. Run stop-team before changing its harness.")
+            manifest_path = self._abs_from_rel(team_obj["hive_path"]) / "team.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if clean_harness:
+                manifest["harness"] = clean_harness
+            else:
+                manifest.pop("harness", None)
+            manifest["updated_at"] = now_iso()
+            atomic_write_json(manifest_path, manifest)
             teams_after, _, _ = self._scan_state_unlocked()
             return teams_after[clean_team]
 
@@ -1887,11 +1996,11 @@ class UltronCore:
     def spawn_team(
         self, team_slug: str, mission_brief: str = "", harness: Optional[str] = None
     ) -> Dict[str, Any]:
-        adapter = harness_adapter(resolve_harness(harness, self))
         clean_team = validate_slug(team_slug, "team slug")
         team = self.get_team(clean_team)
         if not team:
             raise ValueError(f"Team '{clean_team}' does not exist.")
+        adapter = harness_adapter(resolve_harness(harness or team["harness"] or None, self))
         if team["status"] == "active":
             raise ValueError(f"Team '{clean_team}' is already active. Run stop-team first.")
         if team["parent_team"]:
@@ -1901,10 +2010,10 @@ class UltronCore:
                     f"Cannot spawn team '{clean_team}': parent team '{team['parent_team']}' is not active."
                 )
         prime_harness = self.get_prime_harness()
-        if prime_harness and prime_harness != adapter.name:
+        if prime_harness and prime_harness != adapter.name and not adapter.launches_from_cli:
             raise ValueError(
-                f"ULTRON PRIME runs on '{prime_harness}' but this spawn targets '{adapter.name}'. "
-                f"Sessions on different harnesses cannot doorbell each other."
+                f"ULTRON PRIME runs on '{prime_harness}', which cannot launch '{adapter.name}' sessions. "
+                f"Only a Prime on '{adapter.name}' can spawn team '{clean_team}'."
             )
         specs = self.render_spawn(clean_team, mission_brief=mission_brief, harness=adapter.name)
         return adapter.spawn(self, team, specs)
@@ -1912,15 +2021,25 @@ class UltronCore:
     def stop_team(
         self, team_slug: str, cascade: bool = False, harness: Optional[str] = None
     ) -> Dict[str, Any]:
-        adapter = harness_adapter(resolve_harness(harness, self))
         clean_team = validate_slug(team_slug, "team slug")
         plan = self.prepare_disable(clean_team, cascade=cascade)
         with self._lock(exclusive=False):
             sessions = self._read_sessions_unlocked()
+        recorded = {
+            str(sessions["agents"].get(a["agent_id"], {}).get("harness", "")) for a in plan["agents_to_kill"]
+        } - {""}
+        if harness:
+            recorded.add(harness)
+        if len(recorded) > 1:
+            raise ValueError(
+                f"Teams {plan['teams_affected']} run on more than one harness {sorted(recorded)}. "
+                f"Stop the child teams first, one harness at a time."
+            )
+        adapter = harness_adapter(resolve_harness(next(iter(recorded), None), self))
         return adapter.stop(self, plan, sessions, cascade)
 
     def probe_liveness(self, team_slug: Optional[str] = None, harness: Optional[str] = None) -> Dict[str, Any]:
-        adapter = harness_adapter(resolve_harness(harness, self))
+        fallback = resolve_harness_or_blank(harness, self)
         clean_team = validate_slug(team_slug, "team slug") if team_slug else None
         if clean_team and not self.get_team(clean_team):
             raise ValueError(f"Team '{clean_team}' does not exist.")
@@ -1933,7 +2052,30 @@ class UltronCore:
             and entry.get("status") == "active"
             and (clean_team is None or aid.split("/")[0] == clean_team)
         }
-        return adapter.probe(agents)
+        groups: Dict[str, Dict[str, Mapping[str, Any]]] = {}
+        for aid, entry in agents.items():
+            groups.setdefault(str(entry.get("harness", "")) or fallback, {})[aid] = entry
+        merged: Dict[str, Any] = {"harnesses": sorted(groups), "agents": {}, "next_steps": []}
+        for name, group in sorted(groups.items()):
+            res = harness_adapter(name).probe(group)
+            merged["agents"].update(res["agents"])
+            merged["next_steps"] += res["next_steps"]
+        return merged
+
+    def doorbell(self, target_id: str, message: str, sender: str = "") -> Dict[str, Any]:
+        target = self.get_agent(target_id)
+        if not target:
+            raise ValueError(f"Agent '{target_id}' is not registered.")
+        if target["status"] != "active" or not target["conversation_id"]:
+            raise ValueError(f"Agent '{target['agent_id']}' is DISABLED (no live doorbell address).")
+        if not message.strip():
+            raise ValueError("Doorbell message cannot be empty.")
+        name = target["harness"] or self.get_prime_harness()
+        if not name:
+            raise ValueError(f"No harness recorded for '{target['agent_id']}'.")
+        text = f"Doorbell from {normalize_agent_id(sender)}: {message}" if sender else message
+        harness_adapter(name).shell_doorbell(target["conversation_id"], text)
+        return {"agent_id": target["agent_id"], "harness": name, "address": target["conversation_id"]}
 
     def get_prime_harness(self) -> str:
         with self._lock(exclusive=False):
@@ -3190,6 +3332,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Human-readable team name (optional when --blueprint is provided)",
     )
     p_ct.add_argument("--mission", required=True, help="Team mission and scope boundaries")
+    p_ct.add_argument("--harness", default="", help="Harness this team runs on (default: Prime's)")
     p_ct.add_argument(
         "--blueprint",
         default=None,
@@ -3254,6 +3397,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # set-target-repo
+    p_sh = add_cmd("set-harness", "Set or clear the harness a team runs on (team must be stopped)")
+    p_sh.add_argument("team", help="Team slug")
+    p_sh.add_argument("harness", nargs="?", default="", help=f"One of {sorted(HARNESS_ADAPTERS)}; omit to follow Prime")
+
+    p_db = add_cmd("doorbell", "Wake an agent on any harness from a shell")
+    p_db.add_argument("agent_id", help="Target agent id (e.g. docs/lead or ultron-prime)")
+    p_db.add_argument("message", help="Message text")
+    p_db.add_argument("--from", dest="sender", default="", help="Your agent id, prefixed to the message")
+
     p_str = add_cmd(
         "set-target-repo",
         "Set or clear the external target repository for a team or role",
@@ -3660,6 +3812,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 lead_responsibilities=args.lead_responsibilities,
                 target_repo=args.target_repo,
                 blueprint=args.blueprint,
+                harness=args.harness,
             )
             if args.json:
                 print(json.dumps(res, indent=2, sort_keys=True))
@@ -3691,6 +3844,20 @@ def main(argv: Optional[List[str]] = None) -> int:
                     f"[ULTRON] Added Role '{res['agent_id']}' ({res['title']}) at {res['role_path']} "
                     f"[model={res['model']}, write={res['write_tools']}, status=disabled{repo_note}]"
                 )
+
+        elif cmd == "set-harness":
+            res = core.set_team_harness(args.team, args.harness)
+            if args.json:
+                print(json.dumps(res, indent=2, sort_keys=True))
+            else:
+                print(f"[ULTRON] Team '{res['slug']}' harness -> {res['harness'] or 'follow Prime'}")
+
+        elif cmd == "doorbell":
+            res = core.doorbell(args.agent_id, args.message, sender=args.sender)
+            if args.json:
+                print(json.dumps(res, indent=2, sort_keys=True))
+            else:
+                print(f"[ULTRON] Doorbell delivered to {res['agent_id']} on {res['harness']}.")
 
         elif cmd == "set-target-repo":
             if not args.clear and not (args.target_repo or "").strip():
@@ -4121,7 +4288,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         return 0
 
-    except (ValueError, PermissionError, FileNotFoundError, RuntimeError) as exc:
+    except (ValueError, PermissionError, FileNotFoundError, RuntimeError, subprocess.TimeoutExpired) as exc:
         print(f"[ULTRON Error] {exc}", file=sys.stderr)
         return 1
 

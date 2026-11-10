@@ -5,8 +5,7 @@ supported harness has an adapter in `ultron/core/core.py` (`HarnessAdapter` subc
 
 ## Which harness is used
 
-`spawn-team`, `stop-team`, `liveness`, `render-spawn`, `activate-team` and `register-prime` pick the harness
-from, in order:
+`render-spawn`, `register-prime` and `activate-team` pick the harness from, in order:
 
 1. `--harness <name>`
 2. `$ULTRON_HARNESS`
@@ -14,8 +13,9 @@ from, in order:
    `$CLAUDE_CODE_SESSION_ID` set ⇒ `claude-code`
 4. the harness Prime registered with
 
-If none applies, the command fails and names the options. `spawn-team` refuses a harness other than
-the one Prime registered with: sessions on different harnesses cannot doorbell each other.
+If none applies, the command fails and names the options. `spawn-team` uses the team's `harness`
+first (see *Mixed hives*). `stop-team`, `liveness` and `doorbell` use the harness each agent was
+activated on.
 
 ## Actions per harness
 
@@ -28,6 +28,25 @@ the one Prime registered with: sessions on different harnesses cannot doorbell e
 | Check roles are running | `liveness [team]` checks `claude agents --json`; exits 1 if a role is gone | `liveness` prints a plan: `manage_subagents(Action="list")` |
 | Safety heartbeat | `CronCreate` | `schedule` |
 | Model tiers `small` / `medium` / `large` | haiku / sonnet / opus | flash_lite / flash / pro |
+
+## Mixed hives
+
+Teams can run on different harnesses (`create-team --harness`, `set-harness <team> <harness>`; no
+harness means Prime's). Requirements:
+- **One machine.** Both shell doorbells are local (a local socket for Claude Code, `localhost` for
+  Antigravity).
+- **Prime can launch the team's harness.** A Claude Code team can be spawned by any Prime, since it starts
+  from the CLI. An Antigravity team needs an Antigravity Prime.
+- `stop-team --cascade` refuses a subtree that spans harnesses; stop the child teams first.
+
+`doorbell <agent_id> "<msg>" [--from <id>]` wakes an agent on any harness from a shell:
+
+| Target harness | Delivery |
+|---|---|
+| `claude-code` | headless `claude -p --tools SendMessage --model haiku` (~5 s, one small model call; fails unless it confirms `sent`) |
+| `antigravity` | `agentapi send-message <uuid> <msg>`, with the daemon address and token from the newest `~/.gemini/antigravity/daemon/hub_*.json` whose pid is alive (passed in env, never argv) |
+
+Roles use their native doorbell inside their team and `doorbell` for anyone outside it.
 
 ## Claude Code
 
@@ -58,7 +77,7 @@ the team stays active until Prime runs `disable-team`.
 
 Subclass `HarnessAdapter` and register it in `HARNESS_ADAPTERS`. An adapter supplies tool names,
 the tier → model map, how role context is delivered (`build_spec`), `spawn` / `stop` / `probe`
-(performed, or returned as a plan for Prime), and the doorbell address and call. A harness without a way for one
+(performed, or returned as a plan for Prime), `shell_doorbell`, `launches_from_cli`, and the doorbell address and call. A harness without a way for one
 session to wake another cannot host ULTRON, because agents never poll.
 
 `HarnessAdapterContractTestCase` in `tests/test_ultron_core.py` runs against every adapter. Add the
