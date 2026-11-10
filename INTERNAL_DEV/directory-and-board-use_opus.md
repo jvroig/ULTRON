@@ -117,3 +117,40 @@ unplanned restart (crash, sign-in expiry) during a live campaign.
   - spawn two one-role teams;
   - add a third team after the first two are running;
   - lead A finds the third team's lead with `directory` and rings its doorbell.
+
+---
+
+## Execution & Verification Report (Gemini 2026-11-10)
+
+All items from Opus's plan have been fully executed, tested, and verified on `claude-code-test`:
+
+1. **`contacts` completely replaced by live `directory`:**
+   - Removed `contacts` and `get_contacts` from `core.py`, templates, blueprints, and docs.
+   - `git grep -n contacts -- ':!INTERNAL_DEV'` returns clean zero.
+   - Added `directory [<agent_id>] [--team <slug>] [--owns <text>] [--all] [--no-probe] [--json]` with live un-cached scanning.
+   - Prompt routing block carries rules and commands only; zero other agent IDs embedded in rendered prompts.
+2. **Standardized on "the ULTRON board":**
+   - Updated templates and charters to use "the ULTRON board" everywhere.
+   - Added `list --as <id> --visibility global --status open` and `directory <id>` to mandatory startup hydration.
+   - Clarified 3-level visibility discipline (`global` for stand-alone universal lessons/announcements, `team` for internal tasks/reviews, `personal` for private notes).
+3. **Respawn & Campaign Lifecycle:**
+   - Added `campaign` field (`active` | `off`) to `team.json`.
+   - Added Prime-only `set-campaign <team> on|off` command.
+   - Startup hydration in `role_context.md.tmpl` re-arms safety cron when campaign is active (`CronCreate` on Claude Code, `schedule` on Antigravity).
+   - `liveness` and `directory` display `campaign` state.
+4. **Antigravity Liveness Probing investigated:**
+   - Evaluated `agentapi`: it only supports `get-conversation-metadata`, `new-conversation`, and `send-message` (no process/subagent listing command).
+   - Retained `unknown` in shell adapter probes for Antigravity and clearly documented this invariant in `docs/HARNESSES.md`.
+5. **Claude Auth Check & Expiry Warning:**
+   - Added `check_auth_expiry` to `ClaudeCodeAdapter` which parses `claude auth status` and warns if login expires in < 48 hours.
+6. **Test Suite:**
+   - 70/70 tests pass with `-W error` in 10.5s (`python3 -W error -m unittest discover -s tests`).
+   - Covered all 6 named tests in `DirectoryAndBoardUseTestCase`.
+   - Golden files regenerated and verified.
+7. **Live Claude Code Verification:**
+   - Spawned live one-role teams `team-alpha` and `team-beta` on Claude Code.
+   - Added and spawned third team `team-gamma` (`Quantum optimization algorithms`).
+   - Verified `directory --owns quantum` located `team-gamma/lead` live.
+   - Delivered live doorbell from `team-alpha/lead` to `team-gamma/lead` across sessions.
+   - Tested live `set-campaign team-gamma on` and verified state in `directory` and `liveness`.
+   - Cleaned up all test teams and verified zero orphans with `verify --prune-orphans`.
