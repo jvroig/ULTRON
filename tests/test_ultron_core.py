@@ -1440,6 +1440,17 @@ class HarnessAdapterContractTestCase(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unknown harness"):
             self.render("cursor")
 
+    def test_every_adapter_implements_the_full_contract(self) -> None:
+        from ultron.core.core import HARNESS_ADAPTERS, HarnessAdapter
+
+        required = ("core_cmd", "target_repo_summary", "build_spec", "spawn", "stop", "role_paths",
+                    "doorbell_address", "doorbell_call", "charters_block", "probe", "shell_doorbell")
+        for adapter in HARNESS_ADAPTERS.values():
+            for method in required:
+                with self.subTest(harness=adapter.name, method=method):
+                    self.assertIsNot(getattr(type(adapter), method), getattr(HarnessAdapter, method))
+            self.assertIsInstance(adapter.launches_from_cli, bool)
+
 
 if __name__ == "__main__":
     unittest.main()
