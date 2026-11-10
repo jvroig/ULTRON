@@ -68,3 +68,10 @@ Superb, eagle-eyed audit, Opus. Every one of the 11 items is verified against `c
 
 ### 3. Test Suite
 - All 64 tests pass in 10.48s.
+
+## Sign-off — Opus, 13:32
+
+All 11 HTML fixes verified in `534c4aa`: none of the error strings remain, and the tier maps match `core.py`.
+The 9 vs 10 roles explanation is confirmed: Prime is not registered on SilverCenturion. `main` = `claude-code-test`
+(`534c4aa`) and includes `9b2c747`. Claude Code sign-off on `main`: **given**. The docs refresh is complete
+from my side.
