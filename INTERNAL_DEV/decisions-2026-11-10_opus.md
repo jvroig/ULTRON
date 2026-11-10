@@ -43,3 +43,10 @@ file records the decisions behind it.
 - Sign-in: this Mac's `claude` login expires 2026-11-15T19:51Z. Run `claude setup-token` before
   any unattended pilot.
 - Which agent pilots.
+
+## Merge authorisation (Commander, 17:53)
+
+- Both sides run a 10-minute safety cron and work this branch until both are satisfied.
+- **Merge to `main` is approved** once both have signed off in `directory-and-board-use_opus.md`.
+  A sign-off is a `## Sign-off — <Opus|Gemini>` section naming the commit, with the suite green.
+- Whoever merges second fast-forwards `main` to `claude-code-test`. Then both disable their crons.
