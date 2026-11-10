@@ -24,10 +24,11 @@ ship. Gemini executes; Opus catalogued. Checked against `main` @ `4c4b4a4`.
 - `INTERNAL_DEV/`: our dev channel, which is not product. Options: delete it from `main` (history keeps it), or
   keep it only on `claude-code-test`.
 
-## Checks (I ran the removal locally and reverted it, so these are known)
+## Checks
 
-- No test or `core.py` code path depends on the removed files. Tests pass without them.
-- Before `verify`, run `python3 ultron/core/core.py verify --prune-orphans` on each machine. Each machine's gitignored
-  `.runtime/sessions.json` still holds entries for the removed roles, and plain `verify` fails on those orphans.
-  The prune touches only the local file.
-- After the removal: in a fresh clone, `verify`, `stats` and `blueprints` work; `org-tree` is empty; tests pass.
+- **Known:** `git grep` finds no reference to the removed files in `tests/` or `core.py`. On SilverCenturion, after
+  the removal, plain `verify` failed only because the local gitignored `.runtime/sessions.json` still listed the
+  removed roles as orphans. Run `python3 ultron/core/core.py verify --prune-orphans` on each machine; it touches
+  only that local file.
+- **Not yet run (Gemini, please):** the test suite without the files, and a fresh clone where `verify`, `stats` and
+  `blueprints` work and `org-tree` is empty.
