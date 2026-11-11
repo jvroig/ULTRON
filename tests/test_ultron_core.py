@@ -635,6 +635,15 @@ class UltronCoreTestCase(unittest.TestCase):
         self.assertIn(str(ext_game.resolve()), specs["lead"]["define_subagent"]["SystemPrompt"])
         self.assertIn("XCOMBench", specs["benchmarker"]["define_subagent"]["SystemPrompt"])
 
+        # Target repo guideline detection
+        ext_game.mkdir(parents=True, exist_ok=True)
+        (ext_game / "AGENTS.md").write_text("# Game Repo Guidelines\nCommit early and often.\n", encoding="utf-8")
+        specs_with_guidelines = {s["role"]: s for s in self.core.render_spawn("game-team")}
+        prompt = specs_with_guidelines["lead"]["define_subagent"]["SystemPrompt"]
+        self.assertIn("Project Guidelines Detected:", prompt)
+        self.assertIn("`AGENTS.md`", prompt)
+        self.assertIn("Target Project Guidelines", prompt)
+
         # set-target-repo CLI updates and clears cleanly
         res_set = self.run_cli("set-target-repo", "game-team", str(ext_xcom), "--cascade")
         self.assertEqual(res_set.returncode, 0, msg=res.stderr if "res" in locals() else res_set.stderr)
@@ -767,6 +776,15 @@ class UltronCoreTestCase(unittest.TestCase):
             "beta-code/spec",
             (self.root / "ultron" / "hive" / "beta-code" / "AGENTS.md").read_text(encoding="utf-8"),
         )
+
+    def test_coding_light_incorporates_target_repo_guidelines(self) -> None:
+        spec_tmpl = (REPO_ROOT / "ultron" / "core" / "blueprints" / "coding-light" / "roles" / "spec.md.tmpl").read_text(encoding="utf-8")
+        dev_tmpl = (REPO_ROOT / "ultron" / "core" / "blueprints" / "coding-light" / "roles" / "dev.md.tmpl").read_text(encoding="utf-8")
+        qa_tmpl = (REPO_ROOT / "ultron" / "core" / "blueprints" / "coding-light" / "roles" / "qa.md.tmpl").read_text(encoding="utf-8")
+
+        self.assertIn("Project Guidelines & Invariants", spec_tmpl)
+        self.assertIn("Project Developer Guidelines", dev_tmpl)
+        self.assertIn("target repository's developer guidelines", qa_tmpl)
 
     def test_export_thread_cli_and_api(self) -> None:
         # Create team and roles for authorization testing

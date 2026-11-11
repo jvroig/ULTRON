@@ -212,6 +212,33 @@ def append_jsonl_event(target_path: Path, event: Mapping[str, Any]) -> None:
         os.fsync(f.fileno())
 
 
+PROJECT_GUIDELINE_FILENAMES = ("AGENTS.md", "CLAUDE.md", ".cursorrules", "CONTRIBUTING.md")
+
+
+def detect_target_repo_guidelines(repo_abs: str | Path) -> Tuple[List[str], str]:
+    """Detect project-specific guideline files in the target repository root."""
+    path = Path(repo_abs)
+    if not path.is_dir():
+        return [], (
+            "  - **Project Guidelines:** None detected at repository root (`AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`). "
+            "Inspect `README.md` or repository docs for project conventions and commit standards."
+        )
+    found = [f for f in PROJECT_GUIDELINE_FILENAMES if (path / f).is_file()]
+    if found:
+        joined = ", ".join(f"`{f}`" for f in found)
+        note = (
+            f"  - **Project Guidelines Detected:** {joined} at `{path}`.\n"
+            f"  - **Mandatory Adherence:** You MUST read and strictly follow these developer guidelines for all coding conventions, "
+            f"commit cadences (e.g. frequent small commits), testing standards, and architectural invariants in this repository."
+        )
+    else:
+        note = (
+            "  - **Project Guidelines:** None detected at repository root (`AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`). "
+            "Inspect `README.md` or repository docs for project conventions and commit standards."
+        )
+    return found, note
+
+
 class HarnessAdapter:
     name = ""
     tools: Mapping[str, str] = {}
@@ -398,12 +425,14 @@ class AntigravityAdapter(HarnessAdapter):
         repo, repo_abs = ctx["target_repo"], ctx["target_repo_abs"]
         if not (repo and repo_abs):
             return f"Local ULTRON Repository (`{ultron_root_str}`)"
+        _, guidelines_note = detect_target_repo_guidelines(repo_abs)
         return (
             f"`{repo_abs}` (configured as `{repo}`)\n"
             f"  - **Dual-Directory Execution Rule:** Your shell sessions (`run_command`) start in the ULTRON HQ root (`{ultron_root_str}`).\n"
             f"  - Run all `python3 ultron/core/core.py ...` board and doorbell commands directly from the default working directory.\n"
             f"  - Run all project build, test, and Git commands inside the target repository: `cd \"{repo_abs}\" && <command>`.\n"
-            f"  - Pass absolute paths under `{repo_abs}/...` when calling `read_file`, `edit_file`, `write_file`, `grep_search`, or `find_by_name` on project files."
+            f"  - Pass absolute paths under `{repo_abs}/...` when calling `read_file`, `edit_file`, `write_file`, `grep_search`, or `find_by_name` on project files.\n"
+            f"{guidelines_note}"
         )
 
     def build_spec(self, core: "UltronCore", ctx: Mapping[str, Any]) -> Dict[str, Any]:
@@ -675,11 +704,13 @@ class ClaudeCodeAdapter(HarnessAdapter):
         if not (repo and repo_abs):
             return f"Local ULTRON Repository (`{core.repo_root}`)"
         t = self.tools
+        _, guidelines_note = detect_target_repo_guidelines(repo_abs)
         return (
             f"`{repo_abs}` (configured as `{repo}`)\n"
             f"  - **Dual-Directory Execution Rule:** Your shell sessions start in your role folder (`{ctx['role_dir'].resolve()}`).\n"
             f"  - Run all project build, test, and Git commands inside the target repository: `cd \"{repo_abs}\" && <command>`.\n"
-            f"  - Pass absolute paths under `{repo_abs}/...` to `{t['read']}`, `{t['edit']}`, `{t['write']}`, `{t['grep']}` and `{t['find']}`."
+            f"  - Pass absolute paths under `{repo_abs}/...` to `{t['read']}`, `{t['edit']}`, `{t['write']}`, `{t['grep']}` and `{t['find']}`.\n"
+            f"{guidelines_note}"
         )
 
     def build_spec(self, core: "UltronCore", ctx: Mapping[str, Any]) -> Dict[str, Any]:

@@ -46,7 +46,7 @@ Execute these steps immediately upon loading this document:
 - **Direct Intra-Team Peer Collaboration + Single External Bridge:**
   - Inside each team, roles are flat peers (`direct_peers_allowed = True`): specialists collaborate and doorbell each other **directly** on `--visibility team` threads according to their workflow (`spec -> dev <-> qa -> spec`) without routing every internal handoff through `lead`.
   - `<team>/lead` (created automatically with every team): Kicks off team workflows, unblocks internal deadlocks, performs final team sign-off, and serves as the team's **sole external communication bridge** (up to parent `lead` / `ultron-prime`, down to child `lead`s).
-- **External Project Repositories (`--target-repo`):** Teams can target external repositories outside ULTRON HQ (e.g., `--target-repo "~/Dev/XCOMBench"`), keeping charters/threads in ULTRON while executing code/tests/commits in the target repo.
+- **External Project Repositories (`--target-repo`):** Teams can target external repositories outside ULTRON HQ (e.g., `--target-repo "~/Dev/XCOMBench"`), keeping charters/threads in ULTRON while executing code/tests/commits in the target repo. ULTRON auto-detects that repo's developer guidelines (`AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`); PRIME and Team Leads must ensure teams adopt those project conventions (commit cadence, verification standards) alongside ULTRON team rules.
 
 ```bash
 # Option A (Recommended): Instantiate a full team + roster + workflow from a Blueprint in one command
