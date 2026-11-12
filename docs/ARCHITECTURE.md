@@ -114,7 +114,9 @@ On Antigravity the shell (`run_command`) is gated under `EnableWriteTools`, so e
 #### Invariant 3: Model Tiering & Cost Conservation
 Roles take a neutral tier: `small`, `medium`, `large` or `inherit` (legacy `flash_lite`, `flash`,
 `pro` load as aliases). Each adapter maps the tier to its harness's models. Roles default to
-`medium`; `large` and `inherit` are reserved for `ultron-prime` or explicit User authorization.
+`medium` (mapped to `sonnet` on Claude Code and `inherit` on Antigravity so subagents run on
+Prime's active Gemini 4 Hydrogen model instead of legacy `flash`); `large` and explicit `inherit`
+overrides (for frontier Primes) are reserved for `ultron-prime` or explicit User authorization.
 
 ---
 
@@ -621,7 +623,7 @@ A harness's messaging tool reaches only its own sessions. `doorbell <agent_id> "
 
 | Member | Purpose |
 |---|---|
-| `tools`, `model_for_tier` | Harness tool names; tier → model (Claude Code: haiku/sonnet/opus; Antigravity: flash_lite/flash/pro) |
+| `tools`, `model_for_tier` | Harness tool names; tier → model (Claude Code: haiku/sonnet/opus; Antigravity: flash_lite/inherit/pro) |
 | `build_spec`, `charters_block`, `role_paths`, `core_cmd`, `target_repo_summary` | Render one role's launch spec and role context |
 | `spawn`, `stop` | Performed (Claude Code) or returned as a plan for Prime (Antigravity) |
 | `probe` | Liveness per role |

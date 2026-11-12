@@ -47,7 +47,10 @@ LEGACY_MODEL_ALIASES = {"flash_lite": "small", "flash": "medium", "pro": "large"
 VALID_MODELS = {"inherit", *MODEL_TIERS}
 DEFAULT_MODEL_TIER = "medium"
 CLAUDE_MODEL_FOR_TIER = {"small": "haiku", "medium": "sonnet", "large": "opus"}
-ANTIGRAVITY_MODEL_FOR_TIER = {"small": "flash_lite", "medium": "flash", "large": "pro"}
+# Antigravity invoke_subagent only accepts ['inherit', 'flash_lite', 'flash', 'pro'].
+# Map medium (the daily-driver default) to 'inherit' so teams use Prime's active
+# Gemini 4 Hydrogen model instead of downgrading to the legacy Flash tier.
+ANTIGRAVITY_MODEL_FOR_TIER = {"small": "flash_lite", "medium": "inherit", "large": "pro"}
 VALID_WORKSPACES = {"inherit", "share", "branch"}
 ROLE_CONTEXT_FILENAME = "role_context.generated.md"
 ROLE_CONTEXT_IMPORT = f"@{ROLE_CONTEXT_FILENAME}"

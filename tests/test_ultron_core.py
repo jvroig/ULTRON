@@ -179,7 +179,7 @@ class UltronCoreTestCase(unittest.TestCase):
         self.assertEqual(lead_spec["agent_id"], "core-eng/lead")
         self.assertFalse(lead_spec["define_subagent"]["EnableSubagentTools"])
         self.assertTrue(lead_spec["define_subagent"]["EnableWriteTools"])
-        self.assertEqual(lead_spec["invoke_subagent"]["Model"], "flash")
+        self.assertEqual(lead_spec["invoke_subagent"]["Model"], "inherit")
         self.assertIn('{"strict": true, "retries": 3}', lead_spec["define_subagent"]["SystemPrompt"])
         self.assertIn("--visibility personal", lead_spec["define_subagent"]["SystemPrompt"])
 
@@ -1478,6 +1478,12 @@ class HarnessAdapterContractTestCase(unittest.TestCase):
             for tier in MODEL_TIERS:
                 with self.subTest(harness=adapter.name, tier=tier):
                     self.assertTrue(adapter.model_for_tier.get(tier))
+
+    def test_default_medium_tier_mappings(self) -> None:
+        from ultron.core.core import HARNESS_ADAPTERS
+
+        self.assertEqual(HARNESS_ADAPTERS["antigravity"].model_for_tier["medium"], "inherit")
+        self.assertEqual(HARNESS_ADAPTERS["claude-code"].model_for_tier["medium"], "sonnet")
 
     def test_every_adapter_reports_the_same_role_identity_fields(self) -> None:
         by_harness = {h: self.render(h) for h in self.FOREIGN_TOOL_NAMES}

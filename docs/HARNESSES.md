@@ -14,7 +14,7 @@ delivery, mixed hives, shell doorbell) is in [ARCHITECTURE.md §7.2 and §8](ARC
 | Stop a team | `stop-team` stops every session and disables the team | `stop-team` prints a plan: `manage_subagents(Action="kill")`, then `disable-team`; the team stays active until then |
 | Check roles are running | `liveness [team]` checks `claude agents --json`; exits 1 if a role is gone | `liveness` prints a plan: `manage_subagents(Action="list")` |
 | Safety heartbeat | `CronCreate` | `schedule` |
-| Model tiers `small` / `medium` / `large` | haiku / sonnet / opus | flash_lite / flash / pro |
+| Model tiers `small` / `medium` / `large` | haiku / sonnet / opus | flash_lite / inherit / pro |
 
 ## Claude Code requirements
 
@@ -39,6 +39,10 @@ Sessions are named `ultron--<team>--<role>`; that name is the role's doorbell ad
   (it only supports `get-conversation-metadata`, `new-conversation`, and `send-message`). Within an
   Antigravity Prime conversation, live subagent status is inspected using `manage_subagents(Action="list")`.
 - An Antigravity team is spawned by an Antigravity Prime only.
+- **Model mapping (`medium` -> `inherit`):** Antigravity's `invoke_subagent` schema only accepts
+  `['inherit', 'flash_lite', 'flash', 'pro']` and has no explicit `hydrogen` value. Because
+  `inherit` uses Prime's active model (Gemini 4 Hydrogen), the Antigravity adapter maps the
+  `medium` daily-driver tier to `inherit` instead of legacy `flash`.
 
 ## Mixed hives
 
