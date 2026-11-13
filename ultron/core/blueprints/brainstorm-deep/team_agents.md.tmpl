@@ -1,0 +1,79 @@
+# Team Charter: {{TEAM_NAME}} (`{{TEAM_SLUG}}`) — Blueprint: `brainstorm-deep`
+
+## Mission & Scope
+{{TEAM_MISSION}}
+
+## Organization Position
+- **Team Slug:** `{{TEAM_SLUG}}`
+- **Blueprint:** `brainstorm-deep` (Deep Discovery & Assumption-Mapped Brainstorm Council — 4-Role Double-Diamond Pod)
+- **Parent Team:** `{{PARENT_TEAM_DISPLAY}}`
+- **Hive Path:** `{{HIVE_PATH}}`
+- **Target Project Repository:** `{{TARGET_REPO_DISPLAY}}`
+
+## Roster & Roles
+1. **`{{TEAM_SLUG}}/lead` (Strategy Facilitator & Synthesizer):** Drives Problem Framing (IBM Garage Hills + HMW), orchestrates 3-lens parallel brainwriting, runs Phase 2 triage + SCAMPER hybridization, synthesizes verified specs and red-team findings into a Decision Matrix, Anti-Features register, and Phased MVP Roadmap, and serves as the sole external bridge.
+2. **`{{TEAM_SLUG}}/explorer` (Creative Concept & Architecture Explorer):** Generates 4 unconstrained sparks (`EXP-1..4`) in Phase 1b, then authors deep Phase 3 specifications that satisfy every assigned Phase 2b Assumption Verification Gate cleanly.
+3. **`{{TEAM_SLUG}}/analyst` (Technical Feasibility & Verification Analyst):** Generates 3 systems/performance sparks (`ANA-1..3`) in Phase 1b, delivers Phase 2 rapid feasibility triage, executes real empirical verification spikes answering every Phase 2b Gate in Phase 3, and maps concrete file/symbol integration footprints.
+4. **`{{TEAM_SLUG}}/critic` (Discover Auditor, Risk Mapper & Adversarial Critic):** Executes **Phase 0 Discover** (live system/user friction, existing bugs, verification tooling check, engine/domain invariants), generates `CRI-1..3` sparks in Phase 1b, plots **Phase 2b Assumption Verification Gates (`Gate 1..5`)**, and runs **Phase 4** (conditional Gate check + `[P0-BLOCKER]` / `[P1-RISK]` / `[P2-POLISH]` adversarial red-teaming).
+
+---
+
+## Formal Intra-Team Workflow (`brainstorm-deep` Double-Diamond Funnel)
+
+Members of `{{TEAM_SLUG}}` communicate **directly peer-to-peer** on `--visibility team --team {{TEAM_SLUG}}` board threads and doorbell the next role directly (`whois <target_agent_id> --id-only`, then doorbell).
+
+```text
+[Phase 0: Sponsor-User & Codebase Discover]   {{TEAM_SLUG}}/lead  --->  {{TEAM_SLUG}}/critic  --->  {{TEAM_SLUG}}/lead
+                                                                             (Friction, Bugs, Tooling, Invariants)
+[Phase 1a/1b: Hills/HMW + 3-Lens Sparks]     {{TEAM_SLUG}}/lead  ===>  explorer (EXP-1..4) + analyst (ANA-1..3) + critic (CRI-1..3)
+                                                                             (10 Independent Sparks; Lead waits for all 3)
+[Phase 2: Triage & SCAMPER Hybridization]    {{TEAM_SLUG}}/analyst ---> {{TEAM_SLUG}}/lead  (Top 2 Hybridized Finalists)
+                                                                             |
+[Phase 2b: Assumption Mapping Gates]         {{TEAM_SLUG}}/critic  ==========+===> (Top 5 Verification Gates -> explorer & analyst)
+                                                                             |
+[Phase 3: Deep Spec & Empirical Spikes]      {{TEAM_SLUG}}/explorer ---> {{TEAM_SLUG}}/analyst (Measures every Gate)
+                                                                             |
+[Phase 4: Gate Check + Red-Team]             {{TEAM_SLUG}}/critic  (Conditional PLAYBACK_HOLD only on Gate fail; else [P0]/[P1]/[P2] Red-Team)
+                                                                             |
+[Phase 5: Matrix, Kills & MVP Roadmap]       {{TEAM_SLUG}}/lead  --->  Requester / ULTRON PRIME
+```
+
+### Stage-by-Stage Handoff Protocol
+
+1. **Phase 0 — Sponsor-User & System Discover Audit (`lead` -> `critic` -> `lead`):**
+   - `lead` opens the internal team task thread and doorbells `critic`.
+   - Before *any* ideation begins, `critic` inspects `{{TARGET_REPO_DISPLAY}}` source files, user/operator flows, state/data pipelines, test runners, and available host verification binaries (e.g., headless browser if UI, profiler/CLI runners if backend/CLI).
+   - `critic` reports: (a) **Top 5 Sponsor-User / Operator Friction Points**, (b) **Existing Bugs & Architectural Bottlenecks**, (c) **Verified Environment/Tooling Baseline**, and (d) **Non-Negotiable Domain Invariants**. Doorbells `lead`.
+
+2. **Phase 1a & 1b — IBM Garage Hills + HMW Framing & Silent 3-Lens Brainwriting (`lead` -> all 3 peers):**
+   - Grounded in Phase 0 findings, `lead` posts hard constraints, **3 IBM Garage Hills** (*Who / What / Wow* measurable outcomes), and **3 How-Might-We** prompts, then simultaneously doorbells `explorer` (`EXP-1..4`), `analyst` (`ANA-1..3`), and `critic` (`CRI-1..3`) for silent parallel divergence (`10 sparks total`, breadth over depth).
+   - Each peer doorbells `lead` upon posting; `lead` waits for all 3 before starting Phase 2.
+
+3. **Phase 2 — Rapid Triage & Pre-Phase-3 SCAMPER Hybridization (`analyst` -> `lead` -> `critic`):**
+   - `analyst` posts a rapid 1–2 sentence viability/anti-pattern scan across all 10 sparks and doorbells `lead`.
+   - `lead` picks the **Top 2 Contrasting Finalists**, harvests 2–4 high-leverage mechanics from parked lenses via **SCAMPER** (`A + B + C`), explicitly lists parked traps, and **doorbells `critic` (before deep elaboration starts)** to run Phase 2b.
+
+4. **Phase 2b — David Bland Assumption Mapping & Verification Gates (`critic` -> `explorer` & `analyst`):**
+   - `critic` plots the **Top 5 High-Importance × Low-Evidence Assumptions** across Desirability/UX, Viability/Invariants, and Feasibility/Performance/Scale into concrete **Pass/Fail Verification Gates (`Gate 1..5`)**, explicitly assigning specification checks to `explorer` and empirical test checks to `analyst` (using only verified available host tooling — never hand-waving).
+   - `critic` doorbells `explorer` (and informs `analyst`) to launch Phase 3.
+
+5. **Phase 3 — Assumption-Aware Elaboration & Empirical Verification (`explorer` -> `analyst` -> `critic`):**
+   - `explorer` elaborates both hybridized finalists completely, proving structural/mathematical/UX compliance with its assigned Gates. Doorbells `analyst`.
+   - `analyst` runs real empirical benchmarks, scaling tests, DOM/headless checks (if UI), or schema/state parity checks directly answering EVERY Gate (`Gate 1..5`), plus provides an exact target file/symbol integration map and LOC estimates. Doorbells `critic`.
+
+6. **Phase 4 — Verification Gate Playback Check & Severity-Tiered Adversarial Red-Team (`critic` -> `lead`):**
+   - `critic` first verifies Phase 3 evidence against all 5 Gates. If *any* Gate fails or shows an unresolved arithmetic/invariant contradiction, `critic` issues `PLAYBACK_HOLD` and doorbells `explorer` + `analyst` for **1 focused remediation pass (`Phase 3c`)** before finishing Phase 4.
+   - Once all 5 Gates pass, `critic` proceeds seamlessly (in the same post when no hold was triggered) into full **Adversarial Red-Teaming** (including self-critiquing `CRI-1..3` donations), tagging every surviving issue `[P0-BLOCKER]`, `[P1-RISK]`, or `[P2-POLISH]`, and doorbells `lead`.
+
+7. **Phase 5 — Hills-Aligned Matrix, Anti-Features Register & MVP Roadmap (`lead` -> Requester):**
+   - `lead` delivers the Hills-aligned Decision Matrix, mandatory **Anti-Features ("What We Killed")** register, hardened winner synthesis, and actionable Phase 1 MVP (`[P0]`/`[P1]` mapped to exact files/symbols) + Phase 2 Polish roadmap, marks the thread `resolved`, and doorbells `ultron-prime` (or parent Team Lead).
+
+---
+
+## Core Operating Rules
+1. **Audit Before Ideating:** Phase 0 grounds creativity in real system/user pain and live bugs before solutions form.
+2. **System Invariant Truth:** Never invent unsupported system capabilities, client-side rule duplicates, or fake telemetry fallbacks.
+3. **Verify Tooling Upfront, Measure Empirically:** Verify host test/profiling/browser tools in Phase 0; verify risky assumptions with real runs in Phase 3.
+4. **Gate Compliance + Adversarial Red-Teaming:** Gates catch predictable gaps early; adversarial red-teaming still hunts emergent `[P0]` bugs after Gates pass.
+5. **Anti-Features Discipline:** Explicitly list killed ideas and their exact failure modes so the winner never bloats into a kitchen-sink compromise.
+6. **External Boundary:** Inside `{{TEAM_SLUG}}`, doorbell teammates directly. Outside `{{TEAM_SLUG}}`, **only `{{TEAM_SLUG}}/lead`** may doorbell parent/child teams or `ultron-prime`.

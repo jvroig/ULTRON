@@ -1,0 +1,45 @@
+{
+  "description": "Fast 4-agent multi-lens brainstorming council (Facilitator Lead, Creative Explorer, Feasibility Analyst, Adversarial Critic) combining Silent 3-Lens Brainwriting, Pre-Phase-3 SCAMPER Hybridization, Progressive Elaboration, Empirical Feasibility Spikes, and Severity-Tiered Red-Teaming.",
+  "name": "Brainstorming & Progressive Ideation Council",
+  "roles": [
+    {
+      "default_model": "medium",
+      "mcp_tools": true,
+      "responsibilities": "Frames the objective, non-negotiable constraints, and evaluation dimensions; coordinates silent 3-lens brainwriting; leads triage and SCAMPER hybridization into Top 2 contrasting finalists; synthesizes findings into a Decision Matrix, Anti-Features register, and Phased Roadmap; serves as sole external bridge.",
+      "role": "lead",
+      "template": "roles/lead.md.tmpl",
+      "title": "Strategy Facilitator & Synthesizer",
+      "write_tools": true
+    },
+    {
+      "default_model": "medium",
+      "mcp_tools": true,
+      "responsibilities": "Generates 4 broad horizon sparks from a Concept, Experience & Metaphor lens in Phase 1b (breadth before depth); in Phase 3 deeply specifies architecture, structural components, interaction flows, and delivery surfaces for the Top 2 hybridized finalists.",
+      "role": "explorer",
+      "template": "roles/explorer.md.tmpl",
+      "title": "Creative Concept & Horizon Explorer",
+      "write_tools": true
+    },
+    {
+      "default_model": "medium",
+      "mcp_tools": true,
+      "responsibilities": "Generates 3 sparks from a Systems, Performance & Data Mechanics lens in Phase 1b; executes rapid feasibility triage in Phase 2; conducts deep architectural grounding, budget analysis, integration mapping, and empirical micro-benchmark spikes in Phase 3.",
+      "role": "analyst",
+      "template": "roles/analyst.md.tmpl",
+      "title": "Technical Feasibility & Systems Analyst",
+      "write_tools": true
+    },
+    {
+      "default_model": "medium",
+      "mcp_tools": true,
+      "responsibilities": "Generates 3 sparks from a Clarity, Failure-Mode & Operator Friction lens in Phase 1b; executes severity-tiered adversarial red-teaming ([P0-BLOCKER], [P1-RISK], [P2-POLISH]) in Phase 4 against edge cases, scaling bottlenecks, and system invariant lies.",
+      "role": "critic",
+      "template": "roles/critic.md.tmpl",
+      "title": "Adversarial Red Teamer & Usability Critic",
+      "write_tools": true
+    }
+  ],
+  "slug": "brainstorm",
+  "when_to_use": "Best for greenfield ideation, conceptual exploration, feature/product strategy, naming/positioning, or well-bounded system and UX designs where speed and high-variety multi-lens divergence matter most and an upfront legacy-codebase forensic audit or formal verification gate loop is unnecessary.",
+  "workflow_summary": "1. Lead frames constraints & opens silent 3-lens brainwriting -> 2. Explorer (4), Analyst (3), Critic (3) post 10 independent sparks -> 3. Analyst rapid-scans viability & Lead hybridizes Top 2 via SCAMPER -> 4. Explorer details Top 2 & Analyst runs empirical spikes -> 5. Critic executes [P0]/[P1]/[P2] red-team -> 6. Lead delivers Decision Matrix, Anti-Features Register & Phased Roadmap."
+}

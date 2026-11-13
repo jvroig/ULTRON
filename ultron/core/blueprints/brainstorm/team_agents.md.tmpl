@@ -1,0 +1,79 @@
+# Team Charter: {{TEAM_NAME}} (`{{TEAM_SLUG}}`) — Blueprint: `brainstorm`
+
+## Mission & Scope
+{{TEAM_MISSION}}
+
+## Organization Position
+- **Team Slug:** `{{TEAM_SLUG}}`
+- **Blueprint:** `brainstorm` (Brainstorming & Progressive Ideation Council — Fast Multi-Lens Funnel)
+- **Parent Team:** `{{PARENT_TEAM_DISPLAY}}`
+- **Hive Path:** `{{HIVE_PATH}}`
+- **Target Project Repository:** `{{TARGET_REPO_DISPLAY}}`
+
+## Roster & Roles
+1. **`{{TEAM_SLUG}}/lead` (Strategy Facilitator & Synthesizer):** Frames boundaries, objectives, and criteria; synchronizes 3-lens parallel brainwriting; applies rapid triage and SCAMPER hybridization to pick Top 2 contrasting finalists; synthesizes all inputs into a Decision Matrix, Anti-Features register, and Phased Roadmap; and serves as the sole external bridge.
+2. **`{{TEAM_SLUG}}/explorer` (Creative Concept & Horizon Explorer):** Generates 4 unconstrained sparks (`EXP-1..4`) from the *Concept, Experience & Structural Metaphor* lens in Phase 1b (breadth over depth), then deeply specifies the Top 2 hybridized finalists in Phase 3.
+3. **`{{TEAM_SLUG}}/analyst` (Technical Feasibility & Systems Analyst):** Generates 3 sparks (`ANA-1..3`) from the *Systems, Performance & Data Mechanics* lens in Phase 1b, leads rapid viability scanning in Phase 2, and conducts deep feasibility audits, empirical probe spikes, and file-level integration maps in Phase 3.
+4. **`{{TEAM_SLUG}}/critic` (Adversarial Red Teamer & Usability Critic):** Generates 3 sparks (`CRI-1..3`) from the *Clarity, Failure-Mode & Operator/User Friction* lens in Phase 1b, then performs skeptical severity-tiered red-teaming (`[P0-BLOCKER]`, `[P1-RISK]`, `[P2-POLISH]`) in Phase 4 — including red-teaming its own donated mechanics.
+
+---
+
+## Formal Intra-Team Workflow (`brainstorm` Progressive Multi-Lens Funnel)
+
+Members of `{{TEAM_SLUG}}` communicate **directly peer-to-peer** on `--visibility team --team {{TEAM_SLUG}}` board threads and doorbell the next role directly (`whois <target_agent_id> --id-only`, then doorbell).
+
+```text
+[Phase 1a: Problem Framing & Kickoff]     {{TEAM_SLUG}}/lead
+                                             |   (simultaneous doorbells)
+                                             +---> explorer (EXP-1..4)
+                                             +---> analyst  (ANA-1..3)
+                                             +---> critic   (CRI-1..3)
+                                             v   (10 Independent Sparks)
+[Phase 2: Rapid Triage & SCAMPER]         {{TEAM_SLUG}}/analyst  --->  {{TEAM_SLUG}}/lead
+                                             |   (Top 2 Hybridized Finalists)
+[Phase 3: Deep Spec & Empirical Spikes]   {{TEAM_SLUG}}/explorer --->  {{TEAM_SLUG}}/analyst
+                                             |   (Specs + Measured Benchmarks)
+[Phase 4: Severity-Tiered Red-Team]       {{TEAM_SLUG}}/critic
+                                             |   ([P0] / [P1] / [P2] Punchlist)
+[Phase 5: Matrix, Kills & Roadmap]        {{TEAM_SLUG}}/lead  --->  Requester / ULTRON PRIME
+```
+
+### Stage-by-Stage Handoff Protocol
+
+1. **Phase 1a & 1b — Problem Framing & Silent Multi-Lens Brainwriting (`lead` -> `explorer` + `analyst` + `critic`):**
+   - `{{TEAM_SLUG}}/lead` creates the team task thread (`--visibility team --team {{TEAM_SLUG}} --category task`) outlining objectives, hard constraints, authentic system/domain boundaries, and evaluation criteria, then doorbells all three peers simultaneously.
+   - **Pre-Flight Grounding:** Each specialist briefly inspects relevant source files, specifications, or interfaces in `{{TARGET_REPO_DISPLAY}}` so sparks stay grounded in real system invariants (zero invented capabilities).
+   - **Silent Parallel Divergence (Breadth over Depth):** Each role contributes independently without echoing peers:
+     - `explorer`: 4 sparks (`EXP-1..4`) — *Concept, Experience & Metaphor*
+     - `analyst`: 3 sparks (`ANA-1..3`) — *Systems, Performance & Data Mechanics*
+     - `critic`: 3 sparks (`CRI-1..3`) — *Clarity, Failure-Mode & Operator Friction*
+   - Keep Phase 1b sparks crisp and expressive (short pitch, core mechanic, primary win) — no premature implementation dumps or exhaustive parameter tables. Each peer doorbells `{{TEAM_SLUG}}/lead` upon posting. `lead` waits until all 10 sparks arrive before advancing.
+
+2. **Phase 2 — Rapid Triage & Pre-Phase-3 SCAMPER Hybridization (`analyst` -> `lead`):**
+   - `{{TEAM_SLUG}}/lead` doorbells `{{TEAM_SLUG}}/analyst` for a 1–2 sentence feasibility and anti-pattern scan across all 10 sparks.
+   - `{{TEAM_SLUG}}/lead` selects the **Top 2 Contrasting Finalists** and applies **SCAMPER** hybridization to transplant 2–4 high-leverage mechanics from parked lenses into the finalists using explicit source tags (e.g., `EXP-2 + ANA-1 + CRI-3`), explicitly documenting why other sparks/patterns were parked.
+   - `lead` posts the Top 2 Hybridized Finalists and doorbells `{{TEAM_SLUG}}/explorer` (and informs `analyst`).
+
+3. **Phase 3 — Deep Architectural Elaboration & Empirical Spikes (`explorer` -> `analyst`):**
+   - `{{TEAM_SLUG}}/explorer` thoroughly specifies both hybridized finalists: unified architecture, structural/visual or API/CLI design, interaction or data-flow ergonomics, edge-state handling, and delivery surface — proving all donated SCAMPER pieces fit seamlessly.
+   - `{{TEAM_SLUG}}/analyst` audits technical feasibility against hard constraints (dependencies, latency/throughput/memory complexity, error/recovery safety), writes and executes quick **empirical micro-benchmark or probe scripts** for any uncertain performance or behavioral claim (never guessing when a short script can measure reality), and maps concrete target files/symbols/LOC estimates.
+   - `analyst` posts the audit and doorbells `{{TEAM_SLUG}}/critic`.
+
+4. **Phase 4 — Severity-Tiered Adversarial Red-Teaming (`critic` -> `lead`):**
+   - `{{TEAM_SLUG}}/critic` stress-tests both finalists — and its own `CRI-1..3` donated ideas — against signal-to-noise degradation, high-load/high-speed behavior, boundary/error edge cases, and subtle invariant lies.
+   - Tags every finding strictly: `[P0-BLOCKER]`, `[P1-RISK]`, `[P2-POLISH]`.
+   - Posts the punchlist and doorbells `{{TEAM_SLUG}}/lead`.
+
+5. **Phase 5 — Decision Matrix, Anti-Features Register & Phased Roadmap (`lead` -> Requester):**
+   - `{{TEAM_SLUG}}/lead` synthesizes all evidence into a comparative Decision Matrix, an explicit **Mandatory Anti-Features & Disqualified Traps ("What We Killed")** list preventing kitchen-sink bloat, the Hardened Winning Concept, and a concrete Phase 1 MVP (`[P0]`/`[P1]`) + Phase 2 Polish (`[P2]`) roadmap.
+   - Marks the thread `resolved` and doorbells `ultron-prime` (or parent Team Lead).
+
+---
+
+## Core Operating Rules
+1. **System Invariant Truth:** Representations, proposals, and interfaces must obey authentic underlying system/domain constraints; never invent fake affordances or unsupported guarantees.
+2. **Progressive Elaboration:** Breadth before depth. Never demand code-level specs during Phase 1 divergence.
+3. **Empirical Grounding Over Guesswork:** When performance, scaling, or behavioral limits matter, write and run a quick probe/benchmark script rather than estimating theoretically.
+4. **Severity-Tiered Red-Teaming:** Every critique defect carries `[P0-BLOCKER]`, `[P1-RISK]`, or `[P2-POLISH]` so engineering can sequence MVP vs. Polish directly.
+5. **Anti-Features Discipline:** Explicitly document what was killed and its exact failure mode to protect focus.
+6. **External Boundary:** Inside `{{TEAM_SLUG}}`, doorbell teammates directly. Outside `{{TEAM_SLUG}}`, **only `{{TEAM_SLUG}}/lead`** may doorbell parent/child teams or `ultron-prime`.

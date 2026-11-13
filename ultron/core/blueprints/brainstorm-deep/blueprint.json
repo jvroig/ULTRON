@@ -1,0 +1,45 @@
+{
+  "description": "High-rigor 4-agent Double-Diamond brainstorming & discovery council combining Phase 0 Sponsor-User/System Audit, IBM Garage Hills & HMW framing, Silent 3-Lens Brainwriting + SCAMPER hybridization, David Bland Assumption Mapping Verification Gates, Empirical Verification Spikes, conditional Playback Gate, and Severity-Tiered Adversarial Red-Teaming.",
+  "name": "Deep Discovery & Assumption-Mapped Brainstorm Council",
+  "roles": [
+    {
+      "default_model": "medium",
+      "mcp_tools": true,
+      "responsibilities": "Frames strategic boundaries, measurable IBM Garage Hills, and HMW questions after Phase 0 Discover; synchronizes 3-lens parallel brainwriting; leads triage and SCAMPER hybridization into Top 2 contrasting finalists; synthesizes verified evidence and red-team findings into an executive Decision Matrix, Anti-Features register, and MVP roadmap; serves as sole external bridge.",
+      "role": "lead",
+      "template": "roles/lead.md.tmpl",
+      "title": "Strategy Facilitator & Synthesizer",
+      "write_tools": true
+    },
+    {
+      "default_model": "medium",
+      "mcp_tools": true,
+      "responsibilities": "Generates 4 broad horizon sparks from a Concept, Experience & Architecture lens in Phase 1b; in Phase 3 deeply specifies both hybridized finalists with explicit proof of compliance against all Phase 2b Assumption Verification Gates.",
+      "role": "explorer",
+      "template": "roles/explorer.md.tmpl",
+      "title": "Creative Concept & Architecture Explorer",
+      "write_tools": true
+    },
+    {
+      "default_model": "medium",
+      "mcp_tools": true,
+      "responsibilities": "Generates 3 sparks from a Systems, Performance & Data Mechanics lens in Phase 1b; performs rapid viability triage in Phase 2; executes empirical verification spikes (real runtime probes, headless browser/DOM checks when UI applies, load/complexity tests) answering every Phase 2b Verification Gate and mapping concrete file integration in Phase 3.",
+      "role": "analyst",
+      "template": "roles/analyst.md.tmpl",
+      "title": "Technical Feasibility & Verification Analyst",
+      "write_tools": true
+    },
+    {
+      "default_model": "medium",
+      "mcp_tools": true,
+      "responsibilities": "Leads Phase 0 Sponsor-User & System Discover Audit (pain points, existing bugs, tooling baseline, system invariants); contributes CRI-1..3 sparks in Phase 1b; creates Top 5 High-Importance x Low-Evidence Verification Gates in Phase 2b; executes Phase 4 entry Verification Gate audit (issuing conditional PLAYBACK_HOLD only on gate failure) + ruthless [P0-BLOCKER]/[P1-RISK]/[P2-POLISH] red-teaming.",
+      "role": "critic",
+      "template": "roles/critic.md.tmpl",
+      "title": "Discover Auditor, Risk Mapper & Adversarial Critic",
+      "write_tools": true
+    }
+  ],
+  "slug": "brainstorm-deep",
+  "when_to_use": "Best for complex existing applications, high-stakes product/UX redesigns, and deep architectural overhauls where hidden codebase bugs, operator friction, cross-layer invariants, and performance or UX assumptions must be audited upfront (Phase 0) and verified empirically through explicit Assumption Gates (Phase 2b) before shipping an implementation roadmap.",
+  "workflow_summary": "0. Critic audits live system/UX pain points & tooling -> 1. Lead frames IBM Hills/HMW & triggers 3-lens brainwriting (10 sparks) -> 2. Analyst triage & Lead SCAMPER Top 2 -> 2b. Critic maps Top 5 Assumption Verification Gates -> 3. Explorer specs & Analyst runs real empirical spikes per Gate -> 4. Critic audits Gates (conditional 1-turn PLAYBACK_HOLD if broken) + runs [P0]/[P1]/[P2] Red-Team -> 5. Lead delivers Hills Matrix, Anti-Features Register & MVP Roadmap."
+}

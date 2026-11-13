@@ -786,6 +786,40 @@ class UltronCoreTestCase(unittest.TestCase):
         self.assertIn("Project Developer Guidelines", dev_tmpl)
         self.assertIn("target repository's developer guidelines", qa_tmpl)
 
+    def test_brainstorm_blueprints_are_generic_and_render_cleanly(self) -> None:
+        bp_slugs = {b["slug"] for b in self.core.list_blueprints()}
+        self.assertIn("brainstorm", bp_slugs)
+        self.assertIn("brainstorm-deep", bp_slugs)
+
+        for bp_slug in ("brainstorm", "brainstorm-deep"):
+            bp_info = self.core.get_blueprint(bp_slug)
+            self.assertEqual(bp_info["role_names"], ["lead", "explorer", "analyst", "critic"])
+            for role in bp_info["roles"]:
+                self.assertEqual(role["default_model"], "medium")
+
+            bp_dir = REPO_ROOT / "ultron" / "core" / "blueprints" / bp_slug
+            for tmpl_path in [bp_dir / "team_agents.md.tmpl", *sorted((bp_dir / "roles").glob("*.md.tmpl"))]:
+                text = tmpl_path.read_text(encoding="utf-8")
+                self.assertTrue(text.strip(), msg=f"Empty template {tmpl_path}")
+
+            team_slug = f"test-{bp_slug}"
+            team = self.core.create_team(
+                slug=team_slug,
+                blueprint=bp_slug,
+                mission="Design next-gen telemetry CLI",
+                target_repo="~/Dev/sample_repo",
+            )
+            self.assertEqual(team["blueprint"], bp_slug)
+            agy_specs = {s["role"]: s for s in self.core.render_spawn(team_slug, harness="antigravity")}
+            cc_specs = {s["role"]: s for s in self.core.render_spawn(team_slug, harness="claude-code")}
+            self.assertEqual(set(agy_specs.keys()), {"lead", "explorer", "analyst", "critic"})
+            for r_slug in ("lead", "explorer", "analyst", "critic"):
+                prompt = agy_specs[r_slug]["define_subagent"]["SystemPrompt"]
+                self.assertNotIn("{{", prompt, msg=f"Unrendered placeholder in {bp_slug}/{r_slug}")
+                self.assertIn(f"{team_slug}/{r_slug}", prompt)
+                self.assertEqual(agy_specs[r_slug]["invoke_subagent"]["Model"], "inherit")
+                self.assertEqual(cc_specs[r_slug]["claude_model"], "sonnet")
+
     def test_export_thread_cli_and_api(self) -> None:
         # Create team and roles for authorization testing
         self.core.create_team(slug="eng", name="Engineering", mission="Engineering pod")
