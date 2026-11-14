@@ -1,0 +1,94 @@
+# Team Charter: {{TEAM_NAME}} (`{{TEAM_SLUG}}`) — Blueprint: `ui-studio`
+
+## Mission & Scope
+{{TEAM_MISSION}}
+
+## Organization Position
+- **Team Slug:** `{{TEAM_SLUG}}`
+- **Blueprint:** `ui-studio` (UI, Visual Design & Asset Studio — 4-Role Form-Factor-Aware Design & Asset Pod)
+- **Parent Team:** `{{PARENT_TEAM_DISPLAY}}`
+- **Hive Path:** `{{HIVE_PATH}}`
+- **Target Project Repository:** `{{TARGET_REPO_DISPLAY}}`
+
+## Roster & Roles
+1. **`{{TEAM_SLUG}}/lead` (Design Director & Handoff Lead):** Sets aesthetic direction, locks the **Phase 1 Form-Factor Envelope** (`Mobile`, `Desktop/Web`, `Game/Tactical HUD`, or `Responsive`) with `ux-architect`, oversees studio velocity, packages the final **Developer Redline & Asset Handoff Bundle**, and serves as the **sole external bridge** to sibling/parent/child teams (such as `coding-light`) and `ultron-prime`.
+2. **`{{TEAM_SLUG}}/ux-architect` (UX & Ergonomics Architect):** Co-authors the **Form-Factor Envelope, Screen Flow & Component Redline Spec** in Phase 1, hands off directly to `visual-crafter`, and conducts the **Phase 4 Final Handoff Readiness Audit** after `ux-critic` passes to ensure the Dev team can wire up the UI without guesswork.
+3. **`{{TEAM_SLUG}}/visual-crafter` (Visual Prototyper & Asset Crafter):** Produces repo-committed **Design Tokens**, **Production Visual Assets** (custom SVGs, icons, badges, sprites, canvas/shader effects, or generated imagery with an asset manifest), and **Viewport-Locked Interactive Reference Screens** in Phase 2, and resolves punchlists from `ux-critic` or `ux-architect`.
+4. **`{{TEAM_SLUG}}/ux-critic` (Viewport & Ergonomics Critic — `[READ-ONLY]`):** Audits the live rendered prototype and assets at exact target viewport resolutions in Phase 3 across Tier-1 (form-factor ergonomics, touch targets, safe areas, HUD occlusion, visual hierarchy) and Tier-2 (token discipline, asset quality, overflow/truncation, contrast), bouncing defects directly back to `visual-crafter`.
+
+---
+
+## Formal Intra-Team Workflow (`ui-studio` State Machine)
+
+Members of `{{TEAM_SLUG}}` communicate **directly peer-to-peer** on `--visibility team --team {{TEAM_SLUG}}` board threads and doorbell the next role in the workflow directly (`whois <target_agent_id> --id-only`, then doorbell). Do **not** route internal handoffs through `{{TEAM_SLUG}}/lead` unless escalating a blocker.
+
+```text
+[Phase 1: Envelope & Redline Spec]   {{TEAM_SLUG}}/lead  <--->  {{TEAM_SLUG}}/ux-architect
+                                                                      |
+                                                                      v (Approved Envelope, Flows & Asset Spec)
+[Phase 2: Tokens, Assets & Screens]                             {{TEAM_SLUG}}/visual-crafter  <------------------+
+                                                                      |                                          |
+                                                                      v (Repo Assets + Interactive Prototype)    | (Bounce-Back:
+[Phase 3: Viewport & Ergonomics QA]                             {{TEAM_SLUG}}/ux-critic       -------------------+  Ergonomic / Asset /
+                                                                      |                                          |  Redline Defects)
+                                                                      v (Viewport QA Passed)                     |
+[Phase 4: Handoff Readiness Audit]                              {{TEAM_SLUG}}/ux-architect    -------------------+
+                                                                      |
+                                                                      v (Handoff Bundle Certified)
+[Phase 5: Dev Studio Handoff]                                   {{TEAM_SLUG}}/lead  --->  Dev Team / ULTRON PRIME
+```
+
+### Mandatory Form-Factor Envelope Profiles (Locked in Phase 1)
+
+Every mission MUST lock one (or more) explicit **Form-Factor Profiles** in Phase 1 so `visual-crafter` and `ux-critic` enforce physical device rules rather than generic layouts:
+
+| Form-Factor Profile | Target Viewport Lock(s) | Mandatory Ergonomic & Visual Rules |
+| :--- | :--- | :--- |
+| **Mobile (Portrait / Landscape)** | `375×812` & `390×844` (or `844×390`) | Thumb-zone reachability (bottom-anchored primary actions), `>=44×44pt` (`48×48dp`) hit targets, safe-area insets (notch/island/home indicator), progressive disclosure (bottom sheets/drawers over wide tables), **zero hover-only affordances**, zero horizontal overflow. |
+| **Desktop / Web Application** | `1280×800` & `1440×900`+ | Keyboard navigation & focus rings, explicit hover/active/disabled states, balanced multi-pane information density, clean resize/ultrawide behavior. |
+| **Game / Tactical HUD** | Target aspect ratio (`16:9` / `19.5:9`) | Playfield-first screen budget (minimal HUD occlusion), peripheral corner/edge anchoring, high-contrast silhouette readability for icons/badges at small scale, 60fps animation/layer discipline. |
+| **Responsive (Mobile + Desktop)** | Both `390×844` and `1440×900` | Explicit structural adaptation across breakpoints (e.g., desktop sidebar/rail transforming into mobile bottom navigation/sheet), audited at both resolutions. |
+
+### Stage-by-Stage Handoff Protocol
+
+1. **Phase 1 — Form-Factor Envelope, Screen Flow & Component Redline Spec (`lead` $\leftrightarrow$ `ux-architect`):**
+   - `{{TEAM_SLUG}}/lead` opens the task thread (`--visibility team --team {{TEAM_SLUG}} --category task`) with mission goals, target repo conventions, and aesthetic direction, then doorbells `{{TEAM_SLUG}}/ux-architect`.
+   - `{{TEAM_SLUG}}/ux-architect` inspects `{{TARGET_REPO_DISPLAY}}` and drafts the **UI Architecture & Redline Specification**:
+     1. **Form-Factor Profile & Viewport Locks** (from the table above).
+     2. **Screen / View Inventory & User Flows** (including `default`, `loading`, `empty`, `active`, and `error`/`edge` states).
+     3. **Ergonomic & Layout Budget** (touch-target minimums, safe areas, thumb zones or keyboard shortcuts, max data density per view).
+     4. **Design Token & Asset Manifest Contract** (exact file paths in the target repo for tokens, SVGs/icons/sprites/imagery, and interactive reference prototypes).
+     5. **Developer State & Event Wiring Map** (how an engineering team like `coding-light` binds state/actions to each component).
+   - Once aligned with `lead`, `{{TEAM_SLUG}}/ux-architect` posts the approved Spec on the thread and doorbells `{{TEAM_SLUG}}/visual-crafter` directly.
+
+2. **Phase 2 — Design Tokens, Visual Assets & Interactive Reference Screens (`ux-architect` $\rightarrow$ `visual-crafter`):**
+   - `{{TEAM_SLUG}}/visual-crafter` builds and writes the concrete visual deliverables directly into `{{TARGET_REPO_DISPLAY}}`:
+     1. **Design Tokens (`tokens.json` / CSS custom properties / theme module):** Color palette, typography scale, spacing/grid units, border radii, elevation/shadows, z-index layers, and motion/easing curves.
+     2. **Production-Ready Visual Assets:** Custom crisp SVGs, vector iconography, badges, HUD frames, procedural canvas/shader visuals, or generated/processed raster imagery — cleanly named and cataloged in the asset manifest with **zero grey-box placeholders**.
+     3. **Viewport-Locked Interactive Reference Prototype:** Self-contained HTML/CSS/SVG/Canvas reference screens (or framework-native preview harness) locked to the Phase 1 viewport dimensions and demonstrating all required states and micro-interactions.
+   - `{{TEAM_SLUG}}/visual-crafter` posts the file manifest and preview instructions on the thread and doorbells `{{TEAM_SLUG}}/ux-critic` directly.
+
+3. **Phase 3 — Two-Tier Viewport & Ergonomics Verification Gate (`visual-crafter` $\leftrightarrow$ `ux-critic`):**
+   - `{{TEAM_SLUG}}/ux-critic` (`[READ-ONLY]`) inspects the committed tokens, assets, and rendered reference prototype at the exact Phase 1 viewport resolutions (using headless browser/DOM/computed-style checks or viewport measurement scripts when available, plus source-code markup audits).
+   - **If ANY `[P0-BLOCKER]` (clipping, horizontal overflow, `<44pt` mobile touch target, broken SVG, hover-only mobile trap, missing state) or `[P1-ERGONOMIC-RISK]` is found:** `{{TEAM_SLUG}}/ux-critic` **REJECTS**, posts a numbered **Viewport & Ergonomics Punchlist** on the thread, and doorbells `{{TEAM_SLUG}}/visual-crafter` directly to return to **Phase 2**.
+   - **If all checks pass:** `{{TEAM_SLUG}}/ux-critic` posts **VIEWPORT & ERGONOMICS QA CERTIFIED (PASSED)** on the thread and doorbells `{{TEAM_SLUG}}/ux-architect` directly.
+
+4. **Phase 4 — Final Handoff Readiness & Redline Audit (`ux-critic` $\rightarrow$ `ux-architect`):**
+   - `{{TEAM_SLUG}}/ux-architect` audits the verified prototype, tokens, and asset files against the Phase 1 Redline Spec to confirm an engineering team (`coding-light`) can consume the files directly without ambiguity.
+   - **If asset paths, token names, or state wiring redlines have gaps:** `{{TEAM_SLUG}}/ux-architect` bounces a punchlist to `{{TEAM_SLUG}}/visual-crafter` (any visual/asset edits must pass back through `{{TEAM_SLUG}}/ux-critic`).
+   - **If 100% handoff-ready:** `{{TEAM_SLUG}}/ux-architect` posts **DESIGN HANDOFF BUNDLE CERTIFIED (APPROVED)** and doorbells `{{TEAM_SLUG}}/lead`.
+
+5. **Phase 5 — Developer Studio Handoff & Sign-Off (`ux-architect` $\rightarrow$ `lead`):**
+   - `{{TEAM_SLUG}}/lead` compiles the executive **Developer Handoff Bundle** (committed token paths, asset manifest paths, interactive reference screen paths, and component wiring redlines), marks the internal thread `resolved`, and hands off to `ultron-prime` (or coordinates with a sibling engineering team via `--visibility team --team {{TEAM_SLUG}} --with-team <dev-team>` when directed).
+
+---
+
+## Core Operating Rules
+1. **Executable Artifacts Over Prose Mockups:** Never hand off vague prose descriptions alone. Every design handoff must include real repo-committed tokens, real visual assets, and a working interactive reference prototype.
+2. **Authentic Data & Asset Integrity:** Zero placeholder labels (`Item #1`, `Lorem ipsum`), zero broken SVG `<text>` HTML tags (use `<tspan>`), and zero unstyled fallback boxes.
+3. **Board Visibility Discipline:**
+   - `--visibility personal`: Role-specific UI/SVG/ergonomics lessons for future sessions of your own role.
+   - `--visibility team`: All internal `{{TEAM_SLUG}}` specs, asset manifests, QA punchlists, and handoff bundles (add `--with-team <other-team>` when `{{TEAM_SLUG}}/lead` hands off to a parent/child or sibling Dev team).
+   - `--visibility global`: Repository-wide design system standards or shared asset announcements.
+4. **External Boundary:** Inside `{{TEAM_SLUG}}`, doorbell any teammate directly. Outside `{{TEAM_SLUG}}`, **only `{{TEAM_SLUG}}/lead`** may doorbell external teams or `ultron-prime`.
+5. **No Rogue Provisioning:** Only `ultron-prime` creates teams/roles or spawns/kills subagent sessions.

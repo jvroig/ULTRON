@@ -1,0 +1,45 @@
+{
+  "description": "4-agent form-factor-aware UI, visual design, and asset production studio (Design Director Lead, UX & Ergonomics Architect, Visual Prototyper & Asset Crafter, Read-Only Viewport & Ergonomics Critic) that produces repo-committed design tokens, custom visual assets, viewport-locked interactive reference prototypes, and developer redline handoff specs across Mobile, Web, Desktop, and Game HUDs.",
+  "name": "UI, Visual Design & Asset Studio",
+  "roles": [
+    {
+      "default_model": "medium",
+      "mcp_tools": true,
+      "responsibilities": "Lock the Phase 1 Form-Factor Envelope (Mobile, Desktop/Web, Game HUD, or Responsive), aesthetic direction, and screen/asset inventory with UX Architect; oversee the studio pipeline; package the final Developer Redline & Asset Handoff Bundle on the board; and serve as sole external bridge.",
+      "role": "lead",
+      "template": "roles/lead.md.tmpl",
+      "title": "Design Director & Handoff Lead",
+      "write_tools": true
+    },
+    {
+      "default_model": "medium",
+      "mcp_tools": true,
+      "responsibilities": "Co-author the Phase 1 Form-Factor Envelope, Screen Flow & Component Redline Spec (viewport locks, ergonomic constraints, navigation/HUD topology, density budgets, asset manifest contract, and state/event bindings), hand off to Visual Crafter, and perform the Phase 4 Final Handoff Readiness Audit after UX Critic passes.",
+      "role": "ux-architect",
+      "template": "roles/ux-architect.md.tmpl",
+      "title": "UX & Ergonomics Architect",
+      "write_tools": true
+    },
+    {
+      "default_model": "medium",
+      "mcp_tools": true,
+      "responsibilities": "Author repo-committed design tokens, production-ready visual assets (custom SVGs, iconography, badges, sprites, canvas/shader effects, or generated imagery), and viewport-locked interactive reference screens covering all UI states; resolve UX Critic and UX Architect punchlists.",
+      "role": "visual-crafter",
+      "template": "roles/visual-crafter.md.tmpl",
+      "title": "Visual Prototyper & Asset Crafter",
+      "write_tools": true
+    },
+    {
+      "default_model": "medium",
+      "mcp_tools": true,
+      "responsibilities": "Conduct skeptical Tier-1 (form-factor viewport lock, touch-target/keyboard ergonomics, safe areas, HUD occlusion, visual polish) and Tier-2 (design token compliance, asset integrity, contrast, overflow, redline completeness) audits at target resolutions; bounce defects directly to Visual Crafter before certifying approval to UX Architect.",
+      "role": "ux-critic",
+      "template": "roles/ux-critic.md.tmpl",
+      "title": "Viewport & Ergonomics Critic",
+      "write_tools": false
+    }
+  ],
+  "slug": "ui-studio",
+  "when_to_use": "Ideal for designing mobile apps, mobile/desktop game HUDs, web applications, or desktop interfaces where a dedicated design & asset studio should produce repo-committed design tokens, custom SVG/raster/procedural assets, viewport-locked interactive reference prototypes, and developer redline specs to hand off cleanly to an engineering team (e.g. coding-light).",
+  "workflow_summary": "1. Lead <-> UX Architect (Form-Factor Envelope, Screen Flow & Redline Spec) -> 2. UX Architect -> Visual Crafter (Design Tokens, Visual Assets & Interactive Reference Screens) -> 3. Visual Crafter <-> UX Critic (Two-tier viewport & ergonomics audit + fix loop) -> 4. UX Critic -> UX Architect (Final Handoff Readiness Audit) -> 5. UX Architect -> Lead (Developer Handoff Bundle & Sign-Off)."
+}

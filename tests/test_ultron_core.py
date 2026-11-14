@@ -820,6 +820,50 @@ class UltronCoreTestCase(unittest.TestCase):
                 self.assertEqual(agy_specs[r_slug]["invoke_subagent"]["Model"], "inherit")
                 self.assertEqual(cc_specs[r_slug]["claude_model"], "sonnet")
 
+    def test_ui_studio_blueprint_renders_cleanly_and_enforces_read_only_critic(self) -> None:
+        bp_slugs = {b["slug"] for b in self.core.list_blueprints()}
+        self.assertIn("ui-studio", bp_slugs)
+
+        bp_info = self.core.get_blueprint("ui-studio")
+        self.assertEqual(
+            bp_info["role_names"],
+            ["lead", "ux-architect", "visual-crafter", "ux-critic"],
+        )
+        for role in bp_info["roles"]:
+            self.assertEqual(role["default_model"], "medium")
+
+        team = self.core.create_team(
+            slug="ui-pod",
+            blueprint="ui-studio",
+            mission="Design mobile tactical HUD, design tokens, and SVG asset kit",
+            target_repo="~/Dev/sample_app",
+        )
+        self.assertEqual(team["blueprint"], "ui-studio")
+        agy_specs = {s["role"]: s for s in self.core.render_spawn("ui-pod", harness="antigravity")}
+        cc_specs = {s["role"]: s for s in self.core.render_spawn("ui-pod", harness="claude-code")}
+        self.assertEqual(
+            set(agy_specs.keys()),
+            {"lead", "ux-architect", "visual-crafter", "ux-critic"},
+        )
+        self.assertFalse(agy_specs["lead"]["read_only_mode"])
+        self.assertFalse(agy_specs["ux-architect"]["read_only_mode"])
+        self.assertFalse(agy_specs["visual-crafter"]["read_only_mode"])
+        self.assertTrue(agy_specs["ux-critic"]["read_only_mode"])
+        self.assertIn(
+            "[READ-ONLY ROLE MODE]",
+            agy_specs["ux-critic"]["define_subagent"]["SystemPrompt"],
+        )
+        self.assertIn(
+            "Mandatory Form-Factor Envelope Profiles",
+            agy_specs["ux-architect"]["define_subagent"]["SystemPrompt"],
+        )
+        for r_slug in ("lead", "ux-architect", "visual-crafter", "ux-critic"):
+            prompt = agy_specs[r_slug]["define_subagent"]["SystemPrompt"]
+            self.assertNotIn("{{", prompt, msg=f"Unrendered placeholder in ui-studio/{r_slug}")
+            self.assertIn(f"ui-pod/{r_slug}", prompt)
+            self.assertEqual(agy_specs[r_slug]["invoke_subagent"]["Model"], "inherit")
+            self.assertEqual(cc_specs[r_slug]["claude_model"], "sonnet")
+
     def test_export_thread_cli_and_api(self) -> None:
         # Create team and roles for authorization testing
         self.core.create_team(slug="eng", name="Engineering", mission="Engineering pod")
