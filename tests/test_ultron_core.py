@@ -1283,6 +1283,7 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
         self.assertEqual(res["status"], "awaiting_prime")
         self.assertEqual({sp["agent_id"] for sp in res["specs"]}, {"api/lead", "api/coder"})
         self.assertTrue(any("activate-team api" in step for step in res["next_steps"]))
+        self.assertTrue(any("Safety Cron" in step and "ultron/core/threads/" in step for step in res["next_steps"]))
         self.assertEqual(self.calls(), [])
         self.assertEqual(self.core.get_team("api")["status"], "disabled")
 
@@ -1291,6 +1292,7 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
         res = self.core.stop_team("api", harness="antigravity")
         self.assertEqual(res["status"], "awaiting_prime")
         self.assertIn("uuid-coder", res["next_steps"][0])
+        self.assertTrue(any("ultron/core/threads/" in step for step in res["next_steps"]))
         self.assertEqual(self.calls(), [])
         self.assertEqual(self.core.get_team("api")["status"], "active")
 
@@ -1498,6 +1500,7 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
         res = self.core.probe_liveness(harness="antigravity")
         self.assertEqual({r["state"] for r in res["agents"].values()}, {"unknown"})
         self.assertIn("['u1', 'u2']", res["next_steps"][0])
+        self.assertTrue(any("git add ultron/core/threads ultron/hive" in step for step in res["next_steps"]))
 
     def test_spawn_refuses_an_already_active_team(self) -> None:
         self.core.spawn_team("api")

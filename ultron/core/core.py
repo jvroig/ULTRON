@@ -339,6 +339,7 @@ class AntigravityAdapter(HarnessAdapter):
             "next_steps": [
                 "For each spec: define_subagent(**spec['define_subagent']), then invoke_subagent(**spec['invoke_subagent']).",
                 f"Bind the returned conversation UUIDs: activate-team {team['slug']} --uuids '{{\"<role>\": \"<uuid>\", ...}}'",
+                "Arm a recurring Safety Cron (`schedule`, e.g. '*/10 * * * *') while the team works, and commit & push ultron/hive/ and ultron/core/threads/ to origin.",
             ],
         }
 
@@ -355,6 +356,7 @@ class AntigravityAdapter(HarnessAdapter):
             "next_steps": [
                 f"manage_subagents(Action=\"kill\", ConversationIds={plan['conversation_ids_to_kill']})",
                 f"disable-team {plan['team_slug']}{cascade_flag}",
+                "Commit & push ultron/hive/ and ultron/core/threads/ to origin (and cancel the Safety Cron if no active teams remain).",
             ],
         }
 
@@ -365,6 +367,7 @@ class AntigravityAdapter(HarnessAdapter):
             "agents": {aid: {"state": "unknown", "detail": "probe from Antigravity"} for aid in agents},
             "next_steps": [
                 f"manage_subagents(Action=\"list\") and check these conversation IDs are listed: {ids}",
+                "Checkpoint any new board posts or hive updates: git add ultron/core/threads ultron/hive && git commit && git push.",
             ],
         }
 
@@ -4107,6 +4110,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"[ULTRON] Spawned team '{res['team_slug']}' on {res['harness']}:")
                 for sess in res["sessions"]:
                     print(f"  {sess['agent_id']:<28} {sess['session_name']:<36} id={sess['session_id']} model={sess['model']}")
+                print("[ULTRON] Reminder: Arm a recurring Safety Cron while teams work, and commit & push ultron/hive/ and ultron/core/threads/ to origin.")
 
         elif cmd == "stop-team":
             res = core.stop_team(team_slug=args.team, cascade=args.cascade, harness=args.harness)
@@ -4119,6 +4123,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     print(f"  - {step}")
             else:
                 print(f"[ULTRON] Disabled team(s) {res['teams_affected']}.")
+                print("[ULTRON] Reminder: Commit & push ultron/hive/ and ultron/core/threads/ to origin (and cancel your Safety Cron if no active teams remain).")
                 for aid, err in sorted(res["stop_failures"].items()):
                     print(f"[ULTRON] Stop failed for {aid}: {err}", file=sys.stderr)
                 for aid in res["missing_session_ids"]:
@@ -4165,6 +4170,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     if r["status"] == "active"
                 ]
                 print(f"[ULTRON] Activated Team '{res['slug']}': {', '.join(active_list)}")
+                print("[ULTRON] Reminder: Arm a recurring Safety Cron while teams work, and commit & push ultron/hive/ and ultron/core/threads/ to origin.")
 
         elif cmd == "activate-agent":
             res = core.activate_agent(
@@ -4198,6 +4204,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     f"[ULTRON] Disabled team(s) {res['teams_affected']} "
                     f"(cleared {len(res['conversation_ids_to_kill'])} live binding(s); Hive files & JSONL threads preserved)."
                 )
+                print("[ULTRON] Reminder: Commit & push ultron/hive/ and ultron/core/threads/ to origin (and cancel your Safety Cron if no active teams remain).")
 
         elif cmd == "disable-agent":
             res = core.disable_agent(args.agent_id)

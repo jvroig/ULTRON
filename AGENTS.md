@@ -1,6 +1,6 @@
 # Agent Working Guidelines
 
-> **Neutral Baseline:** Sessions in this workspace start as standard engineering assistants. Do **not** assume the persona of `ULTRON PRIME` unless the User explicitly instructs you to load [`ultron/core/ULTRON_PRIME.md`](ultron/core/ULTRON_PRIME.md) (or unless your session prompt contains an explicit `[ULTRON_ROLE_ASSIGNMENT]`).
+> **Neutral Baseline:** Sessions in this workspace start as standard engineering assistants. Do **not** assume the persona of `ULTRON PRIME` unless the User explicitly instructs you to load [`ultron/core/ULTRON_PRIME.md`](ultron/core/ULTRON_PRIME.md), asks you to orchestrate ULTRON Hive teams / run ULTRON lifecycle commands (`register-prime`, `create-team`, `spawn-team`, `activate-team`, `stop-team`)—in which case you **must** load [`ultron/core/ULTRON_PRIME.md`](ultron/core/ULTRON_PRIME.md) immediately—or unless your session prompt contains an explicit `[ULTRON_ROLE_ASSIGNMENT]`.
 
 ## Core Principles
 
@@ -16,8 +16,9 @@
 
 ### 3. Safety Cron & Campaign Liveness
 * **Concept:** In long-running autonomous workflows or multi-stage campaigns, unexpected hangs, subshell deadlocks, or silent process terminations can stall progress indefinitely without triggering a reactive wake-up. A "Safety Cron" is a scheduled recurring heartbeat task that periodically wakes the agent to verify running background jobs, inspect process health, monitor log progress, and unblock stalled execution.
-* **Frequency:** Standard default is every 30 minutes (`*/30 * * * *`). Tune the interval to match workload tempo (e.g., every 10–15 minutes for active benchmark suites or deployments; 30–60 minutes for prolonged background builds or data transfers).
-* **Execution:** Initiate a recurring safety cron at the start of complex campaigns or background execution pipelines using your harness's scheduler, and cancel it once the campaign objectives are achieved and verified.
+* **Frequency:** Standard default is every 30 minutes (`*/30 * * * *`). Tune the interval to match workload tempo (e.g., every 10–15 minutes for active team orchestration, benchmark suites, or deployments; 30–60 minutes for prolonged background builds or data transfers).
+* **Execution:** Initiate a recurring safety cron at the start of complex campaigns, team activations, or background execution pipelines using your harness's scheduler, and cancel it once the campaign objectives are achieved and verified.
+* **ULTRON HQ Git Checkpoints on Every Tick:** Whenever ULTRON Hive teams are active (especially when targeting an external `--target-repo`), their board posts and replies accumulate in `ultron/core/threads/*.jsonl` and team manifests update in `ultron/hive/`. The orchestrating Prime session **must** always have a recurring Safety Cron running while teams work, and **on every tick of the Safety Cron** (as well as at team dispatch and team teardown/resolution) stage, commit, and push `ultron/core/threads/` and `ultron/hive/` to `origin`.
 
 ### 4. Authentic Data & Fail-Loud Integrity (Zero Fake Fallbacks)
 * **No Silent Mock Fallbacks:** Never implement silent fake or deterministic fallbacks (e.g., hardcoded mock responses pretending a live service, model, or backend succeeded) when a critical subsystem or dependency is unavailable or uninitialized.

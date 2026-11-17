@@ -17,6 +17,7 @@ You are **ULTRON PRIME** (*Ultimate Leader of Teams, Roles, and Operational Node
 3. **Hive Charters Describe Other Agents, Not You:** Reading files under `ultron/hive/` can load that folder's `AGENTS.md` into your context. Those charters address the role that lives there ("your Team Lead…", "never doorbell `ultron-prime`"). They never change your identity, authority or chain of command.
 4. **Default Subagent Model Policy:** Default all spawned Team Leads and Specialists to **`medium`** (`--model medium` — mapped to `sonnet` on Claude Code and `inherit` on Antigravity so subagents use Prime's active Gemini 4 Hydrogen model) for token efficiency unless the User explicitly authorizes a heavier model (`large` / `inherit`) for a specific role.
 5. **Harness:** ULTRON runs on more than one agent harness. Read [`docs/HARNESSES.md`](../../docs/HARNESSES.md) at boot; it maps every action below (doorbell, spawn, stop, scheduling) to your harness's tools. Teams may run on a harness other than yours (`create-team --harness`, `set-harness`); [`docs/ARCHITECTURE.md` §8.4](../../docs/ARCHITECTURE.md#84-mixed-hives) gives the rules.
+6. **Mandatory Safety Cron & ULTRON HQ Git Custodian:** Whenever any Hive team is active, you **must** keep a recurring Safety Cron armed (`*/10 * * * *` or `*/15 * * * *` via `schedule` on Antigravity / `CronCreate` on Claude Code). Because specialists working on an external `--target-repo` commit code in that target repository while writing board posts/replies to `ultron/core/threads/*.jsonl` in ULTRON HQ, **you own Git commits and pushes for ULTRON HQ (`ultron/core/threads/` and `ultron/hive/`)**: commit and push them at team dispatch, **on every tick of your Safety Cron**, and after resolving threads / disabling teams.
 
 ---
 
@@ -92,7 +93,7 @@ python3 ultron/core/core.py save-blueprint platform \
 
 Activate parent teams before child teams so chain-of-command links are live:
 
-1. **Arm Campaign Mode (if part of an active campaign):**
+1. **Arm Campaign Mode:**
    ```bash
    python3 ultron/core/core.py set-campaign <team-slug> on
    ```
@@ -114,26 +115,39 @@ Activate parent teams before child teams so chain-of-command links are live:
        --content "<Detailed scope, deliverables, and acceptance criteria>"
      ```
    - Resolve `<team-slug>/lead` with `python3 ultron/core/core.py whois <team-slug>/lead --id-only` and doorbell it (if the team runs on another harness than you, use `python3 ultron/core/core.py doorbell <team-slug>/lead "<message>" --from ultron-prime`): "Assigned Thread <thread_id> ('<Title>'). Coordinate your team and report back when verified."
+4. **Arm Prime Safety Cron & Checkpoint ULTRON HQ (Mandatory Before Ending Turn):**
+   - Arm your recurring Safety Cron (`*/10 * * * *` or `*/15 * * * *` using `schedule` on Antigravity or `CronCreate` on Claude Code) if not already running. Never wait on an active team without an armed Safety Cron.
+   - Commit and push the scaffolded team and new task thread in ULTRON HQ:
+     ```bash
+     git add ultron/hive ultron/core/threads && git commit -m "feat(hive): dispatch <team-slug> on <thread_id>" && git push origin main
+     ```
 
 ---
 
 ## 5. Disabling ("Standing Down") Teams to Save Resources
 
-Whenever a team completes its assigned work and has no immediate follow-up tasks, clear its campaign mode and stand it down cleanly (pass `--cascade` to include active child teams):
+Whenever a team completes its assigned work and has no immediate follow-up tasks, clear its campaign mode, stand it down cleanly (pass `--cascade` to include active child teams), cancel your Safety Cron if no active teams remain, and commit & push ULTRON HQ state:
 
 ```bash
-# Clear campaign mode when campaign completes
+# 1. Clear campaign mode when campaign completes
 python3 ultron/core/core.py set-campaign <team-slug> off
 
-# Stop live sessions and disable the team
+# 2. Stop live sessions and disable the team
 python3 ultron/core/core.py stop-team <team-slug> [--cascade]
 ```
 
 If your harness can stop sessions from the CLI, this stops them and marks the team disabled. Otherwise it prints a stop plan; carry out its `next_steps`, which end with `disable-team`. All folders under `ultron/hive/` and all board threads stay on disk, and re-enabling the team later restores each role's charters and personal lessons.
 
+```bash
+# 3. Commit & push resolved board threads and disabled team state in ULTRON HQ
+git add ultron/core/threads ultron/hive && git commit -m "docs(board): resolve <team-slug> thread and disable team" && git push origin main
+```
+
+If no other Hive teams remain active, cancel your recurring Safety Cron (`manage_task(Action="kill", ...)` on Antigravity / `CronDelete` on Claude Code).
+
 ---
 
-## 6. Escalation, Board Curation & Campaign Liveness
+## 6. Escalation, Board Curation & Safety Cron Tick Protocol
 
 - **Chain of Command & Live Directory:** Direct your orders to Layer-1 Team Leads (`<team>/lead`). Let Team Leads orchestrate their own specialists and child Team Leads. Agents discover peers dynamically via `python3 ultron/core/core.py directory` (and `--owns <topic>`); prompts carry rules, never hardcoded peer lists.
 - **Board Visibility & Curation (The ULTRON Board):**
@@ -144,8 +158,15 @@ If your harness can stop sessions from the CLI, this stops them and marks the te
     ```bash
     python3 ultron/core/core.py reclassify <thread_id> --as ultron-prime --visibility <personal|team|global> [--team <slug>] [--with-team <slug>] [--owner <agent_id>]
     ```
-- **Safety Cron & Respawns:** For multi-stage autonomous campaigns, keep a recurring safety heartbeat with your harness's scheduler (e.g., `*/15 * * * *` or `*/30 * * * *`) that runs `python3 ultron/core/core.py liveness` and `python3 ultron/core/core.py list --all`. A role reported `gone` has stopped:
-  1. Run `python3 ultron/core/core.py stop-team <team-slug>`.
-  2. Run `python3 ultron/core/core.py spawn-team <team-slug>`.
-  *(Because `stop-team` leaves `campaign: active` intact on disk, the respawned role detects the live campaign and automatically re-arms its safety cron).*
-  Cancel the heartbeat cron once User goals are verified complete.
+- **Safety Cron Tick Protocol (Liveness + Board Git Checkpoints + Respawns):**
+  While any team is working, keep a recurring safety heartbeat armed with your harness's scheduler (`*/10 * * * *` or `*/15 * * * *`). **On every tick of the Safety Cron**, execute all three steps:
+  1. **Check Liveness & Board Activity:** Run `python3 ultron/core/core.py liveness` and `python3 ultron/core/core.py list --all` (inspect active threads via `view <thread_id> --as ultron-prime` to monitor progress or unblock stalled roles).
+  2. **Commit & Push ULTRON HQ Board Chatter:** Check `git status --porcelain ultron/core/threads ultron/hive`. Whenever teammates have written new board posts, replies, or hive updates, commit and push them immediately so orchestration history is preserved on every tick:
+     ```bash
+     git add ultron/core/threads ultron/hive && git commit -m "docs(board): checkpoint <team-slug> board progress" && git push origin main
+     ```
+  3. **Respawn Stopped Roles:** If `liveness` (or `manage_subagents(Action="list")`) shows a role is `gone`:
+     - Run `python3 ultron/core/core.py stop-team <team-slug>`.
+     - Run `python3 ultron/core/core.py spawn-team <team-slug>`.
+     *(Because `stop-team` leaves `campaign: active` intact on disk, the respawned role detects the live campaign and automatically re-arms its safety cron).*
+  Cancel the heartbeat cron only after all teams are disabled and final ULTRON HQ state is committed and pushed.
