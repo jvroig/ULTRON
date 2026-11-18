@@ -190,7 +190,7 @@ def normalize_project_subpath(value: str) -> str:
         raise ValueError("Invalid project subpath: null byte not allowed.")
     if not cleaned.replace("\\", "/").strip("/"):
         return ""
-    if cleaned.startswith(("/", "~")) or (
+    if cleaned.startswith(("/", "~", "\\\\")) or (
         len(cleaned) >= 2 and cleaned[1] == ":" and cleaned[0].isalpha()
     ):
         raise ValueError(
@@ -665,6 +665,7 @@ class ClaudeCodeAdapter(HarnessAdapter):
                 {**ROLE_CLAUDE_SETTINGS, "env": {ROLE_ID_ENV: sp["agent_id"], HARNESS_ENV: self.name}},
             )
 
+        was_archived = bool(team.get("archived", False))
         addresses = {sp["role"]: sp["session_name"] for sp in specs}
         core.activate_team(team["slug"], addresses, harness=self.name)
         launched: Dict[str, str] = {}
@@ -683,7 +684,7 @@ class ClaudeCodeAdapter(HarnessAdapter):
                 cleanup_errors = {
                     role: err for role, sid in launched.items() if (err := self.stop_session(sid))
                 }
-                core.disable_team(team["slug"], archive_ephemeral=False)
+                core.disable_team(team["slug"], archive_ephemeral=was_archived)
                 raise RuntimeError(
                     f"Launching '{sp['agent_id']}' failed (exit {res.returncode}): "
                     f"{(res.stderr or res.stdout).strip()}. Stopped already-launched roles {sorted(launched)}"
@@ -1015,40 +1016,39 @@ class UltronCore:
             model = normalize_model(
                 raw_t.get("default_model", DEFAULT_MODEL_TIER), f"'{t_manifest}'"
             )
-            ws = str(raw_t.get("workspace_mode", "inherit")).strip().lower()
+            ws = str(raw_t.get("workspace_mode") or "inherit").strip().lower()
             if ws not in VALID_WORKSPACES:
                 raise ValueError(f"Invalid workspace_mode '{ws}' in '{t_manifest}'.")
-            team_harness = str(raw_t.get("harness", "")).strip()
+            team_harness = str(raw_t.get("harness") or "").strip()
             if team_harness and team_harness not in HARNESS_ADAPTERS:
                 raise ValueError(f"Invalid harness '{team_harness}' in '{t_manifest}'.")
 
             lifespan = (
-                str(raw_t.get("lifespan", DEFAULT_TEAM_LIFESPAN)).strip().lower()
+                str(raw_t.get("lifespan") or DEFAULT_TEAM_LIFESPAN).strip().lower()
                 or DEFAULT_TEAM_LIFESPAN
             )
             if lifespan not in VALID_TEAM_LIFESPANS:
                 raise ValueError(f"Invalid lifespan '{lifespan}' in '{t_manifest}'.")
             archived = bool(raw_t.get("archived", False))
 
-            raw_project = str(raw_t.get("project", "")).strip().lower()
+            raw_project = str(raw_t.get("project") or "").strip().lower()
             inherited_project = (
                 teams_by_slug[expected_parent]["project"]
                 if expected_parent and expected_parent in teams_by_slug
                 else ""
             )
             team_project = raw_project or inherited_project
-            own_proj_obj = projects_by_slug.get(raw_project) if raw_project else None
-            effective_proj_repo = own_proj_obj["effective_target_path"] if own_proj_obj else ""
-            if not raw_project and team_project and team_project in projects_by_slug:
-                # Parent project also provides fallback when parent has no explicit target_repo
-                pass
+            resolved_proj_obj = projects_by_slug.get(team_project) if team_project else None
+            effective_proj_repo = (
+                resolved_proj_obj["effective_target_path"] if resolved_proj_obj else ""
+            )
             project_missing = bool(team_project and team_project not in projects_by_slug)
 
             curr_lineage = [*lineage, slug]
             hive_rel = self._rel_posix(team_dir)
             created_at = str(raw_t.get("created_at") or now_iso())
             updated_at = str(raw_t.get("updated_at") or created_at)
-            raw_target_repo = str(raw_t.get("target_repo", "")).strip()
+            raw_target_repo = str(raw_t.get("target_repo") or "").strip()
             inherited_target_repo = (
                 teams_by_slug[expected_parent]["target_repo"]
                 if expected_parent and expected_parent in teams_by_slug
@@ -1109,7 +1109,7 @@ class UltronCore:
                         "target_repo": r_target_repo,
                         "target_repo_abs": r_target_repo_abs,
                         "team_slug": slug,
-                        "title": str(raw_r.get("title", "")).strip(),
+                        "title": str(raw_r.get("title") or "").strip(),
                         "write_tools": bool(raw_r.get("write_tools", True)),
                     }
                     agents_by_id[aid] = role_obj
@@ -1124,8 +1124,8 @@ class UltronCore:
 
             teams_by_slug[slug] = {
                 "archived": archived,
-                "blueprint": str(raw_t.get("blueprint", "")).strip(),
-                "campaign": str(raw_t.get("campaign", "off")).strip().lower() or "off",
+                "blueprint": str(raw_t.get("blueprint") or "").strip(),
+                "campaign": str(raw_t.get("campaign") or "off").strip().lower() or "off",
                 "created_at": created_at,
                 "default_model": model,
                 "harness": team_harness,
@@ -1133,8 +1133,8 @@ class UltronCore:
                 "layer": len(curr_lineage),
                 "lifespan": lifespan,
                 "lineage": curr_lineage,
-                "mission": str(raw_t.get("mission", "")).strip(),
-                "name": str(raw_t.get("name", slug)).strip(),
+                "mission": str(raw_t.get("mission") or "").strip(),
+                "name": str(raw_t.get("name") or slug).strip(),
                 "parent_team": expected_parent,
                 "project": team_project,
                 "project_missing": project_missing,
@@ -1216,7 +1216,7 @@ class UltronCore:
                     raise ValueError(
                         f"Project file '{p_file.name}' mismatches slug '{slug}'."
                     )
-                status = str(raw.get("status", "active")).strip().lower() or "active"
+                status = str(raw.get("status") or "active").strip().lower() or "active"
                 if status not in VALID_PROJECT_STATUSES:
                     raise ValueError(f"Invalid status '{status}' in '{p_file}'.")
                 raw_parent = (raw.get("parent_project") or "").strip().lower() or None
@@ -1229,17 +1229,17 @@ class UltronCore:
                 for rel in rels_raw:
                     if not isinstance(rel, dict):
                         raise ValueError(f"Invalid relationship entry in '{p_file}'.")
-                    r_type = str(rel.get("relation", "")).strip().lower()
+                    r_type = str(rel.get("relation") or "").strip().lower()
                     if r_type not in VALID_PROJECT_RELATIONS:
                         raise ValueError(
                             f"Invalid relationship type '{r_type}' in '{p_file}'."
                         )
-                    r_target = validate_slug(str(rel.get("target", "")), "relationship target")
+                    r_target = validate_slug(str(rel.get("target") or ""), "relationship target")
                     if r_target == slug:
                         raise ValueError(f"Project '{slug}' cannot link to itself.")
                     rels.append(
                         {
-                            "note": str(rel.get("note", "")).strip(),
+                            "note": str(rel.get("note") or "").strip(),
                             "relation": r_type,
                             "target": r_target,
                         }
@@ -1248,15 +1248,15 @@ class UltronCore:
 
                 raw_projects[slug] = {
                     "created_at": str(raw.get("created_at") or now_iso()),
-                    "description": str(raw.get("description", "")).strip(),
-                    "name": str(raw.get("name", slug)).strip() or slug,
+                    "description": str(raw.get("description") or "").strip(),
+                    "name": str(raw.get("name") or slug).strip() or slug,
                     "parent_project": raw_parent,
                     "project_path": self._rel_posix(p_file),
                     "relationships": rels,
-                    "repo_path": str(raw.get("repo_path", "")).strip(),
+                    "repo_path": str(raw.get("repo_path") or "").strip(),
                     "slug": slug,
                     "status": status,
-                    "subpath": normalize_project_subpath(str(raw.get("subpath", ""))),
+                    "subpath": normalize_project_subpath(str(raw.get("subpath") or "")),
                     "updated_at": str(raw.get("updated_at") or raw.get("created_at") or now_iso()),
                 }
 
@@ -1483,6 +1483,12 @@ class UltronCore:
                     if active_kids:
                         raise ValueError(
                             f"Cannot archive project '{clean_slug}': non-archived subprojects exist ({active_kids})."
+                        )
+                else:
+                    eff_parent = raw.get("parent_project")
+                    if eff_parent and projects[eff_parent]["status"] == "archived":
+                        raise ValueError(
+                            f"Cannot set project '{clean_slug}' to '{clean_status}' under archived parent project '{eff_parent}'."
                         )
                 raw["status"] = clean_status
 
@@ -1749,10 +1755,20 @@ class UltronCore:
             team_agents_src = (team_dir / "AGENTS.md").read_text(encoding="utf-8")
 
             # Parameterize team-specific literals back to template tokens
+            target_display = team["target_repo"] or "Local ULTRON Repository (default)"
+            parent_display = team["parent_team"] or f"{PRIME_ID} (Layer 1 root)"
             team_tmpl = (
                 team_agents_src.replace(team["name"], "{{TEAM_NAME}}")
                 .replace(team["mission"], "{{TEAM_MISSION}}")
                 .replace(team["hive_path"], "{{HIVE_PATH}}")
+                .replace(
+                    f"- **Parent Team:** `{parent_display}`",
+                    "- **Parent Team:** `{{PARENT_TEAM_DISPLAY}}`",
+                )
+                .replace(
+                    f"- **Target Project Repository:** `{target_display}`",
+                    "- **Target Project Repository:** `{{TARGET_REPO_DISPLAY}}`",
+                )
                 .replace(clean_team, "{{TEAM_SLUG}}")
             )
             (bp_dir / "team_agents.md.tmpl").write_text(team_tmpl, encoding="utf-8")
@@ -1883,6 +1899,7 @@ class UltronCore:
                 self._write_sessions_unlocked(sessions)
 
             parent_target_repo = ""
+            parent_project = ""
             if clean_parent:
                 parent_obj = teams_by_slug.get(clean_parent)
                 if not parent_obj:
@@ -1891,6 +1908,7 @@ class UltronCore:
                 team_dir = parent_abs / "teams" / clean_slug
                 layer = parent_obj["layer"] + 1
                 parent_target_repo = parent_obj.get("target_repo", "")
+                parent_project = parent_obj.get("project", "")
             else:
                 team_dir = self.hive_dir / clean_slug
                 layer = 1
@@ -1899,9 +1917,10 @@ class UltronCore:
             (team_dir / "teams").mkdir(parents=True, exist_ok=True)
             (team_dir / "teams" / ".gitkeep").touch(exist_ok=True)
 
+            effective_project = clean_project or parent_project
             proj_target_repo = (
-                projects_by_slug[clean_project]["effective_target_path"]
-                if clean_project
+                projects_by_slug[effective_project]["effective_target_path"]
+                if effective_project and effective_project in projects_by_slug
                 else ""
             )
             display_target_repo = clean_target_repo or proj_target_repo or parent_target_repo
@@ -3551,6 +3570,9 @@ class UltronCore:
         with self._lock(exclusive=False):
             all_threads = self._load_all_threads_unlocked()
 
+        if limit is not None and limit <= 0:
+            return []
+
         results: List[Dict[str, Any]] = []
         for t in all_threads:
             if not self._can_access_thread(viewer_id, unrestricted, t):
@@ -3969,13 +3991,13 @@ class UltronCore:
         did = str(root.get("decision_id") or fpath.stem)
         created_at = str(root["created_at"])
 
-        origin = str(root.get("origin", "prime_autonomous")).strip().lower()
+        origin = str(root.get("origin") or "prime_autonomous").strip().lower()
         if origin not in VALID_DECISION_ORIGINS:
             raise ValueError(f"Invalid decision origin '{origin}' in '{fpath.name}'.")
-        init_status = str(root.get("review_status", "pending_review")).strip().lower()
+        init_status = str(root.get("review_status") or "pending_review").strip().lower()
         if init_status not in VALID_DECISION_REVIEW_STATUSES:
             raise ValueError(f"Invalid review_status '{init_status}' in '{fpath.name}'.")
-        scope = str(root.get("scope", "global")).strip().lower()
+        scope = str(root.get("scope") or "global").strip().lower()
         if scope not in VALID_DECISION_SCOPES:
             raise ValueError(f"Invalid scope '{scope}' in '{fpath.name}'.")
 
@@ -3994,7 +4016,7 @@ class UltronCore:
             ev_type = ev.get("type")
             if ev_type != "review":
                 raise ValueError(f"Unknown event type '{ev_type}' in '{fpath.name}'.")
-            rev_status = str(ev.get("review_status", "")).strip().lower()
+            rev_status = str(ev.get("review_status") or "").strip().lower()
             if rev_status not in VALID_DECISION_REVIEW_STATUSES:
                 raise ValueError(
                     f"Invalid review_status '{rev_status}' in '{fpath.name}'."
@@ -4105,7 +4127,6 @@ class UltronCore:
             )
 
         iso = now_iso()
-        did = generate_decision_id()
         with self._lock(exclusive=True):
             teams_by_slug, _, _ = self._scan_state_unlocked()
             projects_by_slug = self._scan_projects_unlocked(teams_by_slug)
@@ -4127,12 +4148,19 @@ class UltronCore:
                     raise ValueError("Team-scoped decisions require --team <slug>.")
                 if clean_team not in teams_by_slug:
                     raise ValueError(f"Team '{clean_team}' does not exist.")
-                if not clean_proj and teams_by_slug[clean_team].get("project"):
+                if (
+                    not clean_proj
+                    and teams_by_slug[clean_team].get("project")
+                    and not teams_by_slug[clean_team].get("project_missing")
+                ):
                     clean_proj = teams_by_slug[clean_team]["project"]
                 elif clean_proj and clean_proj not in projects_by_slug:
                     raise ValueError(f"Project '{clean_proj}' does not exist.")
 
             self._ensure_decisions_dir_unlocked()
+            did = generate_decision_id()
+            while (self.decisions_dir / f"{did}.jsonl").exists():
+                did = generate_decision_id()
             fpath = self.decisions_dir / f"{did}.jsonl"
             root_event = {
                 "created_at": iso,
@@ -4219,6 +4247,9 @@ class UltronCore:
 
         with self._lock(exclusive=False):
             decisions = self._load_all_decisions_unlocked()
+
+        if limit is not None and limit <= 0:
+            return []
 
         out: List[Dict[str, Any]] = []
         for d in decisions:
@@ -5857,6 +5888,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             else:
                 print(
                     f"[ULTRON] Integrity Verified: {res['teams']} team(s), {res['agents']} role(s), "
+                    f"{res['projects']} project(s), {res['decisions']} decision(s), "
                     f"{res['threads']} JSONL thread(s) ({res['posts']} post(s)), "
                     f"pruned_orphans={len(res['pruned_orphan_sessions'])}, "
                     f"merge=union={res['gitattributes_union_merge']}."

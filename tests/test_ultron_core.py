@@ -23,7 +23,7 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from ultron.core.core import BG_SESSION_ID_RE, PRIME_ID, ROLE_CONTEXT_FILENAME, ROLE_CONTEXT_IMPORT, UltronCore  # noqa: E402
+from ultron.core.core import BG_SESSION_ID_RE, PRIME_ID, ROLE_CONTEXT_FILENAME, ROLE_CONTEXT_IMPORT, UltronCore, normalize_project_subpath  # noqa: E402
 
 
 class UltronCoreTestCase(unittest.TestCase):
@@ -1236,6 +1236,209 @@ class UltronCoreTestCase(unittest.TestCase):
         allowed = self.run_cli("decisions", "--json", env_extra=role_env)
         self.assertEqual(allowed.returncode, 0, msg=allowed.stderr)
 
+    def test_tier2_audit_regression_edge_cases(self) -> None:
+        # 1. Windows UNC, tilde, and drive-letter subpaths must be rejected while '\apps\' normalizes per spec
+        self.assertEqual(normalize_project_subpath("\\apps\\"), "apps")
+        for bad_subpath in ("\\\\server\\share", "~/secret", "C:\\Windows"):
+            with self.assertRaises(ValueError):
+                normalize_project_subpath(bad_subpath)
+
+        # 2. update_project archival guard prevents un-archiving a child under an archived parent
+        self.core.create_project(slug="parent-p", name="Parent P", repo_path="~/Dev/p1")
+        self.core.create_project(
+            slug="child-p", name="Child P", parent_project="parent-p", subpath="sub"
+        )
+        self.core.update_project("child-p", status="archived")
+        self.core.update_project("parent-p", status="archived")
+        with self.assertRaisesRegex(ValueError, "archived parent project"):
+            self.core.update_project("child-p", status="active")
+        # Detaching from archived parent while activating succeeds
+        detached = self.core.update_project("child-p", parent_project="", status="active")
+        self.assertEqual(detached["status"], "active")
+        self.assertIsNone(detached["parent_project"])
+
+        # Reactivate parent-p, bind team to child, and verify remove_project cascade guards
+        self.core.update_project("parent-p", status="active")
+        self.core.create_project(slug="p2", name="Project Two", repo_path="~/Dev/p2")
+        self.core.update_project("child-p", parent_project="parent-p")
+        self.core.create_team(
+            slug="bound-pod",
+            name="Bound Pod",
+            mission="m",
+            lifespan="ephemeral",
+            project="child-p",
+        )
+        self.core.disable_team("bound-pod")
+        self.assertTrue(self.core.get_team("bound-pod")["archived"])
+        with self.assertRaisesRegex(ValueError, "still bound to them"):
+            self.core.remove_project("parent-p", cascade=True)
+        self.core.set_team_project("bound-pod", "")
+        removed = self.core.remove_project("parent-p", cascade=True)
+        self.assertEqual(sorted(removed["removed_projects"]), ["child-p", "parent-p"])
+
+        # 3. Multi-layer team inheritance & §2.3.3 precedence + save_blueprint parameterization
+        self.core.create_project(slug="p1", name="Project One", repo_path="~/Dev/p1")
+        self.core.create_team(
+            slug="p-parent",
+            name="Parent Pod",
+            mission="Own P1 overall",
+            project="p1",
+            target_repo="~/Dev/override",
+        )
+        child_c = self.core.create_team(
+            slug="c-child",
+            name="Child Pod",
+            mission="Work on inherited project",
+            parent_team="p-parent",
+        )
+        self.assertEqual(child_c["project"], "p1")
+        self.assertEqual(child_c["target_repo"], "~/Dev/p1")
+        c_agents_md = (self.root / child_c["hive_path"] / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("- **Target Project Repository:** `~/Dev/p1`", c_agents_md)
+
+        sub_d = self.core.create_team(
+            slug="d-child",
+            name="D Pod",
+            mission="Override to p2",
+            parent_team="p-parent",
+            project="p2",
+        )
+        grand_g = self.core.create_team(
+            slug="g-grand",
+            name="G Pod",
+            mission="Grandchild inherits p2",
+            parent_team="d-child",
+        )
+        self.assertEqual(grand_g["project"], "p2")
+        self.assertEqual(grand_g["target_repo"], "~/Dev/p2")
+
+        # save_blueprint parameterizes target_repo and parent_team cleanly
+        self.core.save_blueprint("c-child", "bp-proj", "Project BP", "Reusable project team")
+        reinstantiated = self.core.create_team(
+            slug="p2-runner",
+            name="P2 Runner",
+            mission="Run on p2",
+            blueprint="bp-proj",
+            project="p2",
+        )
+        reinst_md = (self.root / reinstantiated["hive_path"] / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("- **Target Project Repository:** `~/Dev/p2`", reinst_md)
+        self.assertNotIn("~/Dev/p1", reinst_md)
+
+        # 4. JSON null fields do not coerce into literal "None"/"none"
+        proj_p2_file = self.root / "ultron/core/projects/p2.json"
+        p2_json = json.loads(proj_p2_file.read_text(encoding="utf-8"))
+        p2_json["description"] = None
+        p2_json["subpath"] = None
+        proj_p2_file.write_text(json.dumps(p2_json), encoding="utf-8")
+        g_team_file = self.root / grand_g["hive_path"] / "team.json"
+        g_json = json.loads(g_team_file.read_text(encoding="utf-8"))
+        g_json["harness"] = None
+        g_json["lifespan"] = None
+        g_json["target_repo"] = None
+        g_team_file.write_text(json.dumps(g_json), encoding="utf-8")
+        g_loaded = self.core.get_team("g-grand")
+        self.assertEqual(g_loaded["lifespan"], "permanent")
+        self.assertEqual(g_loaded["harness"], "")
+        self.assertEqual(g_loaded["target_repo"], "~/Dev/p2")
+
+        # 5. directory() filtering & get_stats() counters for archived teams, projects, and decisions
+        res_dir_all = self.run_cli("directory", "--all", "--json")
+        self.assertEqual(res_dir_all.returncode, 0, msg=res_dir_all.stderr)
+        dir_ids = {a["agent_id"] for a in json.loads(res_dir_all.stdout)}
+        self.assertNotIn("bound-pod/lead", dir_ids)
+        self.assertIn("p-parent/lead", dir_ids)
+        res_dir_explicit = self.run_cli("directory", "--team", "bound-pod", "--all", "--json")
+        self.assertEqual(res_dir_explicit.returncode, 0, msg=res_dir_explicit.stderr)
+        self.assertEqual(
+            [a["agent_id"] for a in json.loads(res_dir_explicit.stdout)], ["bound-pod/lead"]
+        )
+
+        # Decisions edge cases: parent team decisions inherited into child render_spawn, limit=0, short-ID ambiguity
+        d_p = self.core.log_decision(
+            title="Parent team ruling",
+            decision="Use strict typed DTOs between p-parent and d-child.",
+            scope="team",
+            team_slug="p-parent",
+            origin="prime_autonomous",
+        )
+        d_p1 = self.core.log_decision(
+            title="P1 project ruling",
+            decision="All p1 repos run pytest -q.",
+            scope="project",
+            project_slug="p1",
+            origin="user_guided",
+        )
+        self.assertEqual(self.core.list_decisions(limit=0), [])
+        self.assertEqual(len(self.core.list_decisions(project_slug="p1")), 2)
+        self.assertEqual(len(self.core.list_decisions(team_slug="p-parent")), 1)
+        self.assertEqual(len(self.core.list_decisions(origin="user_guided")), 1)
+        self.assertEqual(len(self.core.list_decisions(scope="project")), 1)
+        self.assertEqual(self.core.list_threads(show_all=True, limit=0), [])
+
+        d_child_ctx = self.core.render_spawn("d-child", harness="claude-code")[0]["role_context"]
+        self.assertIn("Use strict typed DTOs between p-parent and d-child.", d_child_ctx)
+        self.assertNotIn("All p1 repos run pytest -q.", d_child_ctx)
+
+        # Short-ID ambiguity raises ValueError
+        dup_path = self.root / "ultron/core/decisions/d-20261118-deadbeef.jsonl"
+        dup_path2 = self.root / "ultron/core/decisions/d-20261119-deadbeef.jsonl"
+        sample_ev = {
+            "created_at": "2026-11-18T00:00:00Z",
+            "decided_by": "ultron-prime",
+            "decision": "A",
+            "decision_id": "d-20261118-deadbeef",
+            "event_id": "e-1",
+            "origin": "prime_autonomous",
+            "project_slug": "",
+            "rationale": "",
+            "review_status": "pending_review",
+            "scope": "global",
+            "tags": "",
+            "team_slug": "",
+            "title": "A",
+            "type": "decision",
+        }
+        dup_path.write_text(json.dumps(sample_ev) + "\n", encoding="utf-8")
+        sample_ev2 = {**sample_ev, "decision_id": "d-20261119-deadbeef", "event_id": "e-2"}
+        dup_path2.write_text(json.dumps(sample_ev2) + "\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Ambiguous"):
+            self.core.get_decision("deadbeef")
+        dup_path.unlink()
+        dup_path2.unlink()
+
+        stats = self.core.get_stats()
+        self.assertEqual(stats["archived_teams"], 1)
+        self.assertEqual(stats["ephemeral_teams"], 0)
+        self.assertEqual(stats["permanent_teams"], 5)
+        self.assertEqual(stats["total_teams"], 5)
+        self.assertEqual(stats["total_projects"], 2)
+        self.assertEqual(stats["total_decisions"], 2)
+        self.assertEqual(stats["pending_decisions"], 1)
+
+        # 6. Dangling missing project degrades gracefully on scan/decision and fails loud in verify()
+        self.core.create_team(slug="ghost", name="Ghost", mission="m", project="p1")
+        (self.root / "ultron/core/projects/p1.json").unlink()
+        ghost = self.core.get_team("ghost")
+        self.assertTrue(ghost["project_missing"])
+        self.assertEqual(ghost["target_repo"], "")
+        d_ghost = self.core.log_decision(
+            title="Ghost team ruling", decision="Keep logs.", scope="team", team_slug="ghost"
+        )
+        self.assertEqual(d_ghost["project_slug"], "")
+        with self.assertRaisesRegex(ValueError, "missing project 'p1'"):
+            self.core.verify()
+
+        # Re-check clean verify() after fixing missing ref
+        self.core.set_team_project("ghost", "")
+        self.core.set_team_project("p-parent", "p2", cascade=True)
+        # Note c-child had no own project so it inherits p2 from p-parent once cleared, wait p1 had a decision d_p1
+        ver = self.core.verify()
+        self.assertTrue(ver["ok"])
+        self.assertEqual(ver["decisions"], 3)
+        self.assertEqual(d_p["id"][:2], "d-")
+        self.assertEqual(d_p1["origin"], "user_guided")
+
     def test_export_thread_cli_and_api(self) -> None:
         # Create team and roles for authorization testing
         self.core.create_team(slug="eng", name="Engineering", mission="Engineering pod")
@@ -1878,6 +2081,32 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
         self.core.spawn_team("api")
         with self.assertRaisesRegex(ValueError, "already active"):
             self.core.spawn_team("api")
+
+    def test_ephemeral_team_spawn_failure_rollback_and_stop_auto_archive(self) -> None:
+        self.core.create_team(
+            slug="ephem", name="Ephem", mission="m", default_model="large", lifespan="ephemeral"
+        )
+        self.core.add_role(
+            team_slug="ephem", role="coder", title="Coder", responsibilities="r", model="small"
+        )
+        # Failure mid-launch keeps newly created ephemeral team unarchived
+        with mock.patch.dict(os.environ, {"FAKE_CLAUDE_FAIL_NAME": "ultron--ephem--coder"}):
+            with self.assertRaises(RuntimeError):
+                self.core.spawn_team("ephem")
+        ephem = self.core.get_team("ephem")
+        self.assertEqual(ephem["status"], "disabled")
+        self.assertFalse(ephem["archived"])
+
+        # Successful spawn followed by stop_team auto-archives ephemeral team
+        self.core.spawn_team("ephem")
+        self.core.stop_team("ephem")
+        self.assertTrue(self.core.get_team("ephem")["archived"])
+
+        # Re-spawn failure of an already-archived ephemeral team restores archived=True
+        with mock.patch.dict(os.environ, {"FAKE_CLAUDE_FAIL_NAME": "ultron--ephem--coder"}):
+            with self.assertRaises(RuntimeError):
+                self.core.spawn_team("ephem")
+        self.assertTrue(self.core.get_team("ephem")["archived"])
 
 
 class RenderSpawnGoldenTestCase(unittest.TestCase):
