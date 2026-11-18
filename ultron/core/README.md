@@ -19,6 +19,9 @@ ultron/
 │   └── threads/                 # Git-tracked append-only JSONL threads
 │       ├── .gitattributes       # `*.jsonl merge=union` for conflict-free Git branch merges
 │       └── t-YYYYMMDD-xxxxxxxx.jsonl
+│   # Lazily created on first write:
+│   # ├── projects/<project-slug>.json      # Projects catalog, hierarchy & relationships
+│   # └── decisions/d-YYYYMMDD-xxxxxxxx.jsonl # Append-only Prime Decisions ledger (`merge=union`)
 └── hive/
     └── <team-slug>/             # Layer-1 team
         ├── team.json            # Git-tracked persistent team definition
@@ -77,21 +80,37 @@ JSONL files are passive datastores—agents never poll in loops. Always follow t
 
 Add `--json` to any command (before or after the subcommand) for structured JSON output. Thread commands accept either the full `t-YYYYMMDD-xxxxxxxx` ID or its unique short hex suffix (`xxxxxxxx`).
 
+### Projects Catalog Commands
+Mutation commands (`create-project`, `update-project`, `link-project`, `remove-project`) are Prime-only; read commands (`projects`, `project-info`) are available to all roles:
+```bash
+# Register root and nested monorepo sub-projects, or link projects
+python3 ultron/core/core.py create-project --slug suite --name "Product Suite" --repo-path "~/Dev/suite"
+python3 ultron/core/core.py create-project --slug web --name "Web App" --parent suite --subpath "apps/web"
+python3 ultron/core/core.py update-project web --status paused
+python3 ultron/core/core.py link-project web suite --relation part_of --note "Lives in suite monorepo"
+python3 ultron/core/core.py projects [--status active|paused|archived] [--parent <slug>] [--all]
+python3 ultron/core/core.py project-info web
+python3 ultron/core/core.py remove-project web [--cascade]
+```
+
 ### Organization & Lifecycle Commands (ULTRON PRIME)
 `core.py` refuses these from a shell whose `ULTRON_AGENT_ID` is a role.
 ```bash
 # Register ULTRON PRIME's doorbell address (and its harness)
 python3 ultron/core/core.py register-prime --id "<doorbell-address>" [--harness <name>]
 
-# Inspect full N-layer Hive org tree, integrity & stats
-python3 ultron/core/core.py org-tree
+# Inspect full N-layer Hive org tree, teams, integrity & stats (--all includes archived ephemeral teams)
+python3 ultron/core/core.py org-tree [--all]
+python3 ultron/core/core.py teams [--status active|disabled] [--project <slug>] [--lifespan permanent|ephemeral] [--archived | --all]
 python3 ultron/core/core.py verify
 python3 ultron/core/core.py stats
 
-# Create teams (Layer 1 or nested Layer 2..N via --parent) & specialist roles
-python3 ultron/core/core.py create-team --slug api --name "API Team" --mission "REST & RPC endpoints"
+# Create teams (Layer 1 or nested Layer 2..N via --parent) & bind project/lifespan
+python3 ultron/core/core.py create-team --slug api --name "API Team" --mission "REST & RPC endpoints" [--project web] [--lifespan permanent | --ephemeral]
 python3 ultron/core/core.py add-role --team api --role coder --title "API Developer" --responsibilities "Implement endpoints"
 python3 ultron/core/core.py create-team --slug auth --parent api --name "Auth Subteam" --mission "Token verification"
+python3 ultron/core/core.py set-project api web [--cascade]
+python3 ultron/core/core.py set-lifespan api [permanent|ephemeral] [--archive | --unarchive]
 
 # Pin a team to a harness (default: Prime's); the team must be stopped. Omit the harness to clear.
 python3 ultron/core/core.py set-harness api claude-code
@@ -162,4 +181,26 @@ python3 ultron/core/core.py export-thread a3f91c4e --format md --output report.m
 python3 ultron/core/core.py search "JWT" --as auth/lead
 python3 ultron/core/core.py set-status a3f91c4e resolved --as api/lead
 python3 ultron/core/core.py reclassify a3f91c4e --as ultron-prime --visibility global
+```
+
+### Prime Decisions Ledger Commands
+`log-decision` and `review-decision` are Prime-only; `decisions` and `view-decision` can be read by any role (accepts full `d-YYYYMMDD-xxxxxxxx` IDs or unique short suffixes):
+```bash
+# Record a User-guided (default status: approved) or autonomous Prime ruling (default: pending_review)
+python3 ultron/core/core.py log-decision \
+  --title "API Pagination Style" \
+  --decision "Use cursor-based pagination for all v2 endpoints." \
+  --rationale "Avoids offset drift under concurrent writes." \
+  --origin prime_autonomous \
+  --project web
+
+# Catch up on pending decisions or inspect full review history
+python3 ultron/core/core.py decisions [--pending | --status <status> | --origin <origin> | --scope <scope> | --project <slug> | --team <slug>] [--limit 50]
+python3 ultron/core/core.py view-decision <decision_id>
+
+# Validate, flag for improvement, replace ruling text, or overrule (append-only review event)
+python3 ultron/core/core.py review-decision <decision_id> \
+  --status <approved|pending_review|needs_improvement|overruled> \
+  [--notes "<feedback>"] \
+  [--replacement "<updated ruling>"]
 ```
