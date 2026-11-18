@@ -75,7 +75,7 @@ ROLE_ID_ENV = "ULTRON_AGENT_ID"
 PRIME_ONLY_COMMANDS = frozenset({
     "activate-agent", "activate-team", "add-role", "create-project", "create-team", "disable-agent",
     "disable-team", "link-project", "register-prime", "remove-project", "remove-team", "set-campaign",
-    "set-harness", "set-target-repo", "spawn-team", "stop-team", "update-project",
+    "set-harness", "set-lifespan", "set-project", "set-target-repo", "spawn-team", "stop-team", "update-project",
 })
 SUPPRESSING_MEMORY_FILES = ("CLAUDE.md", "CLAUDE.local.md")
 ROLE_CLAUDE_SETTINGS = {
@@ -83,6 +83,8 @@ ROLE_CLAUDE_SETTINGS = {
     "permissions": {"deny": ["Agent", "Bash(claude:*)", "Bash(claude *)"]},
 }
 VALID_TEAM_STATUSES = {"active", "disabled"}
+VALID_TEAM_LIFESPANS = {"permanent", "ephemeral"}
+DEFAULT_TEAM_LIFESPAN = "permanent"
 VALID_AGENT_STATUSES = {"active", "disabled"}
 VALID_PROJECT_STATUSES = {"active", "paused", "archived"}
 VALID_PROJECT_RELATIONS = {"depends_on", "related_to", "shares_assets_with", "part_of"}
@@ -671,7 +673,7 @@ class ClaudeCodeAdapter(HarnessAdapter):
                 cleanup_errors = {
                     role: err for role, sid in launched.items() if (err := self.stop_session(sid))
                 }
-                core.disable_team(team["slug"])
+                core.disable_team(team["slug"], archive_ephemeral=False)
                 raise RuntimeError(
                     f"Launching '{sp['agent_id']}' failed (exit {res.returncode}): "
                     f"{(res.stderr or res.stdout).strip()}. Stopped already-launched roles {sorted(launched)}"
@@ -940,6 +942,7 @@ class UltronCore:
         """
         sessions = self._read_sessions_unlocked()
         live_agents = sessions["agents"]
+        projects_by_slug = self._scan_projects_unlocked()
 
         teams_by_slug: Dict[str, Dict[str, Any]] = {}
         agents_by_id: Dict[str, Dict[str, Any]] = {}
@@ -1005,17 +1008,40 @@ class UltronCore:
             if team_harness and team_harness not in HARNESS_ADAPTERS:
                 raise ValueError(f"Invalid harness '{team_harness}' in '{t_manifest}'.")
 
+            lifespan = (
+                str(raw_t.get("lifespan", DEFAULT_TEAM_LIFESPAN)).strip().lower()
+                or DEFAULT_TEAM_LIFESPAN
+            )
+            if lifespan not in VALID_TEAM_LIFESPANS:
+                raise ValueError(f"Invalid lifespan '{lifespan}' in '{t_manifest}'.")
+            archived = bool(raw_t.get("archived", False))
+
+            raw_project = str(raw_t.get("project", "")).strip().lower()
+            inherited_project = (
+                teams_by_slug[expected_parent]["project"]
+                if expected_parent and expected_parent in teams_by_slug
+                else ""
+            )
+            team_project = raw_project or inherited_project
+            own_proj_obj = projects_by_slug.get(raw_project) if raw_project else None
+            effective_proj_repo = own_proj_obj["effective_target_path"] if own_proj_obj else ""
+            if not raw_project and team_project and team_project in projects_by_slug:
+                # Parent project also provides fallback when parent has no explicit target_repo
+                pass
+            project_missing = bool(team_project and team_project not in projects_by_slug)
+
             curr_lineage = [*lineage, slug]
             hive_rel = self._rel_posix(team_dir)
             created_at = str(raw_t.get("created_at") or now_iso())
             updated_at = str(raw_t.get("updated_at") or created_at)
+            raw_target_repo = str(raw_t.get("target_repo", "")).strip()
             inherited_target_repo = (
                 teams_by_slug[expected_parent]["target_repo"]
                 if expected_parent and expected_parent in teams_by_slug
                 else ""
             )
             team_target_repo = (
-                str(raw_t.get("target_repo", "")).strip() or inherited_target_repo
+                raw_target_repo or effective_proj_repo or inherited_target_repo
             )
             team_target_repo_abs = self._resolve_target_repo(team_target_repo)
 
@@ -1083,6 +1109,7 @@ class UltronCore:
             )
 
             teams_by_slug[slug] = {
+                "archived": archived,
                 "blueprint": str(raw_t.get("blueprint", "")).strip(),
                 "campaign": str(raw_t.get("campaign", "off")).strip().lower() or "off",
                 "created_at": created_at,
@@ -1090,10 +1117,15 @@ class UltronCore:
                 "harness": team_harness,
                 "hive_path": hive_rel,
                 "layer": len(curr_lineage),
+                "lifespan": lifespan,
                 "lineage": curr_lineage,
                 "mission": str(raw_t.get("mission", "")).strip(),
                 "name": str(raw_t.get("name", slug)).strip(),
                 "parent_team": expected_parent,
+                "project": team_project,
+                "project_missing": project_missing,
+                "raw_project": raw_project,
+                "raw_target_repo": raw_target_repo,
                 "roles": team_roles,
                 "slug": slug,
                 "status": team_status,
@@ -1788,6 +1820,8 @@ class UltronCore:
         target_repo: str = "",
         blueprint: Optional[str] = None,
         harness: str = "",
+        lifespan: str = DEFAULT_TEAM_LIFESPAN,
+        project: str = "",
     ) -> Dict[str, Any]:
         clean_slug = validate_slug(slug, "team slug")
         clean_harness = harness_adapter(harness.strip()).name if harness.strip() else ""
@@ -1807,6 +1841,12 @@ class UltronCore:
             raise ValueError(
                 f"Invalid workspace_mode '{workspace_mode}'. Must be one of {sorted(VALID_WORKSPACES)}."
             )
+        clean_lifespan = (lifespan or DEFAULT_TEAM_LIFESPAN).strip().lower()
+        if clean_lifespan not in VALID_TEAM_LIFESPANS:
+            raise ValueError(
+                f"Invalid team lifespan '{lifespan}'. Must be one of {sorted(VALID_TEAM_LIFESPANS)}."
+            )
+        clean_project = validate_slug(project, "project slug") if (project or "").strip() else ""
 
         clean_parent = validate_slug(parent_team, "parent_team") if parent_team else None
         clean_target_repo = (target_repo or "").strip()
@@ -1814,8 +1854,11 @@ class UltronCore:
 
         with self._lock(exclusive=True):
             teams_by_slug, _, sessions = self._scan_state_unlocked()
+            projects_by_slug = self._scan_projects_unlocked(teams_by_slug)
             if clean_slug in teams_by_slug:
                 raise ValueError(f"Team '{clean_slug}' already exists.")
+            if clean_project and clean_project not in projects_by_slug:
+                raise ValueError(f"Project '{clean_project}' does not exist.")
 
             stale_keys = [
                 k for k in sessions["agents"] if k.startswith(f"{clean_slug}/")
@@ -1825,6 +1868,7 @@ class UltronCore:
                     sessions["agents"].pop(k, None)
                 self._write_sessions_unlocked(sessions)
 
+            parent_target_repo = ""
             if clean_parent:
                 parent_obj = teams_by_slug.get(clean_parent)
                 if not parent_obj:
@@ -1832,8 +1876,7 @@ class UltronCore:
                 parent_abs = self._abs_from_rel(parent_obj["hive_path"])
                 team_dir = parent_abs / "teams" / clean_slug
                 layer = parent_obj["layer"] + 1
-                if not clean_target_repo and parent_obj.get("target_repo"):
-                    clean_target_repo = parent_obj["target_repo"]
+                parent_target_repo = parent_obj.get("target_repo", "")
             else:
                 team_dir = self.hive_dir / clean_slug
                 layer = 1
@@ -1842,9 +1885,15 @@ class UltronCore:
             (team_dir / "teams").mkdir(parents=True, exist_ok=True)
             (team_dir / "teams" / ".gitkeep").touch(exist_ok=True)
 
+            proj_target_repo = (
+                projects_by_slug[clean_project]["effective_target_path"]
+                if clean_project
+                else ""
+            )
+            display_target_repo = clean_target_repo or proj_target_repo or parent_target_repo
             target_repo_display = (
-                clean_target_repo
-                if clean_target_repo
+                display_target_repo
+                if display_target_repo
                 else "Local ULTRON Repository (default)"
             )
             parent_display = clean_parent or f"{PRIME_ID} (Layer 1 root)"
@@ -1885,6 +1934,10 @@ class UltronCore:
                 "updated_at": iso,
                 "workspace_mode": ws,
             }
+            if clean_lifespan != DEFAULT_TEAM_LIFESPAN:
+                team_manifest["lifespan"] = clean_lifespan
+            if clean_project:
+                team_manifest["project"] = clean_project
             if clean_harness:
                 team_manifest["harness"] = clean_harness
             atomic_write_json(team_dir / "team.json", team_manifest)
@@ -2151,7 +2204,99 @@ class UltronCore:
             teams_by_slug, _, _ = self._scan_state_unlocked()
             return teams_by_slug.get(clean)
 
-    def list_teams(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+    def set_team_lifespan(
+        self,
+        team_slug: str,
+        lifespan: Optional[str] = None,
+        archived: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Configure a team's lifespan ('permanent' | 'ephemeral') and optional archived state."""
+        clean_team = validate_slug(team_slug, "team slug")
+        clean_lifespan: Optional[str] = None
+        if lifespan is not None:
+            clean_lifespan = lifespan.strip().lower()
+            if clean_lifespan not in VALID_TEAM_LIFESPANS:
+                raise ValueError(
+                    f"Invalid team lifespan '{lifespan}'. Must be one of {sorted(VALID_TEAM_LIFESPANS)}."
+                )
+        iso = now_iso()
+
+        with self._lock(exclusive=True):
+            teams_by_slug, _, _ = self._scan_state_unlocked()
+            team_obj = teams_by_slug.get(clean_team)
+            if not team_obj:
+                raise ValueError(f"Team '{clean_team}' does not exist.")
+            if archived is True and team_obj["status"] == "active":
+                raise ValueError(
+                    f"Cannot archive active team '{clean_team}'. Run stop-team first."
+                )
+            manifest_path = self._abs_from_rel(team_obj["hive_path"]) / "team.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if clean_lifespan is not None:
+                if clean_lifespan == DEFAULT_TEAM_LIFESPAN:
+                    manifest.pop("lifespan", None)
+                else:
+                    manifest["lifespan"] = clean_lifespan
+            if archived is True:
+                manifest["archived"] = True
+            elif archived is False:
+                manifest.pop("archived", None)
+            manifest["updated_at"] = iso
+            atomic_write_json(manifest_path, manifest)
+            teams_after, _, _ = self._scan_state_unlocked()
+            return teams_after[clean_team]
+
+    def set_team_project(
+        self,
+        team_slug: str,
+        project_slug: str = "",
+        cascade: bool = False,
+    ) -> Dict[str, Any]:
+        """Bind or clear a team's project (optionally cascading to descendant child teams)."""
+        clean_team = validate_slug(team_slug, "team slug")
+        clean_project = (
+            validate_slug(project_slug, "project slug")
+            if (project_slug or "").strip()
+            else ""
+        )
+        iso = now_iso()
+
+        with self._lock(exclusive=True):
+            teams_by_slug, _, _ = self._scan_state_unlocked()
+            projects_by_slug = self._scan_projects_unlocked(teams_by_slug)
+            team_obj = teams_by_slug.get(clean_team)
+            if not team_obj:
+                raise ValueError(f"Team '{clean_team}' does not exist.")
+            if clean_project and clean_project not in projects_by_slug:
+                raise ValueError(f"Project '{clean_project}' does not exist.")
+
+            target_slugs = (
+                [clean_team, *self._get_descendant_slugs(teams_by_slug, clean_team)]
+                if cascade
+                else [clean_team]
+            )
+            for t_slug in target_slugs:
+                t_dir = self._abs_from_rel(teams_by_slug[t_slug]["hive_path"])
+                t_manifest_path = t_dir / "team.json"
+                t_manifest = json.loads(t_manifest_path.read_text(encoding="utf-8"))
+                if clean_project:
+                    t_manifest["project"] = clean_project
+                else:
+                    t_manifest.pop("project", None)
+                t_manifest["updated_at"] = iso
+                atomic_write_json(t_manifest_path, t_manifest)
+
+            teams_after, _, _ = self._scan_state_unlocked()
+            return teams_after[clean_team]
+
+    def list_teams(
+        self,
+        status: Optional[str] = None,
+        project: Optional[str] = None,
+        lifespan: Optional[str] = None,
+        include_archived: bool = False,
+        archived_only: bool = False,
+    ) -> List[Dict[str, Any]]:
         if status:
             st = status.strip().lower()
             if st not in VALID_TEAM_STATUSES:
@@ -2159,13 +2304,31 @@ class UltronCore:
         else:
             st = None
 
+        clean_project = (
+            validate_slug(project, "project slug") if (project or "").strip() else None
+        )
+        clean_lifespan: Optional[str] = None
+        if lifespan:
+            clean_lifespan = lifespan.strip().lower()
+            if clean_lifespan not in VALID_TEAM_LIFESPANS:
+                raise ValueError(f"Invalid team lifespan '{lifespan}'.")
+
         with self._lock(exclusive=False):
             teams_by_slug, _, _ = self._scan_state_unlocked()
-            teams = [
-                t
-                for t in teams_by_slug.values()
-                if st is None or t["status"] == st
-            ]
+            teams: List[Dict[str, Any]] = []
+            for t in teams_by_slug.values():
+                if archived_only:
+                    if not t.get("archived", False):
+                        continue
+                elif not include_archived and t.get("archived", False):
+                    continue
+                if st is not None and t["status"] != st:
+                    continue
+                if clean_project is not None and t.get("project") != clean_project:
+                    continue
+                if clean_lifespan is not None and t.get("lifespan") != clean_lifespan:
+                    continue
+                teams.append(t)
             teams.sort(key=lambda item: (item["layer"], item["slug"]))
             return teams
 
@@ -2272,6 +2435,8 @@ class UltronCore:
             if clean_aid and aid != clean_aid:
                 continue
             if clean_team and t_slug != clean_team:
+                continue
+            if team and team.get("archived", False) and not clean_aid and not clean_team:
                 continue
             if not include_all and not clean_aid and agent.get("status") != "active":
                 continue
@@ -2502,6 +2667,13 @@ class UltronCore:
                         f"Activate '{t_slug}/lead' first (or use activate-team)."
                     )
 
+            if t_obj.get("archived", False):
+                t_manifest_path = self._abs_from_rel(t_obj["hive_path"]) / "team.json"
+                t_manifest = json.loads(t_manifest_path.read_text(encoding="utf-8"))
+                if t_manifest.pop("archived", None) is not None:
+                    t_manifest["updated_at"] = iso
+                    atomic_write_json(t_manifest_path, t_manifest)
+
             sessions["agents"][aid] = {
                 "conversation_id": cid,
                 "last_seen": iso,
@@ -2579,6 +2751,13 @@ class UltronCore:
                     f"Missing doorbell address(es) for role(s) {missing_roles} in team '{clean_team}'. "
                     f"Provide every role's address or pass --partial."
                 )
+
+            if t_obj.get("archived", False):
+                t_manifest_path = self._abs_from_rel(t_obj["hive_path"]) / "team.json"
+                t_manifest = json.loads(t_manifest_path.read_text(encoding="utf-8"))
+                if t_manifest.pop("archived", None) is not None:
+                    t_manifest["updated_at"] = iso
+                    atomic_write_json(t_manifest_path, t_manifest)
 
             for r_slug, cid in normalized_map.items():
                 entry = {
@@ -2747,7 +2926,9 @@ class UltronCore:
                 teams_by_slug, agents_by_id, clean_team, cascade
             )
 
-    def disable_team(self, team_slug: str, cascade: bool = False) -> Dict[str, Any]:
+    def disable_team(
+        self, team_slug: str, cascade: bool = False, archive_ephemeral: bool = True
+    ) -> Dict[str, Any]:
         clean_team = validate_slug(team_slug, "team slug")
         iso = now_iso()
         with self._lock(exclusive=True):
@@ -2764,6 +2945,18 @@ class UltronCore:
                         "status": "disabled",
                     }
             self._write_sessions_unlocked(sessions)
+            archived_teams: List[str] = []
+            if archive_ephemeral:
+                for t_slug in plan["teams_affected"]:
+                    t_obj = teams_by_slug[t_slug]
+                    if t_obj.get("lifespan") == "ephemeral" and not t_obj.get("archived", False):
+                        t_manifest_path = self._abs_from_rel(t_obj["hive_path"]) / "team.json"
+                        t_manifest = json.loads(t_manifest_path.read_text(encoding="utf-8"))
+                        t_manifest["archived"] = True
+                        t_manifest["updated_at"] = iso
+                        atomic_write_json(t_manifest_path, t_manifest)
+                        archived_teams.append(t_slug)
+            plan["archived_teams"] = archived_teams
             return plan
 
     def disable_agent(self, agent_id: str) -> Dict[str, Any]:
@@ -3633,6 +3826,10 @@ class UltronCore:
                             f"Project '{p_slug}' references unknown relationship target '{rel['target']}'."
                         )
             for slug, t_obj in teams_by_slug.items():
+                if t_obj.get("project_missing"):
+                    raise ValueError(
+                        f"Team '{slug}' references missing project '{t_obj['project']}'."
+                    )
                 if f"{slug}/lead" not in agents_by_id:
                     raise ValueError(f"Team '{slug}' is missing required role '{slug}/lead'.")
                 t_dir = self._abs_from_rel(t_obj["hive_path"])
@@ -3711,11 +3908,17 @@ class UltronCore:
             cat_counts[t["category"]] = cat_counts.get(t["category"], 0) + 1
             status_counts[t["status"]] = status_counts.get(t["status"], 0) + 1
 
+        non_archived_teams = [
+            t for t in teams_by_slug.values() if not t.get("archived", False)
+        ]
         return {
             "active_agents": sum(1 for a in agents_by_id.values() if a["status"] == "active"),
-            "active_teams": sum(1 for t in teams_by_slug.values() if t["status"] == "active"),
+            "active_teams": sum(1 for t in non_archived_teams if t["status"] == "active"),
+            "archived_teams": sum(1 for t in teams_by_slug.values() if t.get("archived", False)),
             "categories": cat_counts,
+            "ephemeral_teams": sum(1 for t in non_archived_teams if t.get("lifespan") == "ephemeral"),
             "hive_dir": str(self.hive_dir),
+            "permanent_teams": sum(1 for t in non_archived_teams if t.get("lifespan", DEFAULT_TEAM_LIFESPAN) == "permanent"),
             "projects_dir": str(self.projects_dir),
             "repo_root": str(self.repo_root),
             "sessions_file": str(self.sessions_file),
@@ -3724,7 +3927,7 @@ class UltronCore:
             "total_agents": len(agents_by_id),
             "total_posts": total_posts,
             "total_projects": len(projects_by_slug),
-            "total_teams": len(teams_by_slug),
+            "total_teams": len(non_archived_teams),
             "total_threads": len(threads),
             "visibilities": vis_counts,
         }
@@ -3735,9 +3938,9 @@ class UltronCore:
 # ----------------------------------------------------------------------
 
 
-def format_org_tree(core: UltronCore) -> str:
+def format_org_tree(core: UltronCore, include_archived: bool = False) -> str:
     prime = core.get_agent(PRIME_ID)
-    teams = core.list_teams()
+    teams = core.list_teams(include_archived=include_archived)
     prime_state = (
         f"ACTIVE ({prime['conversation_id']})"
         if prime and prime["status"] == "active" and prime["conversation_id"]
@@ -3748,9 +3951,11 @@ def format_org_tree(core: UltronCore) -> str:
         lines.append("  └── (No teams created in ultron/hive/ yet)")
         return "\n".join(lines)
 
+    visible_slugs = {t["slug"] for t in teams}
     by_parent: Dict[Optional[str], List[Dict[str, Any]]] = {}
     for t in teams:
-        by_parent.setdefault(t["parent_team"], []).append(t)
+        p_key = t["parent_team"] if t["parent_team"] in visible_slugs else None
+        by_parent.setdefault(p_key, []).append(t)
 
     def render_branch(parent: Optional[str], prefix: str) -> None:
         children = by_parent.get(parent, [])
@@ -3763,11 +3968,14 @@ def format_org_tree(core: UltronCore) -> str:
                 for r in t["roles"]
             )
             bp_suffix = f" blueprint={t['blueprint']}" if t.get("blueprint") else ""
+            proj_suffix = f" project={t['project']}" if t.get("project") else ""
+            life_suffix = f" lifespan={t['lifespan']}" if t.get("lifespan") == "ephemeral" else ""
+            arch_suffix = " [ARCHIVED]" if t.get("archived") else ""
             repo_suffix = f" repo={t['target_repo']}" if t.get("target_repo") else ""
             lines.append(
                 f"{prefix}{connector}[L{t['layer']}] {t['slug']} ({t['name']}) "
                 f"[{t['status'].upper()} | {active_roles}/{len(t['roles'])} active] "
-                f"roles: [{role_names}]{bp_suffix}{repo_suffix}"
+                f"roles: [{role_names}]{bp_suffix}{proj_suffix}{life_suffix}{arch_suffix}{repo_suffix}"
             )
             next_prefix = prefix + ("    " if is_last else "│   ")
             render_branch(t["slug"], next_prefix)
@@ -3963,7 +4171,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_prime.add_argument("--harness", default=None, help=f"Harness running PRIME (default: ${HARNESS_ENV}, then auto-detect)")
 
     # org-tree
-    add_cmd("org-tree", "Display full N-layer Hive organization tree")
+    p_ot = add_cmd("org-tree", "Display full N-layer Hive organization tree")
+    p_ot.add_argument("--all", dest="show_all", action="store_true", help="Include archived ephemeral teams")
 
     # blueprints
     add_cmd("blueprints", "List available Team Blueprints in ultron/core/blueprints/")
@@ -4026,6 +4235,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--target-repo",
         default="",
         help="Optional external target repository path (e.g. ~/Dev/XCOMBench)",
+    )
+    p_ct.add_argument(
+        "--project",
+        default="",
+        help="Optional project slug from ultron/core/projects/ to bind this team to",
+    )
+    p_ct.add_argument(
+        "--lifespan",
+        default=None,
+        choices=sorted(VALID_TEAM_LIFESPANS),
+        help=f"Team lifespan: {', '.join(sorted(VALID_TEAM_LIFESPANS))} (default: {DEFAULT_TEAM_LIFESPAN})",
+    )
+    p_ct.add_argument(
+        "--ephemeral",
+        action="store_true",
+        help="Shorthand for --lifespan ephemeral (auto-archives when disabled)",
     )
 
     # add-role
@@ -4093,11 +4318,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="Clear target repository back to local ULTRON repo",
     )
 
+    p_slf = add_cmd("set-lifespan", "Update a team's lifespan or archival state (Prime-only)")
+    p_slf.add_argument("team", help="Team slug")
+    p_slf.add_argument(
+        "lifespan",
+        nargs="?",
+        default=None,
+        choices=sorted(VALID_TEAM_LIFESPANS),
+        help="Target lifespan (permanent | ephemeral)",
+    )
+    slf_arch = p_slf.add_mutually_exclusive_group()
+    slf_arch.add_argument("--archive", action="store_true", help="Mark stopped team archived")
+    slf_arch.add_argument("--unarchive", action="store_true", help="Unarchive team back into standing views")
+
+    p_sprj = add_cmd("set-project", "Bind or clear a team's Project catalog reference (Prime-only)")
+    p_sprj.add_argument("team", help="Team slug")
+    p_sprj.add_argument("project_slug", nargs="?", default="", help="Project slug (omit with --clear)")
+    p_sprj.add_argument("--clear", action="store_true", help="Unbind team from its project")
+    p_sprj.add_argument("--cascade", action="store_true", help="Apply project binding to descendant child teams")
+
     # teams
     p_tms = add_cmd("teams", "List registered teams")
     p_tms.add_argument(
         "--status", default=None, choices=sorted(VALID_TEAM_STATUSES), help="Filter by status"
     )
+    p_tms.add_argument("--project", default=None, help="Filter by bound project slug")
+    p_tms.add_argument(
+        "--lifespan", default=None, choices=sorted(VALID_TEAM_LIFESPANS), help="Filter by lifespan"
+    )
+    tms_arch = p_tms.add_mutually_exclusive_group()
+    tms_arch.add_argument("--archived", action="store_true", help="List only archived ephemeral teams")
+    tms_arch.add_argument("--all", dest="show_all", action="store_true", help="Include archived teams")
 
     # team-info
     p_ti = add_cmd("team-info", "Show detailed info and role roster for a team")
@@ -4456,13 +4707,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             if args.json:
                 print(
                     json.dumps(
-                        {"prime": core.get_agent(PRIME_ID), "teams": core.list_teams()},
+                        {
+                            "prime": core.get_agent(PRIME_ID),
+                            "teams": core.list_teams(include_archived=args.show_all),
+                        },
                         indent=2,
                         sort_keys=True,
                     )
                 )
             else:
-                print(format_org_tree(core))
+                print(format_org_tree(core, include_archived=args.show_all))
 
         elif cmd == "blueprints":
             bps = core.list_blueprints()
@@ -4517,6 +4771,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 )
 
         elif cmd == "create-team":
+            if args.ephemeral and args.lifespan == "permanent":
+                raise ValueError("Cannot pass both --ephemeral and --lifespan permanent.")
+            chosen_lifespan = "ephemeral" if args.ephemeral else (args.lifespan or DEFAULT_TEAM_LIFESPAN)
             res = core.create_team(
                 slug=args.slug,
                 name=args.name,
@@ -4528,16 +4785,20 @@ def main(argv: Optional[List[str]] = None) -> int:
                 target_repo=args.target_repo,
                 blueprint=args.blueprint,
                 harness=args.harness,
+                lifespan=chosen_lifespan,
+                project=args.project,
             )
             if args.json:
                 print(json.dumps(res, indent=2, sort_keys=True))
             else:
                 bp_note = f" [blueprint={res['blueprint']}]" if res.get("blueprint") else ""
+                proj_note = f" [project={res['project']}]" if res.get("project") else ""
+                life_note = f" [lifespan={res['lifespan']}]" if res.get("lifespan") != DEFAULT_TEAM_LIFESPAN else ""
                 repo_note = f" [target_repo={res['target_repo']}]" if res.get("target_repo") else ""
                 roles_list = [r["agent_id"] for r in res["roles"]]
                 print(
                     f"[ULTRON] Created Team '{res['slug']}' (Layer {res['layer']}) at {res['hive_path']} "
-                    f"with roles {roles_list} [status=disabled]{bp_note}{repo_note}"
+                    f"with roles {roles_list} [status=disabled]{bp_note}{proj_note}{life_note}{repo_note}"
                 )
 
         elif cmd == "add-role":
@@ -4593,18 +4854,55 @@ def main(argv: Optional[List[str]] = None) -> int:
                 display_repo = res.get("target_repo") or "Local ULTRON Repository (default)"
                 print(f"[ULTRON] Updated target_repo for '{target_label}' -> {display_repo}")
 
+        elif cmd == "set-lifespan":
+            if args.lifespan is None and not args.archive and not args.unarchive:
+                raise ValueError("Specify <permanent|ephemeral> and/or --archive or --unarchive.")
+            arch_arg: Optional[bool] = True if args.archive else (False if args.unarchive else None)
+            res = core.set_team_lifespan(args.team, lifespan=args.lifespan, archived=arch_arg)
+            if args.json:
+                print(json.dumps(res, indent=2, sort_keys=True))
+            else:
+                arch_note = " [ARCHIVED]" if res.get("archived") else ""
+                print(f"[ULTRON] Team '{res['slug']}' lifespan={res['lifespan']}{arch_note}")
+
+        elif cmd == "set-project":
+            clean_p = (args.project_slug or "").strip()
+            if args.clear and clean_p:
+                raise ValueError("Cannot pass both <project_slug> and --clear.")
+            if not args.clear and not clean_p:
+                raise ValueError("Provide a <project_slug> or pass --clear to unbind.")
+            res = core.set_team_project(
+                team_slug=args.team,
+                project_slug="" if args.clear else clean_p,
+                cascade=args.cascade,
+            )
+            if args.json:
+                print(json.dumps(res, indent=2, sort_keys=True))
+            else:
+                print(f"[ULTRON] Team '{res['slug']}' project -> {res.get('project') or '(unbound)'}")
+
         elif cmd == "teams":
-            res = core.list_teams(status=args.status)
+            res = core.list_teams(
+                status=args.status,
+                project=args.project,
+                lifespan=args.lifespan,
+                include_archived=args.show_all or args.archived,
+                archived_only=args.archived,
+            )
             if args.json:
                 print(json.dumps(res, indent=2, sort_keys=True))
             elif not res:
                 print("[ULTRON] No teams registered.")
             else:
                 for t in res:
+                    proj_suffix = f" project={t['project']}" if t.get("project") else ""
+                    life_suffix = f" lifespan={t['lifespan']}" if t.get("lifespan") else ""
+                    arch_suffix = " [ARCHIVED]" if t.get("archived") else ""
                     repo_suffix = f" repo={t['target_repo']}" if t.get("target_repo") else ""
                     print(
                         f"[L{t['layer']}] {t['slug']:<20} status={t['status']:<10} "
-                        f"parent={t['parent_team'] or PRIME_ID:<16} path={t['hive_path']}{repo_suffix}"
+                        f"parent={t['parent_team'] or PRIME_ID:<16} path={t['hive_path']}"
+                        f"{life_suffix}{arch_suffix}{proj_suffix}{repo_suffix}"
                     )
 
         elif cmd == "team-info":

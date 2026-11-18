@@ -960,6 +960,119 @@ class UltronCoreTestCase(unittest.TestCase):
         self.assertEqual(self.core.get_project("noir-mystery")["relationships"], [])
         self.assertTrue(self.core.verify()["ok"])
 
+    def test_team_lifespan_permanent_vs_ephemeral_and_project_binding(self) -> None:
+        # 1. Bind a standing permanent team + child team to a monorepo subproject
+        self.core.create_project(slug="suite", name="Suite", repo_path="~/Dev/suite")
+        self.core.create_project(
+            slug="app-a", name="App A", subpath="app_a", parent_project="suite"
+        )
+        perm = self.core.create_team(
+            slug="app-a-dev",
+            blueprint="coding-light",
+            mission="Maintain App A permanently",
+            project="app-a",
+        )
+        self.assertEqual(perm["lifespan"], "permanent")
+        self.assertFalse(perm["archived"])
+        self.assertEqual(perm["project"], "app-a")
+        self.assertEqual(perm["target_repo"], "~/Dev/suite/app_a")
+
+        child_perm = self.core.create_team(
+            slug="app-a-ui",
+            name="App A UI",
+            mission="Maintain UI",
+            parent_team="app-a-dev",
+        )
+        self.assertEqual(child_perm["project"], "app-a")
+        self.assertEqual(child_perm["target_repo"], "~/Dev/suite/app_a")
+
+        # Updating subproject path dynamically propagates to bound teams without mutating team.json
+        self.core.update_project("app-a", subpath="apps/app_a_v2")
+        self.assertEqual(self.core.get_team("app-a-dev")["target_repo"], "~/Dev/suite/apps/app_a_v2")
+        self.assertEqual(self.core.get_team("app-a-ui")["target_repo"], "~/Dev/suite/apps/app_a_v2")
+
+        # Permanent team stays visible even after disable_team()
+        self.core.register_prime("prime-uuid", harness="antigravity")
+        self.core.activate_team(
+            "app-a-dev",
+            {"lead": "u1", "spec": "u2", "dev": "u3", "qa": "u4"},
+        )
+        t_json_before = (self.root / "ultron" / "hive" / "app-a-dev" / "team.json").read_text(encoding="utf-8")
+        self.core.disable_team("app-a-dev")
+        t_json_after = (self.root / "ultron" / "hive" / "app-a-dev" / "team.json").read_text(encoding="utf-8")
+        self.assertEqual(t_json_before, t_json_after)
+        self.assertIn("app-a-dev", {t["slug"] for t in self.core.list_teams()})
+
+        # 2. Ephemeral team auto-archives on disable_team and hides from default views
+        res_eph = self.run_cli(
+            "create-team",
+            "--slug",
+            "temp-spike",
+            "--blueprint",
+            "brainstorm",
+            "--mission",
+            "Explore options",
+            "--project",
+            "app-a",
+            "--ephemeral",
+        )
+        self.assertEqual(res_eph.returncode, 0, msg=res_eph.stderr)
+        self.assertEqual(self.core.get_team("temp-spike")["lifespan"], "ephemeral")
+        self.core.activate_team(
+            "temp-spike",
+            {"lead": "e1", "explorer": "e2", "analyst": "e3", "critic": "e4"},
+        )
+        # Active team cannot be manually archived
+        with self.assertRaisesRegex(ValueError, "stop-team"):
+            self.core.set_team_lifespan("temp-spike", archived=True)
+
+        # Standalone standing child under ephemeral parent must remain visible in org-tree when parent archives
+        self.core.create_team(
+            slug="orphan-perm",
+            name="Orphan Standing",
+            mission="Keep standing knowledge",
+            parent_team="temp-spike",
+            lifespan="permanent",
+        )
+        self.core.disable_team("temp-spike", cascade=False)
+        self.assertTrue(self.core.get_team("temp-spike")["archived"])
+        self.assertNotIn("temp-spike", {t["slug"] for t in self.core.list_teams()})
+        self.assertIn("temp-spike", {t["slug"] for t in self.core.list_teams(include_archived=True)})
+        self.assertEqual(
+            [t["slug"] for t in self.core.list_teams(archived_only=True)],
+            ["temp-spike"],
+        )
+
+        tree_default = self.run_cli("org-tree")
+        self.assertEqual(tree_default.returncode, 0, msg=tree_default.stderr)
+        self.assertNotIn("temp-spike", tree_default.stdout)
+        self.assertIn("orphan-perm", tree_default.stdout)
+        self.assertIn("project=app-a", tree_default.stdout)
+
+        tree_all = self.run_cli("org-tree", "--all")
+        self.assertEqual(tree_all.returncode, 0, msg=tree_all.stderr)
+        self.assertIn("temp-spike", tree_all.stdout)
+        self.assertIn("[ARCHIVED]", tree_all.stdout)
+
+        # Re-activating or unarchiving clears archived flag automatically
+        self.core.activate_team(
+            "temp-spike",
+            {"lead": "e1b", "explorer": "e2b", "analyst": "e3b", "critic": "e4b"},
+        )
+        self.assertFalse(self.core.get_team("temp-spike")["archived"])
+        self.assertIn("temp-spike", {t["slug"] for t in self.core.list_teams()})
+
+        # Project cannot be removed while teams are still bound; set-project --clear unbinds it
+        with self.assertRaisesRegex(ValueError, "bound"):
+            self.core.remove_project("app-a")
+        self.core.disable_team("temp-spike")
+        self.assertEqual(self.run_cli("set-project", "temp-spike", "--clear").returncode, 0)
+        self.assertEqual(self.run_cli("set-project", "app-a-dev", "--clear", "--cascade").returncode, 0)
+        self.assertEqual(self.core.get_team("app-a-ui")["project"], "")
+        self.core.remove_project("app-a")
+        self.assertIsNone(self.core.get_project("app-a"))
+        self.assertTrue(self.core.verify()["ok"])
+
     def test_export_thread_cli_and_api(self) -> None:
         # Create team and roles for authorization testing
         self.core.create_team(slug="eng", name="Engineering", mission="Engineering pod")
