@@ -864,6 +864,102 @@ class UltronCoreTestCase(unittest.TestCase):
             self.assertEqual(agy_specs[r_slug]["invoke_subagent"]["Model"], "inherit")
             self.assertEqual(cc_specs[r_slug]["claude_model"], "sonnet")
 
+    def test_projects_catalog_hierarchy_relationships_and_cli(self) -> None:
+        self.assertFalse((self.root / "ultron" / "core" / "projects").exists())
+
+        # Root monorepo project + 2-level nested subprojects
+        suite = self.core.create_project(
+            slug="game-suite",
+            name="Game Dev Suite",
+            description="Monorepo of experimental games and shared native addons",
+            repo_path="~/Dev/game_suite",
+        )
+        self.assertEqual(suite["layer"], 1)
+        self.assertEqual(suite["effective_target_path"], "~/Dev/game_suite")
+        self.assertEqual(suite["subpath"], "")
+
+        apps = self.core.create_project(
+            slug="mobile-apps",
+            name="Mobile Apps Folder",
+            subpath="\\apps\\",
+            parent_project="game-suite",
+        )
+        self.assertEqual(apps["subpath"], "apps")
+        self.assertEqual(apps["effective_target_path"], "~/Dev/game_suite/apps")
+
+        noir = self.core.create_project(
+            slug="noir-mystery",
+            name="Noir Mystery",
+            subpath="noir_mystery/",
+            parent_project="mobile-apps",
+        )
+        self.assertEqual(noir["layer"], 3)
+        self.assertEqual(noir["lineage"], ["game-suite", "mobile-apps", "noir-mystery"])
+        self.assertEqual(noir["effective_repo_path"], "~/Dev/game_suite")
+        self.assertEqual(noir["effective_target_path"], "~/Dev/game_suite/apps/noir_mystery")
+
+        # Subproject overriding repo_path resets ancestor subpath segments
+        addon = self.core.create_project(
+            slug="local-llm-addon",
+            name="Local LLM Addon",
+            repo_path="~/Dev/local_llm_addon",
+            subpath="  /  ",
+            parent_project="game-suite",
+        )
+        self.assertEqual(addon["subpath"], "")
+        self.assertEqual(addon["effective_target_path"], "~/Dev/local_llm_addon")
+
+        # Reject invalid subpaths (absolute, ~, traversal)
+        for bad_sub in ("../escape", "/etc/passwd", "~/escape", "a/../b"):
+            with self.subTest(bad_sub=bad_sub):
+                with self.assertRaises(ValueError):
+                    self.core.create_project(slug="bad-p", name="Bad", subpath=bad_sub)
+
+        # Pre-write cycle detection & missing parent rejection
+        with self.assertRaisesRegex(ValueError, "Cycle detected"):
+            self.core.update_project("game-suite", parent_project="noir-mystery")
+        self.assertIsNone(self.core.get_project("game-suite")["parent_project"])
+        with self.assertRaisesRegex(ValueError, "missing|does not exist"):
+            self.core.update_project("noir-mystery", parent_project="nonexistent")
+
+        # Relationships: link-project, upsert, unlink, and cascade removal pruning
+        self.core.link_projects("noir-mystery", "local-llm-addon", relation="depends_on", note="Inference")
+        self.core.link_projects("noir-mystery", "local-llm-addon", relation="depends_on", note="Updated note")
+        fetched = self.core.get_project("noir-mystery")
+        assert fetched is not None
+        self.assertEqual(len(fetched["relationships"]), 1)
+        self.assertEqual(fetched["relationships"][0]["note"], "Updated note")
+
+        res_cli = self.run_cli("projects", "--json")
+        self.assertEqual(res_cli.returncode, 0, msg=res_cli.stderr)
+        self.assertEqual(len(json.loads(res_cli.stdout)), 4)
+
+        # Archiving parent with non-archived subprojects must fail loud
+        with self.assertRaisesRegex(ValueError, "non-archived subprojects"):
+            self.core.update_project("game-suite", status="archived")
+
+        # Archiving leaf hides it from default list_projects() unless include_archived=True
+        self.core.update_project("local-llm-addon", status="archived")
+        self.assertEqual(len(self.core.list_projects()), 3)
+        self.assertEqual(len(self.core.list_projects(include_archived=True)), 4)
+
+        # Role shell cannot mutate projects, but can inspect them
+        role_env = {"ULTRON_AGENT_ID": "eng/dev"}
+        denied = self.run_cli("create-project", "--slug", "rogue", "--name", "Rogue", env_extra=role_env)
+        self.assertEqual(denied.returncode, 1)
+        self.assertIn("ultron-prime only", denied.stderr)
+        allowed = self.run_cli("project-info", "noir-mystery", env_extra=role_env)
+        self.assertEqual(allowed.returncode, 0, msg=allowed.stderr)
+
+        # Non-cascade remove refuses when subprojects exist; remove pruned relationships
+        with self.assertRaisesRegex(ValueError, "--cascade"):
+            self.core.remove_project("game-suite", cascade=False)
+        removed = self.core.remove_project("local-llm-addon")
+        self.assertEqual(removed["removed_projects"], ["local-llm-addon"])
+        self.assertIn("noir-mystery", removed["pruned_relationships_in"])
+        self.assertEqual(self.core.get_project("noir-mystery")["relationships"], [])
+        self.assertTrue(self.core.verify()["ok"])
+
     def test_export_thread_cli_and_api(self) -> None:
         # Create team and roles for authorization testing
         self.core.create_team(slug="eng", name="Engineering", mission="Engineering pod")

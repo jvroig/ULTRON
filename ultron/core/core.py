@@ -73,8 +73,9 @@ ANTIGRAVITY_DAEMON_DIR_ENV = "ULTRON_ANTIGRAVITY_DAEMON_DIR"
 CLAUDE_DOORBELL_MODEL = "haiku"
 ROLE_ID_ENV = "ULTRON_AGENT_ID"
 PRIME_ONLY_COMMANDS = frozenset({
-    "activate-agent", "activate-team", "add-role", "create-team", "disable-agent", "disable-team",
-    "register-prime", "remove-team", "set-campaign", "set-harness", "set-target-repo", "spawn-team", "stop-team",
+    "activate-agent", "activate-team", "add-role", "create-project", "create-team", "disable-agent",
+    "disable-team", "link-project", "register-prime", "remove-project", "remove-team", "set-campaign",
+    "set-harness", "set-target-repo", "spawn-team", "stop-team", "update-project",
 })
 SUPPRESSING_MEMORY_FILES = ("CLAUDE.md", "CLAUDE.local.md")
 ROLE_CLAUDE_SETTINGS = {
@@ -83,6 +84,8 @@ ROLE_CLAUDE_SETTINGS = {
 }
 VALID_TEAM_STATUSES = {"active", "disabled"}
 VALID_AGENT_STATUSES = {"active", "disabled"}
+VALID_PROJECT_STATUSES = {"active", "paused", "archived"}
+VALID_PROJECT_RELATIONS = {"depends_on", "related_to", "shares_assets_with", "part_of"}
 VALID_VISIBILITIES = {"personal", "team", "global"}
 VALID_THREAD_STATUSES = {"open", "in_progress", "resolved", "blocked", "closed"}
 
@@ -166,6 +169,29 @@ def validate_role_slug(value: str) -> str:
     if cleaned in {PRIME_ID, "prime", "teams", "roles", "workspace"}:
         raise ValueError(f"Invalid role '{value}': '{cleaned}' is reserved.")
     return cleaned
+
+
+def normalize_project_subpath(value: str) -> str:
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return ""
+    if "\x00" in cleaned:
+        raise ValueError("Invalid project subpath: null byte not allowed.")
+    if not cleaned.replace("\\", "/").strip("/"):
+        return ""
+    if cleaned.startswith(("/", "~")) or (
+        len(cleaned) >= 2 and cleaned[1] == ":" and cleaned[0].isalpha()
+    ):
+        raise ValueError(
+            f"Invalid project subpath '{value}': must be relative to the repository root."
+        )
+    parts = [seg for seg in cleaned.replace("\\", "/").split("/") if seg]
+    for seg in parts:
+        if seg in (".", ".."):
+            raise ValueError(
+                f"Invalid project subpath '{value}': path traversal segment '{seg}' is not allowed."
+            )
+    return "/".join(parts)
 
 
 def normalize_agent_id(value: str) -> str:
@@ -792,6 +818,7 @@ class UltronCore:
         threads_dir: Optional[Path | str] = None,
         runtime_dir: Optional[Path | str] = None,
         templates_dir: Optional[Path | str] = None,
+        projects_dir: Optional[Path | str] = None,
     ) -> None:
         env_root = os.environ.get("ULTRON_REPO_ROOT")
         self.repo_root = Path(repo_root or env_root or DEFAULT_REPO_ROOT).resolve()
@@ -810,6 +837,9 @@ class UltronCore:
         self.sessions_file = self.runtime_dir / "sessions.json"
         self.lock_file = self.runtime_dir / ".lock"
         self.templates_dir = Path(templates_dir or TEMPLATES_DIR).resolve()
+        self.projects_dir = Path(
+            projects_dir or os.environ.get("ULTRON_PROJECTS_DIR") or (default_core / "projects")
+        ).resolve()
         self.blueprints_dir = Path(
             os.environ.get("ULTRON_BLUEPRINTS_DIR") or (default_core / "blueprints")
         ).resolve()
@@ -1116,6 +1146,426 @@ class UltronCore:
                     descendants.append(c_slug)
                     queue.append(c_slug)
         return descendants
+
+    # ------------------------------------------------------------------
+    # Projects Catalog (ultron/core/projects/<slug>.json)
+    # ------------------------------------------------------------------
+
+    def _scan_projects_unlocked(
+        self, teams_by_slug: Optional[Mapping[str, Dict[str, Any]]] = None
+    ) -> Dict[str, Dict[str, Any]]:
+        raw_projects: Dict[str, Dict[str, Any]] = {}
+        if self.projects_dir.is_dir():
+            for p_file in sorted(self.projects_dir.glob("*.json")):
+                if p_file.name.startswith("."):
+                    continue
+                try:
+                    raw = json.loads(p_file.read_text(encoding="utf-8"))
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"Corrupt JSON in '{p_file}': {exc}") from exc
+                if not isinstance(raw, dict):
+                    raise ValueError(f"Invalid schema in '{p_file}': expected JSON object.")
+                slug = validate_slug(str(raw.get("slug", "")), "project slug")
+                if slug != p_file.stem:
+                    raise ValueError(
+                        f"Project file '{p_file.name}' mismatches slug '{slug}'."
+                    )
+                status = str(raw.get("status", "active")).strip().lower() or "active"
+                if status not in VALID_PROJECT_STATUSES:
+                    raise ValueError(f"Invalid status '{status}' in '{p_file}'.")
+                raw_parent = (raw.get("parent_project") or "").strip().lower() or None
+                if raw_parent:
+                    validate_slug(raw_parent, "parent_project")
+                rels_raw = raw.get("relationships", [])
+                if not isinstance(rels_raw, list):
+                    raise ValueError(f"Invalid relationships list in '{p_file}'.")
+                rels: List[Dict[str, str]] = []
+                for rel in rels_raw:
+                    if not isinstance(rel, dict):
+                        raise ValueError(f"Invalid relationship entry in '{p_file}'.")
+                    r_type = str(rel.get("relation", "")).strip().lower()
+                    if r_type not in VALID_PROJECT_RELATIONS:
+                        raise ValueError(
+                            f"Invalid relationship type '{r_type}' in '{p_file}'."
+                        )
+                    r_target = validate_slug(str(rel.get("target", "")), "relationship target")
+                    if r_target == slug:
+                        raise ValueError(f"Project '{slug}' cannot link to itself.")
+                    rels.append(
+                        {
+                            "note": str(rel.get("note", "")).strip(),
+                            "relation": r_type,
+                            "target": r_target,
+                        }
+                    )
+                rels.sort(key=lambda item: (item["relation"], item["target"]))
+
+                raw_projects[slug] = {
+                    "created_at": str(raw.get("created_at") or now_iso()),
+                    "description": str(raw.get("description", "")).strip(),
+                    "name": str(raw.get("name", slug)).strip() or slug,
+                    "parent_project": raw_parent,
+                    "project_path": self._rel_posix(p_file),
+                    "relationships": rels,
+                    "repo_path": str(raw.get("repo_path", "")).strip(),
+                    "slug": slug,
+                    "status": status,
+                    "subpath": normalize_project_subpath(str(raw.get("subpath", ""))),
+                    "updated_at": str(raw.get("updated_at") or raw.get("created_at") or now_iso()),
+                }
+
+        # Validate parent existence + compute cycle-free lineage and cumulative paths
+        lineages: Dict[str, List[str]] = {}
+
+        def compute_lineage(slug: str, visiting: Set[str]) -> List[str]:
+            if slug in lineages:
+                return lineages[slug]
+            if slug in visiting:
+                raise ValueError(f"Cycle detected in project hierarchy at '{slug}'.")
+            visiting.add(slug)
+            p_obj = raw_projects[slug]
+            parent = p_obj["parent_project"]
+            if parent:
+                if parent not in raw_projects:
+                    raise ValueError(
+                        f"Project '{slug}' references missing parent_project '{parent}'."
+                    )
+                lin = [*compute_lineage(parent, visiting), slug]
+            else:
+                lin = [slug]
+            visiting.remove(slug)
+            lineages[slug] = lin
+            return lin
+
+        projects_by_slug: Dict[str, Dict[str, Any]] = {}
+        for slug in sorted(raw_projects):
+            lin = compute_lineage(slug, set())
+            base_repo = ""
+            segments: List[str] = []
+            for anc_slug in lin:
+                anc = raw_projects[anc_slug]
+                if anc["repo_path"]:
+                    base_repo = anc["repo_path"]
+                    segments = []
+                if anc["subpath"] and base_repo:
+                    segments.append(anc["subpath"])
+            effective_target = (
+                f"{base_repo.rstrip('/\\\\')}/{'/'.join(segments)}"
+                if base_repo and segments
+                else base_repo
+            )
+            p_data = dict(raw_projects[slug])
+            p_data.update(
+                {
+                    "effective_repo_path": base_repo,
+                    "effective_target_path": effective_target,
+                    "layer": len(lin),
+                    "lineage": lin,
+                    "subprojects": [],
+                    "target_path_abs": self._resolve_target_repo(effective_target),
+                    "teams": [],
+                }
+            )
+            projects_by_slug[slug] = p_data
+
+        for slug in sorted(projects_by_slug):
+            p_obj = projects_by_slug[slug]
+            parent = p_obj["parent_project"]
+            if parent and parent in projects_by_slug:
+                projects_by_slug[parent]["subprojects"].append(
+                    {"name": p_obj["name"], "slug": slug, "status": p_obj["status"]}
+                )
+
+        if teams_by_slug:
+            for t_slug in sorted(teams_by_slug):
+                t_obj = teams_by_slug[t_slug]
+                p_slug = t_obj.get("project") or ""
+                if p_slug and p_slug in projects_by_slug and not t_obj.get("archived", False):
+                    projects_by_slug[p_slug]["teams"].append(
+                        {
+                            "lifespan": t_obj.get("lifespan", "permanent"),
+                            "name": t_obj["name"],
+                            "slug": t_slug,
+                            "status": t_obj["status"],
+                        }
+                    )
+
+        return projects_by_slug
+
+    @staticmethod
+    def _project_descendants(
+        projects_by_slug: Mapping[str, Dict[str, Any]], root_slug: str
+    ) -> List[str]:
+        descendants: List[str] = []
+        queue = [root_slug]
+        seen: Set[str] = {root_slug}
+        while queue:
+            curr = queue.pop(0)
+            children = sorted(
+                s for s, p in projects_by_slug.items() if p["parent_project"] == curr
+            )
+            for child in children:
+                if child not in seen:
+                    seen.add(child)
+                    descendants.append(child)
+                    queue.append(child)
+        return descendants
+
+    def create_project(
+        self,
+        slug: str,
+        name: str,
+        description: str = "",
+        repo_path: str = "",
+        subpath: str = "",
+        parent_project: Optional[str] = None,
+        status: str = "active",
+    ) -> Dict[str, Any]:
+        clean_slug = validate_slug(slug, "project slug")
+        clean_name = name.strip()
+        if not clean_name:
+            raise ValueError("Project name cannot be empty.")
+        clean_status = (status or "active").strip().lower()
+        if clean_status not in VALID_PROJECT_STATUSES:
+            raise ValueError(
+                f"Invalid project status '{status}'. Must be one of {sorted(VALID_PROJECT_STATUSES)}."
+            )
+        clean_subpath = normalize_project_subpath(subpath)
+        clean_parent = (
+            validate_slug(parent_project, "parent_project")
+            if parent_project and parent_project.strip()
+            else None
+        )
+        if clean_parent == clean_slug:
+            raise ValueError(f"Project '{clean_slug}' cannot be its own parent.")
+
+        iso = now_iso()
+        with self._lock(exclusive=True):
+            teams_by_slug, _, _ = self._scan_state_unlocked()
+            projects = self._scan_projects_unlocked(teams_by_slug)
+            if clean_slug in projects:
+                raise ValueError(f"Project '{clean_slug}' already exists.")
+            if clean_parent:
+                p_obj = projects.get(clean_parent)
+                if not p_obj:
+                    raise ValueError(f"Parent project '{clean_parent}' does not exist.")
+                if p_obj["status"] == "archived":
+                    raise ValueError(
+                        f"Cannot attach subproject '{clean_slug}' under archived project '{clean_parent}'."
+                    )
+
+            self.projects_dir.mkdir(parents=True, exist_ok=True)
+            manifest: Dict[str, Any] = {
+                "created_at": iso,
+                "description": (description or "").strip(),
+                "name": clean_name,
+                "parent_project": clean_parent,
+                "relationships": [],
+                "repo_path": (repo_path or "").strip(),
+                "slug": clean_slug,
+                "status": clean_status,
+                "subpath": clean_subpath,
+                "updated_at": iso,
+            }
+            atomic_write_json(self.projects_dir / f"{clean_slug}.json", manifest)
+            return self._scan_projects_unlocked(teams_by_slug)[clean_slug]
+
+    def update_project(
+        self,
+        slug: str,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        repo_path: Optional[str] = None,
+        subpath: Optional[str] = None,
+        parent_project: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        clean_slug = validate_slug(slug, "project slug")
+        iso = now_iso()
+        with self._lock(exclusive=True):
+            teams_by_slug, _, _ = self._scan_state_unlocked()
+            projects = self._scan_projects_unlocked(teams_by_slug)
+            existing = projects.get(clean_slug)
+            if not existing:
+                raise ValueError(f"Project '{clean_slug}' does not exist.")
+
+            p_file = self.projects_dir / f"{clean_slug}.json"
+            raw = json.loads(p_file.read_text(encoding="utf-8"))
+
+            if name is not None:
+                clean_name = name.strip()
+                if not clean_name:
+                    raise ValueError("Project name cannot be empty.")
+                raw["name"] = clean_name
+            if description is not None:
+                raw["description"] = description.strip()
+            if repo_path is not None:
+                raw["repo_path"] = repo_path.strip()
+            if subpath is not None:
+                raw["subpath"] = normalize_project_subpath(subpath)
+            if parent_project is not None:
+                clean_parent = (
+                    validate_slug(parent_project, "parent_project")
+                    if parent_project.strip()
+                    else None
+                )
+                if clean_parent == clean_slug:
+                    raise ValueError(f"Project '{clean_slug}' cannot be its own parent.")
+                if clean_parent:
+                    parent_obj = projects.get(clean_parent)
+                    if not parent_obj:
+                        raise ValueError(f"Parent project '{clean_parent}' does not exist.")
+                    if parent_obj["status"] == "archived":
+                        raise ValueError(
+                            f"Cannot re-parent '{clean_slug}' under archived project '{clean_parent}'."
+                        )
+                    if clean_slug in parent_obj["lineage"]:
+                        raise ValueError(
+                            f"Cycle detected: cannot set '{clean_slug}' parent_project to descendant '{clean_parent}'."
+                        )
+                raw["parent_project"] = clean_parent
+            if status is not None:
+                clean_status = status.strip().lower()
+                if clean_status not in VALID_PROJECT_STATUSES:
+                    raise ValueError(
+                        f"Invalid project status '{status}'. Must be one of {sorted(VALID_PROJECT_STATUSES)}."
+                    )
+                if clean_status == "archived":
+                    active_kids = [
+                        c["slug"] for c in existing["subprojects"] if c["status"] != "archived"
+                    ]
+                    if active_kids:
+                        raise ValueError(
+                            f"Cannot archive project '{clean_slug}': non-archived subprojects exist ({active_kids})."
+                        )
+                raw["status"] = clean_status
+
+            raw["updated_at"] = iso
+            atomic_write_json(p_file, raw)
+            return self._scan_projects_unlocked(teams_by_slug)[clean_slug]
+
+    def link_projects(
+        self,
+        source_slug: str,
+        target_slug: str,
+        relation: str = "depends_on",
+        note: str = "",
+        unlink: bool = False,
+    ) -> Dict[str, Any]:
+        src = validate_slug(source_slug, "source project")
+        tgt = validate_slug(target_slug, "target project")
+        if src == tgt:
+            raise ValueError(f"Project '{src}' cannot link to itself.")
+        clean_rel = (relation or "depends_on").strip().lower()
+        if clean_rel not in VALID_PROJECT_RELATIONS:
+            raise ValueError(
+                f"Invalid relationship '{relation}'. Must be one of {sorted(VALID_PROJECT_RELATIONS)}."
+            )
+
+        with self._lock(exclusive=True):
+            teams_by_slug, _, _ = self._scan_state_unlocked()
+            projects = self._scan_projects_unlocked(teams_by_slug)
+            if src not in projects:
+                raise ValueError(f"Source project '{src}' does not exist.")
+            if tgt not in projects:
+                raise ValueError(f"Target project '{tgt}' does not exist.")
+
+            p_file = self.projects_dir / f"{src}.json"
+            raw = json.loads(p_file.read_text(encoding="utf-8"))
+            rels = [
+                r
+                for r in raw.get("relationships", [])
+                if not (r.get("target") == tgt and r.get("relation") == clean_rel)
+            ]
+            if not unlink:
+                rels.append({"note": (note or "").strip(), "relation": clean_rel, "target": tgt})
+            rels.sort(key=lambda item: (item["relation"], item["target"]))
+            raw["relationships"] = rels
+            raw["updated_at"] = now_iso()
+            atomic_write_json(p_file, raw)
+            return self._scan_projects_unlocked(teams_by_slug)[src]
+
+    def get_project(self, slug: str) -> Optional[Dict[str, Any]]:
+        clean = validate_slug(slug, "project slug")
+        with self._lock(exclusive=False):
+            teams_by_slug, _, _ = self._scan_state_unlocked()
+            return self._scan_projects_unlocked(teams_by_slug).get(clean)
+
+    def list_projects(
+        self,
+        status: Optional[str] = None,
+        parent_project: Optional[str] = None,
+        include_archived: bool = False,
+    ) -> List[Dict[str, Any]]:
+        st: Optional[str] = None
+        if status:
+            st = status.strip().lower()
+            if st not in VALID_PROJECT_STATUSES:
+                raise ValueError(f"Invalid project status '{status}'.")
+        clean_parent = (
+            validate_slug(parent_project, "parent_project") if parent_project else None
+        )
+
+        with self._lock(exclusive=False):
+            teams_by_slug, _, _ = self._scan_state_unlocked()
+            projects = self._scan_projects_unlocked(teams_by_slug)
+
+        items = [
+            p
+            for p in projects.values()
+            if (st is not None and p["status"] == st)
+            or (st is None and (include_archived or p["status"] != "archived"))
+        ]
+        if clean_parent:
+            items = [p for p in items if p["parent_project"] == clean_parent]
+        items.sort(key=lambda item: (item["layer"], item["slug"]))
+        return items
+
+    def remove_project(self, slug: str, cascade: bool = False) -> Dict[str, Any]:
+        clean = validate_slug(slug, "project slug")
+        with self._lock(exclusive=True):
+            teams_by_slug, _, _ = self._scan_state_unlocked()
+            projects = self._scan_projects_unlocked(teams_by_slug)
+            if clean not in projects:
+                raise ValueError(f"Project '{clean}' does not exist.")
+            descendants = self._project_descendants(projects, clean)
+            if descendants and not cascade:
+                raise ValueError(
+                    f"Cannot remove project '{clean}': subprojects exist ({descendants}). "
+                    f"Re-run with --cascade to remove the entire subtree."
+                )
+            target_slugs = [clean, *descendants]
+            target_set = set(target_slugs)
+
+            bound_teams = sorted(
+                t_slug
+                for t_slug, t_obj in teams_by_slug.items()
+                if t_obj.get("project") in target_set
+            )
+            if bound_teams:
+                raise ValueError(
+                    f"Cannot remove project(s) {target_slugs}: team(s) {bound_teams} are still bound to them. "
+                    f"Run set-project --clear or remove-team first."
+                )
+
+            for rem_slug in target_slugs:
+                (self.projects_dir / f"{rem_slug}.json").unlink(missing_ok=True)
+
+            pruned_from: List[str] = []
+            for surv_slug in sorted(set(projects) - target_set):
+                p_file = self.projects_dir / f"{surv_slug}.json"
+                if not p_file.is_file():
+                    continue
+                raw = json.loads(p_file.read_text(encoding="utf-8"))
+                orig_rels = raw.get("relationships", [])
+                filtered_rels = [r for r in orig_rels if r.get("target") not in target_set]
+                if len(filtered_rels) != len(orig_rels):
+                    raw["relationships"] = filtered_rels
+                    raw["updated_at"] = now_iso()
+                    atomic_write_json(p_file, raw)
+                    pruned_from.append(surv_slug)
+
+            return {"pruned_relationships_in": pruned_from, "removed_projects": target_slugs}
 
     # ------------------------------------------------------------------
     # Blueprint Discovery & Authoring (ultron/core/blueprints/)
@@ -3175,6 +3625,13 @@ class UltronCore:
         """Validate integrity of Hive manifests, runtime sessions, JSONL threads, and .gitattributes."""
         with self._lock(exclusive=prune_orphans):
             teams_by_slug, agents_by_id, sessions = self._scan_state_unlocked()
+            projects_by_slug = self._scan_projects_unlocked(teams_by_slug)
+            for p_slug, p_obj in projects_by_slug.items():
+                for rel in p_obj.get("relationships", []):
+                    if rel["target"] not in projects_by_slug:
+                        raise ValueError(
+                            f"Project '{p_slug}' references unknown relationship target '{rel['target']}'."
+                        )
             for slug, t_obj in teams_by_slug.items():
                 if f"{slug}/lead" not in agents_by_id:
                     raise ValueError(f"Team '{slug}' is missing required role '{slug}/lead'.")
@@ -3232,6 +3689,7 @@ class UltronCore:
                 "ok": True,
                 "orphan_sessions": 0,
                 "posts": sum(t["post_count"] for t in threads),
+                "projects": len(projects_by_slug),
                 "pruned_orphan_sessions": pruned_orphans,
                 "teams": len(teams_by_slug),
                 "threads": len(threads),
@@ -3240,6 +3698,7 @@ class UltronCore:
     def get_stats(self) -> Dict[str, Any]:
         with self._lock(exclusive=False):
             teams_by_slug, agents_by_id, _ = self._scan_state_unlocked()
+            projects_by_slug = self._scan_projects_unlocked(teams_by_slug)
             threads = self._load_all_threads_unlocked()
 
         vis_counts: Dict[str, int] = {}
@@ -3257,12 +3716,14 @@ class UltronCore:
             "active_teams": sum(1 for t in teams_by_slug.values() if t["status"] == "active"),
             "categories": cat_counts,
             "hive_dir": str(self.hive_dir),
+            "projects_dir": str(self.projects_dir),
             "repo_root": str(self.repo_root),
             "sessions_file": str(self.sessions_file),
             "statuses": status_counts,
             "threads_dir": str(self.threads_dir),
             "total_agents": len(agents_by_id),
             "total_posts": total_posts,
+            "total_projects": len(projects_by_slug),
             "total_teams": len(teams_by_slug),
             "total_threads": len(threads),
             "visibilities": vis_counts,
@@ -3330,6 +3791,50 @@ def format_agent_table(agents: List[Dict[str, Any]]) -> str:
         lines.append(
             f"{a['agent_id']:<28} {a['status']:<10} {a['model']:<10} {cid:<38} {a['title']}"
         )
+    return "\n".join(lines)
+
+
+def format_project_list(projects: List[Dict[str, Any]]) -> str:
+    if not projects:
+        return "[ULTRON] No projects registered in ultron/core/projects/."
+    lines = [f"[ULTRON] Projects Catalog ({len(projects)}):"]
+    for p in projects:
+        indent = "  " * p["layer"]
+        target_note = f" path={p['effective_target_path']}" if p["effective_target_path"] else ""
+        parent_note = f" parent={p['parent_project']}" if p["parent_project"] else ""
+        rels_note = (
+            " links=[" + ", ".join(f"{r['relation']}:{r['target']}" for r in p["relationships"]) + "]"
+            if p["relationships"]
+            else ""
+        )
+        lines.append(
+            f"{indent}[L{p['layer']}] {p['slug']} ({p['name']}) [{p['status'].upper()}]"
+            f"{parent_note}{target_note}{rels_note}"
+        )
+    return "\n".join(lines)
+
+
+def format_project_info(p: Mapping[str, Any]) -> str:
+    lines = [f"[ULTRON] Project: {p['slug']} ({p['name']}) [{p['status'].upper()}]"]
+    if p.get("description"):
+        lines.append(f"  Description:     {p['description']}")
+    lines.append(f"  Parent Project:  {p.get('parent_project') or '(root)'}")
+    lines.append(f"  Lineage:         {' -> '.join(p.get('lineage', []))}")
+    lines.append(f"  Repo Path:       {p.get('repo_path') or '(inherited / none)'}")
+    lines.append(f"  Subpath:         {p.get('subpath') or '(root)'}")
+    lines.append(f"  Effective Path:  {p.get('effective_target_path') or '(none)'}")
+    if p.get("relationships"):
+        rels = ", ".join(
+            f"{r['relation']} -> {r['target']}" + (f" ({r['note']})" if r.get("note") else "")
+            for r in p["relationships"]
+        )
+        lines.append(f"  Relationships:   {rels}")
+    if p.get("subprojects"):
+        subs = ", ".join(f"{s['slug']} [{s['status']}]" for s in p["subprojects"])
+        lines.append(f"  Subprojects:     {subs}")
+    if p.get("teams"):
+        tms = ", ".join(f"{t['slug']} [{t['status']}/{t['lifespan']}]" for t in p["teams"])
+        lines.append(f"  Bound Teams:     {tms}")
     return "\n".join(lines)
 
 
@@ -3881,6 +4386,47 @@ def build_parser() -> argparse.ArgumentParser:
         help="Prune stale runtime session entries not present in ultron/hive/",
     )
     add_cmd("stats", "Show ULTRON Core & Hive statistics")
+
+    # Projects Catalog commands
+    p_cp = add_cmd("create-project", "Register a project or sub-project in ultron/core/projects/")
+    p_cp.add_argument("--slug", required=True, help="Unique project slug (kebab-case)")
+    p_cp.add_argument("--name", required=True, help="Human-readable project name")
+    p_cp.add_argument("--description", default="", help="Project scope/description")
+    p_cp.add_argument("--repo-path", default="", help="Repository root path (e.g. ~/Dev/game_dev_trial)")
+    p_cp.add_argument("--subpath", default="", help="Relative directory inside repo (e.g. the_bearntalist)")
+    p_cp.add_argument("--parent", default=None, help="Parent project slug (for nested sub-projects)")
+    p_cp.add_argument("--status", default="active", choices=sorted(VALID_PROJECT_STATUSES), help="Initial status")
+
+    p_up = add_cmd("update-project", "Update fields of an existing project")
+    p_up.add_argument("slug", help="Project slug")
+    p_up.add_argument("--name", default=None, help="New project name")
+    p_up.add_argument("--description", default=None, help="New project description")
+    p_up.add_argument("--repo-path", default=None, help="New repository path")
+    p_up.add_argument("--clear-repo-path", action="store_true", help="Clear repo_path (inherit from parent)")
+    p_up.add_argument("--subpath", default=None, help="New relative subpath")
+    p_up.add_argument("--clear-subpath", action="store_true", help="Clear subpath")
+    p_up.add_argument("--parent", default=None, help="New parent project slug")
+    p_up.add_argument("--clear-parent", action="store_true", help="Clear parent_project (promote to root)")
+    p_up.add_argument("--status", default=None, choices=sorted(VALID_PROJECT_STATUSES), help="New status")
+
+    p_lp = add_cmd("link-project", "Add or remove a typed relationship edge between projects")
+    p_lp.add_argument("source", help="Source project slug")
+    p_lp.add_argument("target", help="Target project slug")
+    p_lp.add_argument("--relation", default="depends_on", choices=sorted(VALID_PROJECT_RELATIONS), help="Relationship type")
+    p_lp.add_argument("--note", default="", help="Relationship context/note")
+    p_lp.add_argument("--unlink", action="store_true", help="Remove matching relationship edge")
+
+    p_pjs = add_cmd("projects", "List registered projects in ultron/core/projects/")
+    p_pjs.add_argument("--status", default=None, choices=sorted(VALID_PROJECT_STATUSES), help="Filter by status")
+    p_pjs.add_argument("--parent", default=None, help="Filter by parent project slug")
+    p_pjs.add_argument("--all", dest="show_all", action="store_true", help="Include archived projects")
+
+    p_pi = add_cmd("project-info", "Show full details of a project")
+    p_pi.add_argument("slug", help="Project slug")
+
+    p_rp = add_cmd("remove-project", "Remove a project from ultron/core/projects/")
+    p_rp.add_argument("slug", help="Project slug")
+    p_rp.add_argument("--cascade", action="store_true", help="Remove descendant sub-projects recursively")
 
     return parser
 
@@ -4502,12 +5048,94 @@ def main(argv: Optional[List[str]] = None) -> int:
                     f"  Teams:            {stats['active_teams']} active / {stats['total_teams']} total"
                 )
                 print(
+                    f"  Projects:         {stats['total_projects']}"
+                )
+                print(
                     f"  Agents / Roles:   {stats['active_agents']} active / {stats['total_agents']} total"
                 )
                 print(
                     f"  Threads:          {stats['total_threads']} (Visibilities: {stats['visibilities']})"
                 )
                 print(f"  Posts:            {stats['total_posts']}")
+
+        elif cmd == "create-project":
+            res = core.create_project(
+                slug=args.slug,
+                name=args.name,
+                description=args.description,
+                repo_path=args.repo_path,
+                subpath=args.subpath,
+                parent_project=args.parent,
+                status=args.status,
+            )
+            if args.json:
+                print(json.dumps(res, indent=2, sort_keys=True))
+            else:
+                path_note = f" path={res['effective_target_path']}" if res["effective_target_path"] else ""
+                print(f"[ULTRON] Created Project '{res['slug']}' ({res['name']}) [{res['status']}]{path_note}")
+
+        elif cmd == "update-project":
+            if args.repo_path is not None and args.clear_repo_path:
+                raise ValueError("Cannot pass both --repo-path and --clear-repo-path.")
+            if args.subpath is not None and args.clear_subpath:
+                raise ValueError("Cannot pass both --subpath and --clear-subpath.")
+            if args.parent is not None and args.clear_parent:
+                raise ValueError("Cannot pass both --parent and --clear-parent.")
+            res = core.update_project(
+                slug=args.slug,
+                name=args.name,
+                description=args.description,
+                repo_path="" if args.clear_repo_path else args.repo_path,
+                subpath="" if args.clear_subpath else args.subpath,
+                parent_project="" if args.clear_parent else args.parent,
+                status=args.status,
+            )
+            if args.json:
+                print(json.dumps(res, indent=2, sort_keys=True))
+            else:
+                print(f"[ULTRON] Updated Project '{res['slug']}' [{res['status']}] path={res['effective_target_path'] or '(none)'}")
+
+        elif cmd == "link-project":
+            res = core.link_projects(
+                source_slug=args.source,
+                target_slug=args.target,
+                relation=args.relation,
+                note=args.note,
+                unlink=args.unlink,
+            )
+            if args.json:
+                print(json.dumps(res, indent=2, sort_keys=True))
+            else:
+                verb = "Unlinked" if args.unlink else "Linked"
+                print(f"[ULTRON] {verb} '{args.source}' -[{args.relation}]-> '{args.target}'")
+
+        elif cmd == "projects":
+            res = core.list_projects(
+                status=args.status,
+                parent_project=args.parent,
+                include_archived=args.show_all,
+            )
+            if args.json:
+                print(json.dumps(res, indent=2, sort_keys=True))
+            else:
+                print(format_project_list(res))
+
+        elif cmd == "project-info":
+            res = core.get_project(args.slug)
+            if not res:
+                print(f"[ULTRON Error] Project '{args.slug}' not found.", file=sys.stderr)
+                return 1
+            if args.json:
+                print(json.dumps(res, indent=2, sort_keys=True))
+            else:
+                print(format_project_info(res))
+
+        elif cmd == "remove-project":
+            res = core.remove_project(slug=args.slug, cascade=args.cascade)
+            if args.json:
+                print(json.dumps(res, indent=2, sort_keys=True))
+            else:
+                print(f"[ULTRON] Removed project(s): {res['removed_projects']}")
 
         return 0
 
