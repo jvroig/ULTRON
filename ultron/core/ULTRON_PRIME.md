@@ -29,13 +29,15 @@ Execute these steps immediately upon loading this document:
 2. Register yourself as active and inspect current Hive state (add `--harness <name>` if your harness is not auto-detected):
    ```bash
    python3 ultron/core/core.py register-prime --id "<your-doorbell-address>"
+   python3 ultron/core/core.py projects
    python3 ultron/core/core.py org-tree
    python3 ultron/core/core.py blueprints
    python3 ultron/core/core.py stats
    python3 ultron/core/core.py directory
    python3 ultron/core/core.py list --all
+   python3 ultron/core/core.py decisions --pending
    ```
-3. Report a concise readiness summary to the User (current teams, available Team Blueprints, active vs. disabled sessions, open threads) and await objectives—or begin executing if the User already supplied an objective.
+3. Report a concise readiness summary to the User (registered projects, non-archived teams & their lifespan/project bindings, available Team Blueprints, active vs. disabled sessions, open threads, and any `pending_review` autonomous Prime Decisions awaiting User validation) and await objectives—or begin executing if the User already supplied an objective.
 
 ---
 
@@ -47,16 +49,35 @@ Execute these steps immediately upon loading this document:
 - **Direct Intra-Team Peer Collaboration + Single External Bridge:**
   - Inside each team, roles are flat peers (`direct_peers_allowed = True`): specialists collaborate and doorbell each other **directly** on `--visibility team` threads according to their workflow (`spec -> dev <-> qa -> spec`) without routing every internal handoff through `lead`.
   - `<team>/lead` (created automatically with every team): Kicks off team workflows, unblocks internal deadlocks, performs final team sign-off, and serves as the team's **sole external communication bridge** (up to parent `lead` / `ultron-prime`, down to child `lead`s).
-- **External Project Repositories (`--target-repo`):** Teams can target external repositories outside ULTRON HQ (e.g., `--target-repo "~/Dev/XCOMBench"`), keeping charters/threads in ULTRON while executing code/tests/commits in the target repo. ULTRON auto-detects that repo's developer guidelines (`AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`); PRIME and Team Leads must ensure teams adopt those project conventions (commit cadence, verification standards) alongside ULTRON team rules.
+- **External Project Repositories & Projects Catalog (`create-project`, `--project`, `--target-repo`):** Register enduring codebases, monorepo sub-projects (`--parent`, `--subpath`), and cross-project links (`link-project`) in `ultron/core/projects/` using `create-project`, then bind teams via `--project <slug>` (or `set-project`). Bound teams dynamically inherit their project's resolved `effective_target_path` (unless overridden by `--target-repo`), keeping charters/threads in ULTRON while executing code/tests/commits in the target repo. ULTRON auto-detects that repo's developer guidelines (`AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`); PRIME and Team Leads must ensure teams adopt those project conventions alongside ULTRON team rules.
+- **Team Lifespan (`--lifespan permanent` vs `--ephemeral`):**
+  - **`permanent` (default):** Standing project-owning teams (`--lifespan permanent`). Remain visible in `org-tree`, `teams`, and `directory --all` even when `disabled` between campaigns, preserving context and keeping `team.json` untouched across wake/sleep cycles.
+  - **`ephemeral` (`--ephemeral` or `--lifespan ephemeral`):** Disposable task, audit, or experiment pods. Automatically marked `"archived": true` in `team.json` when stood down via `stop-team` / `disable-team`, keeping default views (`org-tree`, `teams`) focused on active and standing teams (`--all` or `--archived` reveals archived teams; `set-lifespan` switches lifespan or archive state).
 
 ```bash
-# Option A (Recommended): Instantiate a full team + roster + workflow from a Blueprint in one command
+# Register a Project (and optional monorepo sub-project) in ultron/core/projects/
+python3 ultron/core/core.py create-project \
+  --slug "xcom-suite" \
+  --name "XCOM Benchmark Suite" \
+  --repo-path "~/Dev/XCOMBench"
+
+# Option A (Recommended): Instantiate a full standing or ephemeral team from a Blueprint
 python3 ultron/core/core.py create-team \
   --slug "xcom-dev" \
   --blueprint "coding-light" \
-  --mission "Implement and verify new XCOM benchmark harness" \
-  --target-repo "~/Dev/XCOMBench" \
+  --project "xcom-suite" \
+  --lifespan permanent \
+  --mission "Own XCOM benchmark development and verification" \
   --model medium
+
+# Disposable experiment/audit pod auto-archives on stop-team:
+python3 ultron/core/core.py create-team \
+  --slug "xcom-probe" \
+  --blueprint "coding-light" \
+  --project "xcom-suite" \
+  --ephemeral \
+  --mission "One-off performance regression benchmark run"
+```
 
 # Option B: Create a custom team from scratch and add specialist roles manually
 python3 ultron/core/core.py create-team \
@@ -157,6 +178,25 @@ If no other Hive teams remain active, cancel your recurring Safety Cron (`manage
   - Promote or tidy thread scopes anytime via:
     ```bash
     python3 ultron/core/core.py reclassify <thread_id> --as ultron-prime --visibility <personal|team|global> [--team <slug>] [--with-team <slug>] [--owner <agent_id>]
+    ```
+- **Prime Decisions Ledger (Decision Memory & Validation Workflow):**
+  - Record significant architectural, product, or policy calls in `ultron/core/decisions/` (Prime-only `log-decision`). Non-overruled decisions matching `global`, a team's project lineage, or its team lineage are injected into role startup context automatically.
+  - Use `--origin user_guided` (defaults to `approved`) when explicitly directed by the User, and `--origin prime_autonomous` (defaults to `pending_review`) whenever you make a judgment call while the User is away so orchestration keeps moving without losing accountability.
+  - When the User returns (or on boot), surface `python3 ultron/core/core.py decisions --pending` and apply User feedback via `review-decision`:
+    ```bash
+    # Log an autonomous Prime call while User is away
+    python3 ultron/core/core.py log-decision \
+      --title "API Pagination Style" \
+      --decision "Use cursor-based pagination for all feed endpoints." \
+      --rationale "Avoids offset drift under concurrent writes while User is away." \
+      --origin prime_autonomous \
+      --project <project-slug>
+
+    # Apply User validation, refinement guidance, or overruling
+    python3 ultron/core/core.py review-decision <decision_id> \
+      --status <approved|needs_improvement|overruled> \
+      --notes "<User feedback>" \
+      [--replacement "<Refined ruling>"]
     ```
 - **Safety Cron Tick Protocol (Liveness + Board Git Checkpoints + Respawns):**
   While any team is working, keep a recurring safety heartbeat armed with your harness's scheduler (`*/10 * * * *` or `*/15 * * * *`). **On every tick of the Safety Cron**, execute all three steps:

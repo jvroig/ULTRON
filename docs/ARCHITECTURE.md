@@ -21,7 +21,7 @@ Autonomous agent systems operating in complex software engineering repositories 
 **ULTRON** solves these challenges through an opinionated, pure Git-native architecture:
 - **Centralized Orchestration Authority:** Single User point-of-contact and lifecycle provisioning authority vested exclusively in **ULTRON PRIME** (*Ultimate Leader of Teams, Roles, and Operational Nodes*).
 - **Arbitrary N-Layer Hive:** A hierarchical organization tree (`ultron/hive/`) where teams are the fundamental unit of work, structured into flat peer roles governed by a dedicated Team Lead.
-- **Log-Structured Git-Native Storage:** Zero SQLite. Git-tracked JSON manifests (`team.json`, `role.json`), gitignored ephemeral session bindings (`.runtime/sessions.json`), and append-only JSONL thread event logs (`ultron/core/threads/*.jsonl`) configured with `*.jsonl merge=union` for conflict-free cross-branch merges.
+- **Log-Structured Git-Native Storage:** Zero SQLite. Git-tracked JSON manifests (`team.json`, `role.json`, optional lazy Projects Catalog entries in `ultron/core/projects/*.json`), gitignored ephemeral session bindings (`.runtime/sessions.json`), and append-only JSONL logs for message threads (`ultron/core/threads/*.jsonl`) and the Prime Decisions Ledger (`ultron/core/decisions/*.jsonl`) configured with `*.jsonl merge=union` for conflict-free cross-branch merges. See [`PROJECTS_TEAMS_DECISIONS_SPEC.md`](PROJECTS_TEAMS_DECISIONS_SPEC.md) for the full schema and precedence contract.
 - **Strict Three-Tier Visibility:** Scoped visibility (`personal`, `team` / `--with-team`, `global`) enforced with mandatory caller identification (`--as <agent_id>`).
 - **Reactive Doorbell Protocol:** Event-driven waking (`whois --id-only`, then the harness's messaging tool) completely eliminating polling loops.
 - **Harness-Agnostic Core:** Registry, board, lifecycle state and role context are harness-neutral. Each harness (Claude Code, Antigravity) plugs in as an adapter, and one hive can mix them.
@@ -158,6 +158,9 @@ Tracks the persistent organizational metadata for a team.
 - `parent_team` *(string | null, required)*: Slug of parent team, or `null` if attached to `ultron-prime`.
 - `default_model` *(string, required)*: Default model tier (`small`, `medium`, `large`, `inherit`).
 - `harness` *(string, optional)*: Harness the team runs on (`claude-code`, `antigravity`). Absent ⇒ Prime's harness. Set by `create-team --harness` or `set-harness` (team must be stopped).
+- `lifespan` *(string, optional, default `"permanent"`)*: `"permanent"` for standing project-owning teams (retained in `org-tree`, `teams`, and `directory --all` while `disabled`), or `"ephemeral"` for disposable task pods auto-archived on stand-down. Manageable via `set-lifespan`.
+- `archived` *(boolean, optional, default `false`)*: Automatically set to `true` by `disable-team` when `lifespan == "ephemeral"` (and cleared upon `activate-team` / `activate-agent`). Archived teams are hidden from default `org-tree`, `teams`, and `directory` views unless `--all` or `--archived` is passed; non-archived children of archived parents are promoted cleanly in `format_org_tree`.
+- `project` *(string, optional)*: Slug referencing an entry in `ultron/core/projects/` (manageable via `set-project`). Child teams inherit their parent's `project` unless overridden. Target repo precedence resolves in order: explicit `team.json["target_repo"]` -> explicit/inherited `project["effective_target_path"]` -> parent team resolved `target_repo`.
 - `workspace_mode` *(string, required)*: Session workspace isolation (`inherit`, `share`, `branch`). `branch` is not supported on Claude Code yet.
 - `hive_path` *(string, required)*: Relative POSIX directory path from repo root.
 - `created_at` *(string, ISO-8601 UTC)*: Immutable timestamp of team creation.
@@ -234,13 +237,13 @@ Located at: `ultron/core/.runtime/sessions.json`
 
 #### Generated Role Files (Claude Code)
 `spawn-team` writes two gitignored files into each Claude Code role folder:
-- `role_context.generated.md`: identity, routing, CLI path and startup hydration, rendered from `ultron/core/templates/role_context.md.tmpl`. The role's `AGENTS.md` imports it.
+- `role_context.generated.md`: identity, routing, CLI path, optional Project + Prime Decisions context block (`{{PROJECT_DECISIONS_BLOCK}}`), and startup hydration, rendered from `ultron/core/templates/role_context.md.tmpl`. The role's `AGENTS.md` imports it.
 - `.claude/settings.json`: `worktree.bgIsolation: none` (roles edit the shared checkout), deny rules on `Agent` and `claude` (§2.3), and `env` setting the role's `ULTRON_AGENT_ID` and `ULTRON_HARNESS`.
 
 #### Clean Git Tree Separation:
 Because live harness session addresses change whenever an agent session is terminated and respawned, storing session bindings in `team.json` or `role.json` would cause continuous, noisy diffs in `git status`. By isolating session bindings inside gitignored `.runtime/sessions.json`:
-- `activate-team`, `activate-agent`, `disable-team`, and `prepare-disable` mutate only `.runtime/sessions.json`.
-- Running `git status --porcelain` remains 100% clean across all team wake/sleep cycles.
+- `activate-team`, `activate-agent`, `disable-team` (on `permanent` teams), and `prepare-disable` mutate only `.runtime/sessions.json`.
+- For `ephemeral` teams, `disable-team` marks `"archived": true` in `team.json` once on stand-down (and `activate-*` clears it only when returning an archived team to service). Standing `permanent` teams keep `git status --porcelain` 100% clean across all wake/sleep cycles.
 
 ---
 
@@ -373,6 +376,18 @@ The Git union merge driver automatically combines lines from both branches on me
 3. The folding engine sorts follow-ups strictly by `(created_at, event_id)`.
 
 Two developers or agents working on separate Git branches can concurrently reply to the exact same thread and change its status. When their branches merge via `git merge`, the resulting JSONL file replays into the exact same deterministic materialized state on all machines.
+
+### 3.7 Projects Catalog (`ultron/core/projects/*.json`)
+Lazily initialized only when a Project is created (`create-project`, `update-project`, `link-project`, `projects`, `project-info`, `remove-project`), storing persistent codebase metadata independently of team lifetimes:
+- **Multi-Level Sub-Projects (`parent_project`):** Arbitrary-depth project hierarchies with pre-write cycle/missing-parent validation and archival hierarchy guards (`archived` parents cannot hold or admit non-archived sub-projects).
+- **Cumulative Path Composition:** Walking `[root, ..., slug]` computes `effective_target_path` by carrying the latest `repo_path` (resetting prior `subpath` segments on override) and joining normalized POSIX `subpath` segments cleanly for external monorepos and nested apps.
+- **Typed Inter-Project Relationships:** Upserts and prunes `depends_on`, `related_to`, `shares_assets_with`, and `part_of` edges across projects. `verify()` validates project schemas, hierarchy, and bound team references.
+
+### 3.8 Prime Decisions Ledger (`ultron/core/decisions/*.jsonl`)
+Lazily initialized append-only governance ledger (`ultron/core/decisions/d-YYYYMMDD-xxxxxxxx.jsonl` + `*.jsonl merge=union` `.gitattributes`) tracking both explicit User directives and autonomous ULTRON PRIME decisions made while the User is away:
+- **Origins & Review Lifecycle:** `log-decision` (Prime-only) records `origin` (`user_guided` defaulting to `approved`, or `prime_autonomous` defaulting to `pending_review`) and `scope` (`global`, `project`, or `team`), storing `project_slug` and `team_slug` as soft references so historical decisions survive project/team removal.
+- **Chronological Review Folding (`review-decision`):** Subsequent `type: "review"` events transition `review_status` (`approved`, `pending_review`, `needs_improvement`, `overruled`) and optionally record `replacement_decision` (folded in `(created_at, event_id)` order while keeping `original_decision` immutable).
+- **Role Context Hydration (`render_spawn`):** Non-overruled decisions matching `global`, the team's project lineage, or the team's ancestor lineage—along with bound Project details and `needs_improvement` guidance—are injected into `role_context.md.tmpl` via `{{PROJECT_DECISIONS_BLOCK}}` immediately before charters.
 
 ---
 

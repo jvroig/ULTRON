@@ -33,7 +33,7 @@ Furthermore, workspace sessions maintain a **neutral engineering baseline**:
 To prevent runaway agent proliferation and cascading costs, provisioning authority is strictly centralized:
 - **Centralized Spawning**: Only ULTRON PRIME creates teams, adds roles, and spawns or stops sessions (`spawn-team`, `stop-team`). Spawned Team Leads and Specialists never spawn agents; each harness enforces this, and `core.py` refuses lifecycle commands from a role's shell.
 - **Token Efficiency & Model Tiering**: Roles take a neutral tier (`small`, `medium`, `large`, or `inherit`) that each harness maps to its own models. Roles default to `medium`; heavier tiers are reserved for ULTRON PRIME or explicit User-authorized deep dives.
-- **Dynamic Lifecycle Conservation**: Teams are not kept running indefinitely. When a team finishes its assigned milestone, ULTRON PRIME stands it down (`stop-team`). Charters, code, and persistent memory remain intact on disk, ready to be reactivated on demand in milliseconds.
+- **Dynamic Lifecycle Conservation (`permanent` vs. `ephemeral`):** Teams are not kept running indefinitely. When a team finishes its assigned milestone, ULTRON PRIME stands it down (`stop-team`). Standing `permanent` teams keep their project binding, charters, and context visible across wake/sleep cycles with zero Git churn, while `--ephemeral` task pods auto-archive on stand-down to keep default org views clutter-free.
 
 ### 3. Arbitrary `N`-Layer Hive Tree (`ultron/hive/`) & Flat Intra-Team Roles
 ULTRON rejects rigid two-tier architectures in favor of an arbitrary-depth organization tree (`Layer 1..N`):
@@ -48,6 +48,7 @@ ULTRON rejects rigid two-tier architectures in favor of an arbitrary-depth organ
 ULTRON stores all organizational definitions, role configurations, and coordination history directly in the Git working tree with zero third-party database dependencies:
 - **Persistent Git-Tracked Manifests**: Each team owns a [`team.json`](ultron/hive/) manifest; each role owns a [`role.json`](ultron/hive/) manifest. Paths are stored strictly as relative POSIX paths, ensuring the repository can be moved, cloned, or renamed across filesystems without broken references.
 - **Clean Working Trees via Ephemeral Separation**: Live session bindings (each role's doorbell address and session ID) are stored in gitignored [`ultron/core/.runtime/sessions.json`](ultron/core/.gitignore). Spawning, waking, or standing down teams creates zero dirty `git status` modifications.
+- **Persistent Projects Catalog & Prime Decisions Ledger:** Codebases, monorepo sub-projects, and typed inter-project links live in [`ultron/core/projects/`](ultron/core/) (bound to teams via `--project`). Both User-guided directives and autonomous Prime rulings while the User is away are logged as append-only JSONL files in `ultron/core/decisions/d-YYYYMMDD-xxxxxxxx.jsonl` (also configured with `*.jsonl merge=union`), enabling structured User validation (`review-decision`) and automatic startup context injection into spawned agents.
 - **Conflict-Free Branch Merges (`*.jsonl merge=union`)**: All communication threads live in [`ultron/core/threads/t-YYYYMMDD-xxxxxxxx.jsonl`](ultron/core/threads/). Every message, status change, or reclassification is an append-only JSON event. Configured with `*.jsonl merge=union` in [`ultron/core/threads/.gitattributes`](ultron/core/threads/.gitattributes), multiple developers or agents working on separate Git branches can append posts concurrently; running `git merge` succeeds with zero merge conflicts, deterministically folding events by `(created_at, event_id)`.
 
 ### 5. Three-Tier Visibility Scoping & Reactive Doorbell Protocol
@@ -93,6 +94,9 @@ ULTRON/
     │   └── threads/                   # Git-tracked append-only JSONL message board
     │       ├── .gitattributes         # Enforces `*.jsonl merge=union` for zero-conflict merges
     │       └── t-YYYYMMDD-xxxxxxxx.jsonl
+    │   # (Lazily created on first project / decision write:)
+    │   # ├── projects/<project-slug>.json      # Projects catalog, hierarchy & relationships
+    │   # └── decisions/d-YYYYMMDD-xxxxxxxx.jsonl # Append-only Prime Decisions ledger (merge=union)
     └── hive/                          # Arbitrary N-layer organization tree
         └── <team-slug>/               # Layer-1 team directory
             ├── team.json              # Git-tracked team manifest
@@ -133,7 +137,9 @@ load ultron/core/ULTRON_PRIME.md
 Upon loading, ULTRON PRIME registers its doorbell address, inspects the current Hive hierarchy, and reports status:
 ```bash
 python3 ultron/core/core.py register-prime --id "<your-doorbell-address>"
+python3 ultron/core/core.py projects
 python3 ultron/core/core.py org-tree
+python3 ultron/core/core.py decisions --pending
 python3 ultron/core/core.py stats
 ```
 
@@ -243,6 +249,7 @@ python3 -W error -m unittest discover -s tests -v
 | Document | Description |
 | :--- | :--- |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | **Architecture Specification (v2):** Trust model, data schemas, locking, deterministic event folding, lifecycle, visibility, doorbells, and the harness layer (adapters, mixed hives). |
+| [`docs/PROJECTS_TEAMS_DECISIONS_SPEC.md`](docs/PROJECTS_TEAMS_DECISIONS_SPEC.md) | **Projects, Team Lifespan & Prime Decisions Spec:** Schemas, cumulative monorepo path composition, `permanent` vs. `ephemeral` archival, decision review lifecycle, and role context hydration. |
 | [`docs/HARNESSES.md`](docs/HARNESSES.md) | **Harness Reference:** Each action mapped to Claude Code and Antigravity tools, and each harness's requirements. |
 | [`ultron/core/README.md`](ultron/core/README.md) | **CLI & Storage Reference:** Command-line syntax, flag definitions, and schema details for `ultron/core/core.py`. |
 | [`ultron/core/ULTRON_PRIME.md`](ultron/core/ULTRON_PRIME.md) | **Operational Manual for ULTRON PRIME:** Boot persona, hierarchy management, lifecycle workflows, and safety crons. |
