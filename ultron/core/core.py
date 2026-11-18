@@ -74,8 +74,9 @@ CLAUDE_DOORBELL_MODEL = "haiku"
 ROLE_ID_ENV = "ULTRON_AGENT_ID"
 PRIME_ONLY_COMMANDS = frozenset({
     "activate-agent", "activate-team", "add-role", "create-project", "create-team", "disable-agent",
-    "disable-team", "link-project", "register-prime", "remove-project", "remove-team", "set-campaign",
-    "set-harness", "set-lifespan", "set-project", "set-target-repo", "spawn-team", "stop-team", "update-project",
+    "disable-team", "link-project", "log-decision", "register-prime", "remove-project", "remove-team",
+    "review-decision", "set-campaign", "set-harness", "set-lifespan", "set-project", "set-target-repo",
+    "spawn-team", "stop-team", "update-project",
 })
 SUPPRESSING_MEMORY_FILES = ("CLAUDE.md", "CLAUDE.local.md")
 ROLE_CLAUDE_SETTINGS = {
@@ -88,6 +89,9 @@ DEFAULT_TEAM_LIFESPAN = "permanent"
 VALID_AGENT_STATUSES = {"active", "disabled"}
 VALID_PROJECT_STATUSES = {"active", "paused", "archived"}
 VALID_PROJECT_RELATIONS = {"depends_on", "related_to", "shares_assets_with", "part_of"}
+VALID_DECISION_ORIGINS = {"user_guided", "prime_autonomous"}
+VALID_DECISION_REVIEW_STATUSES = {"approved", "pending_review", "needs_improvement", "overruled"}
+VALID_DECISION_SCOPES = {"global", "project", "team"}
 VALID_VISIBILITIES = {"personal", "team", "global"}
 VALID_THREAD_STATUSES = {"open", "in_progress", "resolved", "blocked", "closed"}
 
@@ -111,6 +115,11 @@ def generate_post_id() -> str:
 
 def generate_event_id() -> str:
     return f"e-{os.urandom(6).hex()}"
+
+
+def generate_decision_id() -> str:
+    day = datetime.now(timezone.utc).strftime("%Y%m%d")
+    return f"d-{day}-{os.urandom(4).hex()}"
 
 
 def render_template(template_text: str, values: Mapping[str, Any]) -> str:
@@ -337,6 +346,7 @@ class HarnessAdapter:
                 "DOORBELL_CALL": self.doorbell_call(),
                 "TOOL_DOORBELL": self.tools["doorbell"],
                 "CRON_TOOL": self.cron_tool,
+                "PROJECT_DECISIONS_BLOCK": ctx.get("project_decisions_block", ""),
                 "CHARTERS_BLOCK": self.charters_block(ctx),
             },
         )
@@ -821,6 +831,7 @@ class UltronCore:
         runtime_dir: Optional[Path | str] = None,
         templates_dir: Optional[Path | str] = None,
         projects_dir: Optional[Path | str] = None,
+        decisions_dir: Optional[Path | str] = None,
     ) -> None:
         env_root = os.environ.get("ULTRON_REPO_ROOT")
         self.repo_root = Path(repo_root or env_root or DEFAULT_REPO_ROOT).resolve()
@@ -841,6 +852,9 @@ class UltronCore:
         self.templates_dir = Path(templates_dir or TEMPLATES_DIR).resolve()
         self.projects_dir = Path(
             projects_dir or os.environ.get("ULTRON_PROJECTS_DIR") or (default_core / "projects")
+        ).resolve()
+        self.decisions_dir = Path(
+            decisions_dir or os.environ.get("ULTRON_DECISIONS_DIR") or (default_core / "decisions")
         ).resolve()
         self.blueprints_dir = Path(
             os.environ.get("ULTRON_BLUEPRINTS_DIR") or (default_core / "blueprints")
@@ -2574,6 +2588,24 @@ class UltronCore:
             inherited_charters = (
                 "\n\n".join(charter_blocks) if charter_blocks else "(No team charters found)"
             )
+            projects_by_slug = self._scan_projects_unlocked(teams_by_slug)
+            bound_proj = projects_by_slug.get(team.get("project") or "")
+            proj_lineage = set(bound_proj["lineage"]) if bound_proj else set()
+            team_lineage_set = set(lineage_slugs)
+            all_decisions = self._load_all_decisions_unlocked()
+            relevant_decisions = [
+                d
+                for d in all_decisions
+                if d["review_status"] != "overruled"
+                and (
+                    d["scope"] == "global"
+                    or (d["scope"] == "project" and d["project_slug"] in proj_lineage)
+                    or (d["scope"] == "team" and d["team_slug"] in team_lineage_set)
+                )
+            ]
+            project_decisions_block = self._format_spawn_context_block(
+                bound_proj, relevant_decisions
+            )
 
         specs: List[Dict[str, Any]] = []
 
@@ -2619,6 +2651,7 @@ class UltronCore:
                         "role_workspace_rel": role_ws_rel,
                         "role_charter": role_charter,
                         "inherited_charters": inherited_charters,
+                        "project_decisions_block": project_decisions_block,
                         "routing_summary": routing_summary,
                         "read_only": not bool(r["write_tools"]),
                         "target_repo": r.get("target_repo") or "",
@@ -3814,6 +3847,396 @@ class UltronCore:
             append_jsonl_event(fpath, reclass_event)
             return self._fold_thread_jsonl(fpath)
 
+    # ------------------------------------------------------------------
+    # Append-Only Prime Decisions Ledger (ultron/core/decisions/)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _format_spawn_context_block(
+        bound_project: Optional[Mapping[str, Any]],
+        decisions: List[Dict[str, Any]],
+    ) -> str:
+        if not bound_project and not decisions:
+            return ""
+        lines: List[str] = ["\n---\n\n## Project & Prime Decisions Context"]
+        if bound_project:
+            lines.append(
+                f"- **Assigned Project:** `{bound_project['slug']}` ({bound_project['name']})"
+                + (
+                    f" — `{bound_project['effective_target_path']}`"
+                    if bound_project.get("effective_target_path")
+                    else ""
+                )
+            )
+            if bound_project.get("parent_project"):
+                lines.append(
+                    f"- **Project Lineage:** `{' -> '.join(bound_project.get('lineage', []))}`"
+                )
+            if bound_project.get("relationships"):
+                rels = ", ".join(
+                    f"{r['relation']}:{r['target']}" for r in bound_project["relationships"]
+                )
+                lines.append(f"- **Project Relationships:** {rels}")
+        if decisions:
+            lines.append("- **Active Prime Decisions (User-Guided & Autonomous Rulings):**")
+            for d in decisions:
+                scope_label = d["scope"]
+                if d["scope"] == "project" and d.get("project_slug"):
+                    scope_label = f"project:{d['project_slug']}"
+                elif d["scope"] == "team" and d.get("team_slug"):
+                    scope_label = f"team:{d['team_slug']}"
+                lines.append(
+                    f"  - `[{d['id']}]` **{d['title']}** ({scope_label} | {d['origin']} | `{d['review_status']}`): {d['decision']}"
+                )
+                if d.get("latest_review_notes") and d["review_status"] == "needs_improvement":
+                    lines.append(f"    - *Review Note:* {d['latest_review_notes']}")
+        return "\n".join(lines)
+
+    def _ensure_decisions_dir_unlocked(self) -> None:
+        self.decisions_dir.mkdir(parents=True, exist_ok=True)
+        gitattr = self.decisions_dir / ".gitattributes"
+        if not gitattr.exists():
+            gitattr.write_text(
+                "# Union-merge append-only JSONL Prime decision logs across Git branches without conflict\n"
+                "*.jsonl merge=union\n",
+                encoding="utf-8",
+            )
+
+    def _resolve_decision_path_unlocked(self, decision_ref: str) -> Optional[Path]:
+        raw = str(decision_ref).strip()
+        if raw.startswith("#"):
+            raw = raw[1:].strip()
+        if not raw or not self.decisions_dir.is_dir():
+            return None
+        clean = raw.lower()
+
+        exact = self.decisions_dir / f"{clean}.jsonl"
+        if exact.is_file():
+            return exact
+
+        matches: List[Path] = []
+        for fpath in sorted(self.decisions_dir.glob("*.jsonl")):
+            stem = fpath.stem.lower()
+            short_hex = stem.rsplit("-", 1)[-1]
+            if (
+                stem.startswith(clean)
+                or stem.endswith(clean)
+                or short_hex.startswith(clean)
+            ):
+                matches.append(fpath)
+
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise ValueError(
+                f"Ambiguous decision reference '{decision_ref}': matches {[m.stem for m in matches]}."
+            )
+        return None
+
+    @staticmethod
+    def _fold_decision_jsonl(fpath: Path) -> Dict[str, Any]:
+        """Fold append-only JSONL decision & review events deterministically."""
+        raw_lines = fpath.read_text(encoding="utf-8").splitlines()
+        events: List[Dict[str, Any]] = []
+        seen_event_ids: Set[str] = set()
+
+        for line_no, raw_line in enumerate(raw_lines, start=1):
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            try:
+                ev = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"Corrupt JSONL in '{fpath.name}' at line {line_no}: {exc}"
+                ) from exc
+            if not isinstance(ev, dict):
+                raise ValueError(
+                    f"Expected JSON object in '{fpath.name}' at line {line_no}."
+                )
+            ev_id = str(ev.get("event_id") or f"line-{line_no}")
+            if ev_id in seen_event_ids:
+                continue
+            seen_event_ids.add(ev_id)
+            events.append(ev)
+
+        root_events = [e for e in events if e.get("type") == "decision"]
+        if len(root_events) != 1:
+            raise ValueError(
+                f"Invalid decision file '{fpath.name}': expected exactly 1 root 'decision' event, found {len(root_events)}."
+            )
+        root = root_events[0]
+        did = str(root.get("decision_id") or fpath.stem)
+        created_at = str(root["created_at"])
+
+        origin = str(root.get("origin", "prime_autonomous")).strip().lower()
+        if origin not in VALID_DECISION_ORIGINS:
+            raise ValueError(f"Invalid decision origin '{origin}' in '{fpath.name}'.")
+        init_status = str(root.get("review_status", "pending_review")).strip().lower()
+        if init_status not in VALID_DECISION_REVIEW_STATUSES:
+            raise ValueError(f"Invalid review_status '{init_status}' in '{fpath.name}'.")
+        scope = str(root.get("scope", "global")).strip().lower()
+        if scope not in VALID_DECISION_SCOPES:
+            raise ValueError(f"Invalid scope '{scope}' in '{fpath.name}'.")
+
+        follow_ups = [e for e in events if e.get("type") != "decision"]
+        follow_ups.sort(
+            key=lambda e: (str(e.get("created_at") or ""), str(e.get("event_id") or ""))
+        )
+
+        original_decision = str(root.get("decision") or "")
+        current_decision = original_decision
+        current_status = init_status
+        updated_at = created_at
+        reviews: List[Dict[str, Any]] = []
+
+        for ev in follow_ups:
+            ev_type = ev.get("type")
+            if ev_type != "review":
+                raise ValueError(f"Unknown event type '{ev_type}' in '{fpath.name}'.")
+            rev_status = str(ev.get("review_status", "")).strip().lower()
+            if rev_status not in VALID_DECISION_REVIEW_STATUSES:
+                raise ValueError(
+                    f"Invalid review_status '{rev_status}' in '{fpath.name}'."
+                )
+            current_status = rev_status
+            rep = str(ev.get("replacement_decision") or "").strip()
+            if rep:
+                current_decision = rep
+            ev_ts = str(ev.get("created_at") or "")
+            if ev_ts and ev_ts > updated_at:
+                updated_at = ev_ts
+            reviews.append(
+                {
+                    "created_at": ev_ts,
+                    "event_id": str(ev.get("event_id") or ""),
+                    "notes": str(ev.get("notes") or ""),
+                    "replacement_decision": rep,
+                    "review_status": rev_status,
+                    "reviewer": str(ev.get("reviewer") or "user"),
+                }
+            )
+
+        return {
+            "created_at": created_at,
+            "decided_by": str(root.get("decided_by") or PRIME_ID).lower(),
+            "decision": current_decision,
+            "decision_id": did,
+            "id": did,
+            "latest_review_notes": reviews[-1]["notes"] if reviews else "",
+            "origin": origin,
+            "original_decision": original_decision,
+            "project_slug": str(root.get("project_slug") or ""),
+            "rationale": str(root.get("rationale") or ""),
+            "review_count": len(reviews),
+            "review_status": current_status,
+            "reviews": reviews,
+            "scope": scope,
+            "tags": str(root.get("tags") or ""),
+            "team_slug": str(root.get("team_slug") or ""),
+            "title": str(root.get("title") or ""),
+            "updated_at": updated_at,
+        }
+
+    def _load_all_decisions_unlocked(self) -> List[Dict[str, Any]]:
+        if not self.decisions_dir.is_dir():
+            return []
+        decisions = [
+            self._fold_decision_jsonl(fpath)
+            for fpath in sorted(self.decisions_dir.glob("*.jsonl"))
+        ]
+        decisions.sort(
+            key=lambda d: (d["updated_at"], d["created_at"], d["id"]), reverse=True
+        )
+        return decisions
+
+    def log_decision(
+        self,
+        title: str,
+        decision: str,
+        rationale: str = "",
+        origin: str = "prime_autonomous",
+        scope: Optional[str] = None,
+        project_slug: Optional[str] = None,
+        team_slug: Optional[str] = None,
+        review_status: Optional[str] = None,
+        decided_by: str = PRIME_ID,
+        tags: str = "",
+    ) -> Dict[str, Any]:
+        clean_title = title.strip()
+        clean_decision = decision.strip()
+        if not clean_title:
+            raise ValueError("Decision title cannot be empty.")
+        if not clean_decision:
+            raise ValueError("Decision text cannot be empty.")
+
+        clean_origin = (origin or "prime_autonomous").strip().lower()
+        if clean_origin not in VALID_DECISION_ORIGINS:
+            raise ValueError(
+                f"Invalid origin '{origin}'. Must be one of {sorted(VALID_DECISION_ORIGINS)}."
+            )
+        clean_actor = normalize_agent_id(decided_by or PRIME_ID)
+        clean_proj = (
+            validate_slug(project_slug, "project slug")
+            if (project_slug or "").strip()
+            else ""
+        )
+        clean_team = (
+            validate_slug(team_slug, "team slug")
+            if (team_slug or "").strip()
+            else ""
+        )
+
+        clean_scope = (scope or "").strip().lower()
+        if not clean_scope:
+            clean_scope = "team" if clean_team else ("project" if clean_proj else "global")
+        if clean_scope not in VALID_DECISION_SCOPES:
+            raise ValueError(
+                f"Invalid scope '{scope}'. Must be one of {sorted(VALID_DECISION_SCOPES)}."
+            )
+
+        if review_status:
+            clean_status = review_status.strip().lower()
+        else:
+            clean_status = "approved" if clean_origin == "user_guided" else "pending_review"
+        if clean_status not in VALID_DECISION_REVIEW_STATUSES:
+            raise ValueError(
+                f"Invalid review_status '{review_status}'. Must be one of {sorted(VALID_DECISION_REVIEW_STATUSES)}."
+            )
+
+        iso = now_iso()
+        did = generate_decision_id()
+        with self._lock(exclusive=True):
+            teams_by_slug, _, _ = self._scan_state_unlocked()
+            projects_by_slug = self._scan_projects_unlocked(teams_by_slug)
+
+            if clean_scope == "global":
+                if clean_proj or clean_team:
+                    raise ValueError(
+                        "Global decisions cannot specify --project or --team."
+                    )
+            elif clean_scope == "project":
+                if not clean_proj:
+                    raise ValueError("Project-scoped decisions require --project <slug>.")
+                if clean_team:
+                    raise ValueError("Project-scoped decisions cannot specify --team.")
+                if clean_proj not in projects_by_slug:
+                    raise ValueError(f"Project '{clean_proj}' does not exist.")
+            elif clean_scope == "team":
+                if not clean_team:
+                    raise ValueError("Team-scoped decisions require --team <slug>.")
+                if clean_team not in teams_by_slug:
+                    raise ValueError(f"Team '{clean_team}' does not exist.")
+                if not clean_proj and teams_by_slug[clean_team].get("project"):
+                    clean_proj = teams_by_slug[clean_team]["project"]
+                elif clean_proj and clean_proj not in projects_by_slug:
+                    raise ValueError(f"Project '{clean_proj}' does not exist.")
+
+            self._ensure_decisions_dir_unlocked()
+            fpath = self.decisions_dir / f"{did}.jsonl"
+            root_event = {
+                "created_at": iso,
+                "decided_by": clean_actor,
+                "decision": clean_decision,
+                "decision_id": did,
+                "event_id": generate_event_id(),
+                "origin": clean_origin,
+                "project_slug": clean_proj,
+                "rationale": (rationale or "").strip(),
+                "review_status": clean_status,
+                "scope": clean_scope,
+                "tags": (tags or "").strip(),
+                "team_slug": clean_team,
+                "title": clean_title,
+                "type": "decision",
+            }
+            append_jsonl_event(fpath, root_event)
+            return self._fold_decision_jsonl(fpath)
+
+    def review_decision(
+        self,
+        decision_ref: str,
+        review_status: str,
+        notes: str = "",
+        replacement_decision: str = "",
+        reviewer: str = "user",
+    ) -> Dict[str, Any]:
+        clean_status = (review_status or "").strip().lower()
+        if clean_status not in VALID_DECISION_REVIEW_STATUSES:
+            raise ValueError(
+                f"Invalid review_status '{review_status}'. Must be one of {sorted(VALID_DECISION_REVIEW_STATUSES)}."
+            )
+        clean_reviewer = (reviewer or "user").strip() or "user"
+        iso = now_iso()
+        with self._lock(exclusive=True):
+            fpath = self._resolve_decision_path_unlocked(decision_ref)
+            if not fpath:
+                raise ValueError(f"Decision '{decision_ref}' does not exist.")
+            review_event = {
+                "created_at": iso,
+                "event_id": generate_event_id(),
+                "notes": (notes or "").strip(),
+                "replacement_decision": (replacement_decision or "").strip(),
+                "review_status": clean_status,
+                "reviewer": clean_reviewer,
+                "type": "review",
+            }
+            append_jsonl_event(fpath, review_event)
+            return self._fold_decision_jsonl(fpath)
+
+    def get_decision(self, decision_ref: str) -> Optional[Dict[str, Any]]:
+        with self._lock(exclusive=False):
+            fpath = self._resolve_decision_path_unlocked(decision_ref)
+            if not fpath:
+                return None
+            return self._fold_decision_jsonl(fpath)
+
+    def list_decisions(
+        self,
+        review_status: Optional[str] = None,
+        origin: Optional[str] = None,
+        scope: Optional[str] = None,
+        project_slug: Optional[str] = None,
+        team_slug: Optional[str] = None,
+        pending_only: bool = False,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        target_status = "pending_review" if pending_only else (
+            review_status.strip().lower() if review_status else None
+        )
+        if pending_only and review_status and review_status.strip().lower() != "pending_review":
+            raise ValueError("Cannot pass --pending together with a non-pending_review --status.")
+        if target_status and target_status not in VALID_DECISION_REVIEW_STATUSES:
+            raise ValueError(f"Invalid review_status '{review_status}'.")
+        clean_origin = origin.strip().lower() if origin else None
+        if clean_origin and clean_origin not in VALID_DECISION_ORIGINS:
+            raise ValueError(f"Invalid origin '{origin}'.")
+        clean_scope = scope.strip().lower() if scope else None
+        if clean_scope and clean_scope not in VALID_DECISION_SCOPES:
+            raise ValueError(f"Invalid scope '{scope}'.")
+        clean_proj = validate_slug(project_slug, "project slug") if project_slug else None
+        clean_team = validate_slug(team_slug, "team slug") if team_slug else None
+
+        with self._lock(exclusive=False):
+            decisions = self._load_all_decisions_unlocked()
+
+        out: List[Dict[str, Any]] = []
+        for d in decisions:
+            if target_status and d["review_status"] != target_status:
+                continue
+            if clean_origin and d["origin"] != clean_origin:
+                continue
+            if clean_scope and d["scope"] != clean_scope:
+                continue
+            if clean_proj and d["project_slug"] != clean_proj:
+                continue
+            if clean_team and d["team_slug"] != clean_team:
+                continue
+            out.append(d)
+            if len(out) >= limit:
+                break
+        return out
+
     def verify(self, prune_orphans: bool = False) -> Dict[str, Any]:
         """Validate integrity of Hive manifests, runtime sessions, JSONL threads, and .gitattributes."""
         with self._lock(exclusive=prune_orphans):
@@ -3880,8 +4303,17 @@ class UltronCore:
                     f"Missing '*.jsonl merge=union' in '{gitattr}'."
                 )
 
+            decisions = self._load_all_decisions_unlocked()
+            if self.decisions_dir.is_dir():
+                d_gitattr = self.decisions_dir / ".gitattributes"
+                if not d_gitattr.is_file() or "merge=union" not in d_gitattr.read_text(encoding="utf-8"):
+                    raise ValueError(
+                        f"Missing '*.jsonl merge=union' in '{d_gitattr}'."
+                    )
+
             return {
                 "agents": len(agents_by_id),
+                "decisions": len(decisions),
                 "gitattributes_union_merge": has_union,
                 "ok": True,
                 "orphan_sessions": 0,
@@ -3897,6 +4329,7 @@ class UltronCore:
             teams_by_slug, agents_by_id, _ = self._scan_state_unlocked()
             projects_by_slug = self._scan_projects_unlocked(teams_by_slug)
             threads = self._load_all_threads_unlocked()
+            decisions = self._load_all_decisions_unlocked()
 
         vis_counts: Dict[str, int] = {}
         cat_counts: Dict[str, int] = {}
@@ -3916,8 +4349,10 @@ class UltronCore:
             "active_teams": sum(1 for t in non_archived_teams if t["status"] == "active"),
             "archived_teams": sum(1 for t in teams_by_slug.values() if t.get("archived", False)),
             "categories": cat_counts,
+            "decisions_dir": str(self.decisions_dir),
             "ephemeral_teams": sum(1 for t in non_archived_teams if t.get("lifespan") == "ephemeral"),
             "hive_dir": str(self.hive_dir),
+            "pending_decisions": sum(1 for d in decisions if d["review_status"] == "pending_review"),
             "permanent_teams": sum(1 for t in non_archived_teams if t.get("lifespan", DEFAULT_TEAM_LIFESPAN) == "permanent"),
             "projects_dir": str(self.projects_dir),
             "repo_root": str(self.repo_root),
@@ -3925,6 +4360,7 @@ class UltronCore:
             "statuses": status_counts,
             "threads_dir": str(self.threads_dir),
             "total_agents": len(agents_by_id),
+            "total_decisions": len(decisions),
             "total_posts": total_posts,
             "total_projects": len(projects_by_slug),
             "total_teams": len(non_archived_teams),
@@ -4043,6 +4479,54 @@ def format_project_info(p: Mapping[str, Any]) -> str:
     if p.get("teams"):
         tms = ", ".join(f"{t['slug']} [{t['status']}/{t['lifespan']}]" for t in p["teams"])
         lines.append(f"  Bound Teams:     {tms}")
+    return "\n".join(lines)
+
+
+def format_decision_list(decisions: List[Dict[str, Any]]) -> str:
+    if not decisions:
+        return "[ULTRON] No Prime Decisions recorded in ultron/core/decisions/."
+    lines = [f"[ULTRON] Prime Decisions ({len(decisions)}):"]
+    for d in decisions:
+        scope_badge = d["scope"]
+        if d["scope"] == "project" and d.get("project_slug"):
+            scope_badge = f"project:{d['project_slug']}"
+        elif d["scope"] == "team" and d.get("team_slug"):
+            scope_badge = f"team:{d['team_slug']}"
+        lines.append(
+            f"  * {d['id']} [{d['review_status'].upper()} | {d['origin']} | {scope_badge}] "
+            f"{d['title']} -> {d['decision']}"
+        )
+    return "\n".join(lines)
+
+
+def format_decision_view(d: Mapping[str, Any]) -> str:
+    lines = ["=" * 84]
+    lines.append(f"DECISION {d['id']}: {d['title']}")
+    scope_badge = d["scope"]
+    if d["scope"] == "project" and d.get("project_slug"):
+        scope_badge = f"project:{d['project_slug']}"
+    elif d["scope"] == "team" and d.get("team_slug"):
+        scope_badge = f"team:{d['team_slug']}"
+    lines.append(
+        f"Status: [{d['review_status'].upper()}] | Origin: [{d['origin']}] | Scope: [{scope_badge}] | By: {d['decided_by']} ({d['created_at'][:19]})"
+    )
+    lines.append("=" * 84)
+    lines.append(f"Decision:          {d['decision']}")
+    if d.get("original_decision") and d["original_decision"] != d["decision"]:
+        lines.append(f"Original Decision: {d['original_decision']}")
+    if d.get("rationale"):
+        lines.append(f"Rationale:         {d['rationale']}")
+    if d.get("tags"):
+        lines.append(f"Tags:              [{d['tags']}]")
+    for rev in d.get("reviews", []):
+        lines.append(
+            f"\n--- Review ({rev['review_status'].upper()}) by @{rev['reviewer']} at {rev['created_at'][:19]} ---"
+        )
+        if rev.get("replacement_decision"):
+            lines.append(f"  Replacement: {rev['replacement_decision']}")
+        if rev.get("notes"):
+            lines.append(f"  Notes:       {rev['notes']}")
+    lines.append("=" * 84)
     return "\n".join(lines)
 
 
@@ -4678,6 +5162,52 @@ def build_parser() -> argparse.ArgumentParser:
     p_rp = add_cmd("remove-project", "Remove a project from ultron/core/projects/")
     p_rp.add_argument("slug", help="Project slug")
     p_rp.add_argument("--cascade", action="store_true", help="Remove descendant sub-projects recursively")
+
+    # Prime Decisions Ledger commands
+    p_ld = add_cmd("log-decision", "Log a Prime decision in ultron/core/decisions/ (Prime-only)")
+    p_ld.add_argument("--title", required=True, help="Decision title")
+    p_ld.add_argument("--decision", "-d", required=True, help="Authoritative ruling or choice made")
+    p_ld.add_argument("--rationale", default="", help="Context, alternatives weighed, or reasoning")
+    p_ld.add_argument(
+        "--origin",
+        default="prime_autonomous",
+        choices=sorted(VALID_DECISION_ORIGINS),
+        help="Whether User guided this or Prime decided autonomously while User was away",
+    )
+    p_ld.add_argument(
+        "--scope",
+        default=None,
+        choices=sorted(VALID_DECISION_SCOPES),
+        help="Scope (inferred from --team / --project / global if omitted)",
+    )
+    p_ld.add_argument("--project", default=None, help="Bound project slug")
+    p_ld.add_argument("--team", default=None, help="Bound team slug")
+    p_ld.add_argument(
+        "--status",
+        default=None,
+        choices=sorted(VALID_DECISION_REVIEW_STATUSES),
+        help="Initial review status (defaults: user_guided->approved, prime_autonomous->pending_review)",
+    )
+    p_ld.add_argument("--tags", default="", help="Comma-separated tags")
+
+    p_ds = add_cmd("decisions", "List Prime Decisions from ultron/core/decisions/")
+    p_ds.add_argument("--status", default=None, choices=sorted(VALID_DECISION_REVIEW_STATUSES), help="Filter by review status")
+    p_ds.add_argument("--origin", default=None, choices=sorted(VALID_DECISION_ORIGINS), help="Filter by origin")
+    p_ds.add_argument("--scope", default=None, choices=sorted(VALID_DECISION_SCOPES), help="Filter by scope")
+    p_ds.add_argument("--project", default=None, help="Filter by project slug")
+    p_ds.add_argument("--team", default=None, help="Filter by team slug")
+    p_ds.add_argument("--pending", action="store_true", help="Show only decisions awaiting User validation (pending_review)")
+    p_ds.add_argument("--limit", type=int, default=50, help="Max decisions to return")
+
+    p_vd = add_cmd("view-decision", "Inspect a decision and its full review history")
+    p_vd.add_argument("decision_id", help="Decision ID (full ID or unique short prefix/suffix)")
+
+    p_rd = add_cmd("review-decision", "Validate, refine, or overrule a recorded Prime Decision (Prime-only)")
+    p_rd.add_argument("decision_id", help="Decision ID (full ID or unique short prefix/suffix)")
+    p_rd.add_argument("--status", required=True, choices=sorted(VALID_DECISION_REVIEW_STATUSES), help="New review status")
+    p_rd.add_argument("--notes", default="", help="User feedback, improvement guidance, or rationale")
+    p_rd.add_argument("--replacement", default="", help="Replacement ruling text (preserves original_decision)")
+    p_rd.add_argument("--reviewer", default="user", help="Reviewer identity (default: user)")
 
     return parser
 
@@ -5349,6 +5879,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     f"  Projects:         {stats['total_projects']}"
                 )
                 print(
+                    f"  Decisions:        {stats['total_decisions']} total ({stats['pending_decisions']} pending review)"
+                )
+                print(
                     f"  Agents / Roles:   {stats['active_agents']} active / {stats['total_agents']} total"
                 )
                 print(
@@ -5434,6 +5967,65 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(json.dumps(res, indent=2, sort_keys=True))
             else:
                 print(f"[ULTRON] Removed project(s): {res['removed_projects']}")
+
+        elif cmd == "log-decision":
+            res = core.log_decision(
+                title=args.title,
+                decision=args.decision,
+                rationale=args.rationale,
+                origin=args.origin,
+                scope=args.scope,
+                project_slug=args.project,
+                team_slug=args.team,
+                review_status=args.status,
+                tags=args.tags,
+            )
+            if args.json:
+                print(json.dumps(res, indent=2, sort_keys=True))
+            else:
+                print(
+                    f"[ULTRON] Logged Decision {res['id']} [{res['origin']} | {res['review_status']}]: {res['title']}"
+                )
+
+        elif cmd == "decisions":
+            res = core.list_decisions(
+                review_status=args.status,
+                origin=args.origin,
+                scope=args.scope,
+                project_slug=args.project,
+                team_slug=args.team,
+                pending_only=args.pending,
+                limit=args.limit,
+            )
+            if args.json:
+                print(json.dumps(res, indent=2, sort_keys=True))
+            else:
+                print(format_decision_list(res))
+
+        elif cmd == "view-decision":
+            res = core.get_decision(args.decision_id)
+            if not res:
+                print(f"[ULTRON Error] Decision '{args.decision_id}' not found.", file=sys.stderr)
+                return 1
+            if args.json:
+                print(json.dumps(res, indent=2, sort_keys=True))
+            else:
+                print(format_decision_view(res))
+
+        elif cmd == "review-decision":
+            res = core.review_decision(
+                decision_ref=args.decision_id,
+                review_status=args.status,
+                notes=args.notes,
+                replacement_decision=args.replacement,
+                reviewer=args.reviewer,
+            )
+            if args.json:
+                print(json.dumps(res, indent=2, sort_keys=True))
+            else:
+                print(
+                    f"[ULTRON] Reviewed Decision {res['id']} -> {res['review_status']} ({res['title']})"
+                )
 
         return 0
 

@@ -1073,6 +1073,169 @@ class UltronCoreTestCase(unittest.TestCase):
         self.assertIsNone(self.core.get_project("app-a"))
         self.assertTrue(self.core.verify()["ok"])
 
+    def test_prime_decisions_ledger_review_workflow_and_hydration(self) -> None:
+        self.assertFalse((self.root / "ultron" / "core" / "decisions").exists())
+
+        self.core.create_project(slug="suite", name="Suite", repo_path="~/Dev/suite")
+        self.core.create_project(
+            slug="subapp", name="Subapp", subpath="subapp", parent_project="suite"
+        )
+        self.core.create_team(
+            slug="subapp-dev",
+            name="Subapp Dev",
+            mission="Build Subapp permanently",
+            project="subapp",
+        )
+        self.core.create_team(
+            slug="other-team",
+            name="Other Team",
+            mission="Unrelated team",
+        )
+
+        # 1. user_guided defaults to approved; prime_autonomous defaults to pending_review
+        d_user = self.core.log_decision(
+            title="Zero third-party deps",
+            decision="Use stdlib only across ULTRON core.",
+            origin="user_guided",
+        )
+        self.assertEqual(d_user["scope"], "global")
+        self.assertEqual(d_user["review_status"], "approved")
+
+        d_suite = self.core.log_decision(
+            title="Unified token schema",
+            decision="Store visual tokens in tokens.json.",
+            rationale="Decided overnight so UI & dev teams stay unblocked.",
+            origin="prime_autonomous",
+            project_slug="suite",
+            tags="ui,tokens",
+        )
+        self.assertEqual(d_suite["scope"], "project")
+        self.assertEqual(d_suite["review_status"], "pending_review")
+
+        d_team = self.core.log_decision(
+            title="Keep S22 smoke test",
+            decision="Verify APK on S22 Ultra before sign-off.",
+            origin="prime_autonomous",
+            team_slug="subapp-dev",
+        )
+        # team-scoped decision infers bound project_slug automatically
+        self.assertEqual(d_team["scope"], "team")
+        self.assertEqual(d_team["project_slug"], "subapp")
+        self.assertEqual(d_team["review_status"], "pending_review")
+
+        d_overruled = self.core.log_decision(
+            title="Skip QA gate",
+            decision="Merge without QA.",
+            origin="prime_autonomous",
+            project_slug="subapp",
+        )
+
+        # Scope conflicts fail loud
+        with self.assertRaisesRegex(ValueError, "Global"):
+            self.core.log_decision(
+                title="Bad global", decision="x", scope="global", project_slug="suite"
+            )
+        with self.assertRaisesRegex(ValueError, "cannot specify --team"):
+            self.core.log_decision(
+                title="Bad proj", decision="x", scope="project", project_slug="suite", team_slug="subapp-dev"
+            )
+
+        # Pending inbox surfaces only pending_review items
+        pending = self.core.list_decisions(pending_only=True)
+        self.assertEqual(
+            {d["id"] for d in pending},
+            {d_suite["id"], d_team["id"], d_overruled["id"]},
+        )
+        res_bad_cli = self.run_cli("decisions", "--pending", "--status", "approved")
+        self.assertEqual(res_bad_cli.returncode, 1)
+
+        # 2. Chronological review folding: Review 1 sets replacement_decision; Review 2 approves without clearing replacement
+        short_suite = d_suite["id"].rsplit("-", 1)[-1]
+        d_file = self.root / "ultron" / "core" / "decisions" / f"{d_suite['id']}.jsonl"
+        line1_before = d_file.read_text(encoding="utf-8").splitlines()[0]
+
+        rev1 = self.run_cli(
+            "review-decision",
+            short_suite,
+            "--status",
+            "needs_improvement",
+            "--notes",
+            "Also enforce 48dp touch targets.",
+            "--replacement",
+            "Store visual tokens and 48dp touch metrics in tokens.json.",
+        )
+        self.assertEqual(rev1.returncode, 0, msg=rev1.stderr)
+        rev2 = self.run_cli(
+            "review-decision",
+            d_suite["id"],
+            "--status",
+            "approved",
+            "--notes",
+            "Verified updated token schema.",
+        )
+        self.assertEqual(rev2.returncode, 0, msg=rev2.stderr)
+        # Ensure original root line stayed immutable (append-only)
+        self.assertEqual(d_file.read_text(encoding="utf-8").splitlines()[0], line1_before)
+
+        folded_suite = self.core.get_decision(short_suite)
+        assert folded_suite is not None
+        self.assertEqual(folded_suite["review_status"], "approved")
+        self.assertEqual(
+            folded_suite["decision"],
+            "Store visual tokens and 48dp touch metrics in tokens.json.",
+        )
+        self.assertEqual(folded_suite["original_decision"], "Store visual tokens in tokens.json.")
+        self.assertEqual(folded_suite["review_count"], 2)
+
+        # Mark d_team needs_improvement and d_overruled overruled
+        self.core.review_decision(
+            d_team["id"],
+            "needs_improvement",
+            notes="Record frametime benchmark too.",
+        )
+        self.core.review_decision(d_overruled["id"], "overruled", notes="Never skip QA.")
+
+        # 3. Role context hydration injects project & active/pending/needs_improvement decisions (excluding overruled), cleanly before Charters
+        specs_sub = self.core.render_spawn("subapp-dev", harness="antigravity")
+        prompt_sub = specs_sub[0]["define_subagent"]["SystemPrompt"]
+        self.assertIn("## Project & Prime Decisions Context", prompt_sub)
+        self.assertIn("Assigned Project:** `subapp` (Subapp) — `~/Dev/suite/subapp`", prompt_sub)
+        self.assertIn("Zero third-party deps", prompt_sub)
+        self.assertIn("Store visual tokens and 48dp touch metrics in tokens.json.", prompt_sub)
+        self.assertIn("Keep S22 smoke test", prompt_sub)
+        self.assertIn("Record frametime benchmark too.", prompt_sub)
+        self.assertNotIn("Skip QA gate", prompt_sub)
+        # Ensure ## Chain-of-Command & Doorbell Rules bullets stayed intact before ## Project & Prime Decisions Context
+        self.assertLess(
+            prompt_sub.index("The ULTRON Board Visibility Discipline"),
+            prompt_sub.index("## Project & Prime Decisions Context"),
+        )
+        self.assertLess(
+            prompt_sub.index("## Project & Prime Decisions Context"),
+            prompt_sub.index("## Inherited Team & Ancestor Charters"),
+        )
+
+        # Unrelated team sees global decisions, not subapp/suite decisions
+        cc_other = self.core.render_spawn("other-team", harness="claude-code")
+        ctx_other = cc_other[0]["role_context"]
+        self.assertIn("Zero third-party deps", ctx_other)
+        self.assertNotIn("Store visual tokens", ctx_other)
+
+        # verify() passes and reports decision count & union merge attribute
+        ver = self.core.verify()
+        self.assertTrue(ver["ok"])
+        self.assertEqual(ver["decisions"], 4)
+
+        # Role shell cannot call log-decision or review-decision, can read decisions
+        role_env = {"ULTRON_AGENT_ID": "subapp-dev/lead"}
+        denied = self.run_cli(
+            "log-decision", "--title", "Rogue", "--decision", "Nope", env_extra=role_env
+        )
+        self.assertEqual(denied.returncode, 1)
+        self.assertIn("ultron-prime only", denied.stderr)
+        allowed = self.run_cli("decisions", "--json", env_extra=role_env)
+        self.assertEqual(allowed.returncode, 0, msg=allowed.stderr)
+
     def test_export_thread_cli_and_api(self) -> None:
         # Create team and roles for authorization testing
         self.core.create_team(slug="eng", name="Engineering", mission="Engineering pod")
