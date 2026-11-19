@@ -82,6 +82,7 @@
     showArchived: false,
     drawerMode: null,
     drawerRequestSeq: 0,
+    orgOptions: { project: "", expandRoles: false, zoom: "fit" },
     decisionFilters: { status: "", origin: "", scope: "", query: "" },
     boardFilters: { visibility: "", status: "", team: "", query: "" },
     toastTimer: null,
@@ -332,6 +333,8 @@
 
     const visibleTeams = state.showArchived ? teams : teams.filter((t) => !t.archived);
     document.getElementById("count-hive").textContent = String(visibleTeams.length);
+    const orgCountEl = document.getElementById("count-org");
+    if (orgCountEl) orgCountEl.textContent = String(visibleTeams.length);
     document.getElementById("count-projects").textContent = String(
       (state.showArchived ? projects : projects.filter((p) => p.status !== "archived")).length
     );
@@ -584,6 +587,734 @@
       .forEach((rootTeam) => treeWrap.appendChild(buildTeamNode(rootTeam)));
 
     container.appendChild(treeWrap);
+  }
+
+  // Tab 1b: Hive Organization (SVG Org Chart)
+  function collectProjectDescendantSlugs(rootSlug, projects) {
+    const out = new Set([rootSlug]);
+    let added = true;
+    while (added) {
+      added = false;
+      (projects || []).forEach((p) => {
+        if (p.parent_project && out.has(p.parent_project) && !out.has(p.slug)) {
+          out.add(p.slug);
+          added = true;
+        }
+      });
+    }
+    return out;
+  }
+
+  function filterOrgTeams(allTeams, allProjects, projectFilter) {
+    const teamsBySlug = new Map(allTeams.map((t) => [t.slug, t]));
+    if (!projectFilter) return allTeams;
+
+    let matching;
+    if (projectFilter === "__bound__") {
+      matching = allTeams.filter((t) => Boolean(t.project));
+    } else if (projectFilter === "__unbound__") {
+      matching = allTeams.filter((t) => !t.project);
+    } else {
+      const targetProjSet = collectProjectDescendantSlugs(projectFilter, allProjects);
+      matching = allTeams.filter((t) => t.project && targetProjSet.has(t.project));
+    }
+
+    const keep = new Set();
+    matching.forEach((t) => {
+      let cur = t;
+      const guard = new Set();
+      while (cur && !guard.has(cur.slug)) {
+        guard.add(cur.slug);
+        keep.add(cur.slug);
+        cur = cur.parent_team ? teamsBySlug.get(cur.parent_team) : null;
+      }
+    });
+    return allTeams.filter((t) => keep.has(t.slug));
+  }
+
+  function buildHiveOrgSvg(prime, teams, expandRoles, zoomMode) {
+    const visibleSlugs = new Set(teams.map((t) => t.slug));
+    const byParent = new Map();
+    teams.forEach((t) => {
+      const pKey = t.parent_team && visibleSlugs.has(t.parent_team) ? t.parent_team : "__root__";
+      if (!byParent.has(pKey)) byParent.set(pKey, []);
+      byParent.get(pKey).push(t);
+    });
+    // Place multi-layer branches first so structured org trees stay front and center at the top
+    byParent.forEach((arr) => {
+      arr.sort((a, b) => {
+        const aKids = (byParent.get(a.slug) || []).length > 0 ? 0 : 1;
+        const bKids = (byParent.get(b.slug) || []).length > 0 ? 0 : 1;
+        if (aKids !== bKids) return aKids - bKids;
+        return String(a.slug || "").localeCompare(String(b.slug || ""));
+      });
+    });
+
+    const padX = 28;
+    const padY = 24;
+    const primeW = 220;
+    const primeH = 94;
+    const teamW = 276;
+    const teamH = expandRoles ? 76 : 94;
+    const agentW = 216;
+    const agentH = 40;
+    const colGap = 68;
+    const rowGap = 14;
+    const roleGap = 6;
+
+    const teamPositions = [];
+    const agentPositions = [];
+    const primeEdges = [];
+    const subteamEdges = [];
+    const roleEdges = [];
+
+    let cursorY = padY;
+    let maxColRight = padX + primeW;
+    const visited = new Set();
+
+    function colX(depth) {
+      return padX + primeW + colGap + depth * (teamW + colGap);
+    }
+
+    function layoutTeam(team, depth) {
+      if (!team || visited.has(team.slug)) return null;
+      visited.add(team.slug);
+
+      const x = colX(depth);
+      const children = (byParent.get(team.slug) || []).filter((c) => !visited.has(c.slug));
+      const roles = expandRoles ? (team.roles || []) : [];
+
+      const blockStartY = cursorY;
+      let firstChildCenter = null;
+      let lastChildCenter = null;
+      const roleNodesForTeam = [];
+      const childNodesForTeam = [];
+
+      // Place role branches aligned horizontally beside this team, then child subteams below
+      roles.forEach((role) => {
+        const rx = colX(depth + 1);
+        const ry = cursorY;
+        cursorY += agentH + roleGap;
+        maxColRight = Math.max(maxColRight, rx + agentW);
+        const centerY = ry + Math.round(agentH / 2);
+        if (firstChildCenter === null) firstChildCenter = centerY;
+        lastChildCenter = centerY;
+        roleNodesForTeam.push({ team: team, role: role, x: rx, y: ry, centerY: centerY });
+      });
+
+      let ty;
+      if (roleNodesForTeam.length > 0) {
+        const rolesCenter = Math.round(
+          (roleNodesForTeam[0].centerY + roleNodesForTeam[roleNodesForTeam.length - 1].centerY) / 2
+        );
+        ty = Math.max(blockStartY, rolesCenter - Math.round(teamH / 2));
+        cursorY = Math.max(cursorY + 6, ty + teamH + rowGap);
+      }
+
+      children.forEach((child) => {
+        const res = layoutTeam(child, depth + 1);
+        if (res) {
+          if (firstChildCenter === null) firstChildCenter = res.spanTopCenter;
+          lastChildCenter = res.spanBottomCenter;
+          childNodesForTeam.push(res.info);
+        }
+      });
+
+      if (ty === undefined) {
+        if (firstChildCenter !== null) {
+          const subtreeSpanCenter = Math.round((firstChildCenter + lastChildCenter) / 2);
+          ty = Math.max(blockStartY, subtreeSpanCenter - Math.round(teamH / 2));
+          cursorY = Math.max(cursorY, ty + teamH + rowGap);
+        } else {
+          ty = cursorY;
+          cursorY += teamH + rowGap;
+        }
+      }
+
+      maxColRight = Math.max(maxColRight, x + teamW);
+      const teamCenterY = ty + Math.round(teamH / 2);
+      const info = {
+        team: team,
+        depth: depth,
+        x: x,
+        y: ty,
+        centerY: teamCenterY,
+      };
+      teamPositions.push(info);
+
+      roleNodesForTeam.forEach((rn) => {
+        agentPositions.push(rn);
+        roleEdges.push({ sx: x + teamW, sy: teamCenterY, tx: rn.x, ty: rn.centerY });
+      });
+      childNodesForTeam.forEach((cn) => {
+        subteamEdges.push({ sx: x + teamW, sy: teamCenterY, tx: cn.x, ty: cn.centerY });
+      });
+
+      return {
+        info: info,
+        spanTopCenter: firstChildCenter !== null ? Math.min(teamCenterY, firstChildCenter) : teamCenterY,
+        spanBottomCenter: lastChildCenter !== null ? Math.max(teamCenterY, lastChildCenter) : teamCenterY,
+      };
+    }
+
+    const roots = byParent.get("__root__") || [];
+    const rootInfos = [];
+    roots.forEach((rt, idx) => {
+      const startY = cursorY;
+      const res = layoutTeam(rt, 0);
+      if (res) {
+        rootInfos.push(res.info);
+      }
+      if (idx < roots.length - 1 && (res && (byParent.get(rt.slug) || []).length > 0 || expandRoles)) {
+        cursorY += 10;
+      }
+      void startY;
+    });
+
+    const totalH = Math.max(160, cursorY + padY - rowGap);
+    const primeY =
+      rootInfos.length > 0
+        ? Math.max(
+            padY,
+            Math.round(
+              (rootInfos[0].centerY + rootInfos[rootInfos.length - 1].centerY) / 2 -
+                primeH / 2
+            )
+          )
+        : padY;
+    const primeX = padX;
+    const primeCenterY = primeY + Math.round(primeH / 2);
+
+    rootInfos.forEach((ri) => {
+      primeEdges.push({ sx: primeX + primeW, sy: primeCenterY, tx: ri.x, ty: ri.centerY });
+    });
+
+    const svgW = Math.max(760, maxColRight + padX);
+    const svgH = Math.max(totalH, primeY + primeH + padY);
+
+    const primeEdgeLayer = svgEl("g", { className: "org-edges-prime" });
+    primeEdges.forEach((e) => {
+      const midX = Math.round((e.sx + e.tx) / 2);
+      primeEdgeLayer.appendChild(
+        svgEl("path", {
+          d: "M " + e.sx + " " + e.sy + " C " + midX + " " + e.sy + ", " + midX + " " + e.ty + ", " + e.tx + " " + e.ty,
+          fill: "none",
+          stroke: "#fb7185",
+          "stroke-opacity": "0.52",
+          "stroke-width": "1.8",
+        })
+      );
+      primeEdgeLayer.appendChild(svgEl("circle", { cx: e.tx, cy: e.ty, r: 2.8, fill: "#fb7185" }));
+    });
+
+    const subEdgeLayer = svgEl("g", { className: "org-edges-teams" });
+    subteamEdges.forEach((e) => {
+      const midX = Math.round((e.sx + e.tx) / 2);
+      subEdgeLayer.appendChild(
+        svgEl("path", {
+          d: "M " + e.sx + " " + e.sy + " C " + midX + " " + e.sy + ", " + midX + " " + e.ty + ", " + e.tx + " " + e.ty,
+          fill: "none",
+          stroke: "#22d3ee",
+          "stroke-opacity": "0.72",
+          "stroke-width": "2",
+        })
+      );
+      subEdgeLayer.appendChild(svgEl("circle", { cx: e.sx, cy: e.sy, r: 3, fill: "#22d3ee" }));
+      subEdgeLayer.appendChild(svgEl("circle", { cx: e.tx, cy: e.ty, r: 3, fill: "#22d3ee" }));
+    });
+
+    const roleEdgeLayer = svgEl("g", { className: "org-edges-roles" });
+    roleEdges.forEach((e) => {
+      const midX = Math.round((e.sx + e.tx) / 2);
+      roleEdgeLayer.appendChild(
+        svgEl("path", {
+          d: "M " + e.sx + " " + e.sy + " C " + midX + " " + e.sy + ", " + midX + " " + e.ty + ", " + e.tx + " " + e.ty,
+          fill: "none",
+          stroke: "#818cf8",
+          "stroke-opacity": "0.55",
+          "stroke-width": "1.4",
+          "stroke-dasharray": "4 3",
+        })
+      );
+      roleEdgeLayer.appendChild(svgEl("circle", { cx: e.tx, cy: e.ty, r: 2.4, fill: "#818cf8" }));
+    });
+
+    const nodesLayer = svgEl("g", { className: "org-nodes" });
+
+    // 1. ULTRON PRIME Apex Node
+    const pState = Sprites.stateForAgent(prime, null);
+    const pStatusColor = prime && prime.status === "active" ? "#fb7185" : "#64748b";
+    const pSprite = Sprites.renderBotSvg("prime", pState, 38);
+    const primeNode = svgEl(
+      "g",
+      {
+        className: "topo-node",
+        transform: "translate(" + primeX + "," + primeY + ")",
+        role: "button",
+        tabindex: "0",
+        onClick: () => openPrimeDrawer(),
+        onKeydown: (ev) => {
+          if (ev.key === "Enter" || ev.key === " ") {
+            ev.preventDefault();
+            openPrimeDrawer();
+          }
+        },
+      },
+      [
+        svgEl("title", { text: "ULTRON PRIME — " + ((prime && prime.conversation_id) || "unregistered") }),
+        svgEl("rect", {
+          className: "topo-node-bg",
+          x: 0,
+          y: 0,
+          width: primeW,
+          height: primeH,
+          rx: 10,
+          fill: "#1a1423",
+          stroke: "rgba(244, 63, 94, 0.58)",
+          "stroke-width": "1.5",
+        }),
+        svgEl("rect", { x: 0, y: 10, width: 4, height: primeH - 20, rx: 2, fill: "#f43f5e" }),
+        svgEl("g", { transform: "translate(14, 16)" }, [pSprite]),
+        svgEl("text", {
+          x: 62,
+          y: 30,
+          fill: "#eef4ff",
+          "font-size": "13.5",
+          "font-weight": "700",
+          "font-family": "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif",
+          text: "ULTRON PRIME",
+        }),
+        svgEl("text", {
+          x: 62,
+          y: 47,
+          fill: "#fda4af",
+          "font-size": "10.5",
+          "font-family": "ui-monospace, SFMono-Regular, Menlo, monospace",
+          text: upperStatus(prime && prime.status, "unregistered") + ((prime && prime.harness) ? " · " + prime.harness : ""),
+        }),
+        svgEl("text", {
+          x: 16,
+          y: 77,
+          fill: "#9fb0c7",
+          "font-size": "10.5",
+          "font-family": "ui-monospace, SFMono-Regular, Menlo, monospace",
+          text: rootInfos.length + " root team" + (rootInfos.length === 1 ? "" : "s") + " · " + teams.length + " total",
+        }),
+        svgEl("circle", { cx: primeW - 14, cy: 24, r: 4, fill: pStatusColor }),
+      ]
+    );
+    nodesLayer.appendChild(primeNode);
+
+    // 2. Team Nodes
+    teamPositions.forEach(({ team, x, y }) => {
+      const isAct = team.status === "active";
+      const isArch = Boolean(team.archived);
+      const accent = isArch
+        ? "#475569"
+        : isAct
+          ? "#22d3ee"
+          : team.lifespan === "ephemeral"
+            ? "#c084fc"
+            : "#818cf8";
+      const rawName = String(team.name || team.slug);
+      const shortName = rawName.length > 23 ? rawName.slice(0, 21) + "…" : rawName;
+      const metaRaw =
+        "L" +
+        (team.layer || 1) +
+        " · " +
+        team.slug +
+        (team.project ? " · " + team.project : "");
+      const shortMeta = metaRaw.length > 35 ? metaRaw.slice(0, 33) + "…" : metaRaw;
+      const statusText = isArch ? "ARCH" : isAct ? "LIVE" : team.lifespan === "ephemeral" ? "EPHEM" : "PERM";
+
+      const childrenNodes = [
+        svgEl("title", { text: rawName + " (" + team.slug + ") — " + (team.mission || "") }),
+        svgEl("rect", {
+          className: "topo-node-bg",
+          x: 0,
+          y: 0,
+          width: teamW,
+          height: teamH,
+          rx: 8,
+          fill: isArch ? "#101624" : "#151d2f",
+          stroke: isAct ? "rgba(34, 211, 238, 0.55)" : "rgba(148, 163, 184, 0.3)",
+          "stroke-width": isAct ? "1.5" : "1.1",
+        }),
+        svgEl("rect", { x: 0, y: 8, width: 4, height: teamH - 16, rx: 2, fill: accent }),
+        svgEl("text", {
+          x: 15,
+          y: 23,
+          fill: isArch ? "#9fb0c7" : "#eef4ff",
+          "font-size": "12.5",
+          "font-weight": "700",
+          "font-family": "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif",
+          text: shortName,
+        }),
+        svgEl("rect", {
+          x: teamW - 56,
+          y: 10,
+          width: 44,
+          height: 16,
+          rx: 4,
+          fill: "#0b101b",
+          stroke: accent,
+          "stroke-opacity": "0.55",
+          "stroke-width": "1",
+        }),
+        svgEl("text", {
+          x: teamW - 34,
+          y: 21.5,
+          "text-anchor": "middle",
+          fill: accent,
+          "font-size": "9.5",
+          "font-family": "ui-monospace, SFMono-Regular, Menlo, monospace",
+          "font-weight": "700",
+          text: statusText,
+        }),
+        svgEl("text", {
+          x: 15,
+          y: 41,
+          fill: "#9fb0c7",
+          "font-size": "10.5",
+          "font-family": "ui-monospace, SFMono-Regular, Menlo, monospace",
+          text: shortMeta,
+        }),
+      ];
+
+      if (!expandRoles) {
+        const roles = team.roles || [];
+        const shownRoles = roles.slice(0, 4);
+        const slotW = 60;
+        const slotGap = 5;
+        shownRoles.forEach((r, rIdx) => {
+          const rx = 14 + rIdx * (slotW + slotGap);
+          const ry = 50;
+          const rState = Sprites.stateForAgent(r, team);
+          const rBot = Sprites.renderBotSvg(Sprites.archetypeForRole(r), rState, 18);
+          const rLabel = String(r.role || "role");
+          const shortRole = rLabel.length > 5 ? rLabel.slice(0, 4) + "…" : rLabel;
+          const chip = svgEl(
+            "g",
+            {
+              className: "org-role-chip",
+              transform: "translate(" + rx + "," + ry + ")",
+              onClick: (ev) => {
+                ev.stopPropagation();
+                openTeamDrawer(team.slug, r.agent_id);
+              },
+            },
+            [
+              svgEl("title", { text: r.agent_id + " — " + (r.title || r.role) + " (" + r.model + ")" }),
+              svgEl("rect", {
+                x: 0,
+                y: 0,
+                width: slotW,
+                height: 34,
+                rx: 5,
+                fill: "#0b101b",
+                stroke: rState === "active" ? "rgba(34, 211, 238, 0.45)" : "rgba(148, 163, 184, 0.18)",
+                "stroke-width": "1",
+              }),
+              svgEl("g", { transform: "translate(4, 7)" }, [rBot]),
+              svgEl("text", {
+                x: 24,
+                y: 21,
+                fill: r.write_tools === false ? "#34d399" : "#eef4ff",
+                "font-size": "9.5",
+                "font-family": "ui-monospace, SFMono-Regular, Menlo, monospace",
+                "font-weight": "600",
+                text: shortRole,
+              }),
+            ]
+          );
+          childrenNodes.push(chip);
+        });
+        if (roles.length > 4) {
+          childrenNodes.push(
+            svgEl("text", {
+              x: teamW - 10,
+              y: 89,
+              "text-anchor": "end",
+              fill: "#6f809b",
+              "font-size": "9.5",
+              "font-family": "ui-monospace, SFMono-Regular, Menlo, monospace",
+              text: "+" + (roles.length - 4) + " more",
+            })
+          );
+        }
+      } else {
+        childrenNodes.push(
+          svgEl("text", {
+            x: 15,
+            y: 61,
+            fill: "#6f809b",
+            "font-size": "10.5",
+            "font-family": "ui-monospace, SFMono-Regular, Menlo, monospace",
+            text:
+              (team.roles || []).length +
+              " role(s)" +
+              (team.harness ? " · " + team.harness : "") +
+              (team.campaign === "active" ? " · CAMPAIGN ON" : ""),
+          })
+        );
+      }
+
+      const tNode = svgEl(
+        "g",
+        {
+          className: "topo-node",
+          transform: "translate(" + x + "," + y + ")",
+          role: "button",
+          tabindex: "0",
+          onClick: () => openTeamDrawer(team.slug, null),
+          onKeydown: (ev) => {
+            if (ev.key === "Enter" || ev.key === " ") {
+              ev.preventDefault();
+              openTeamDrawer(team.slug, null);
+            }
+          },
+        },
+        childrenNodes
+      );
+      nodesLayer.appendChild(tNode);
+    });
+
+    // 3. Expanded Role Agent Nodes (when Show Role Branches is ON)
+    agentPositions.forEach(({ team, role, x, y }) => {
+      const rState = Sprites.stateForAgent(role, team);
+      const rBot = Sprites.renderBotSvg(Sprites.archetypeForRole(role), rState, 26);
+      const rAccent =
+        rState === "active"
+          ? "#22d3ee"
+          : role.write_tools === false
+            ? "#34d399"
+            : "#64748b";
+      const roleSlug = String(role.role || "role");
+      const rawTitle = String(role.title || roleSlug);
+      const shortTitle = rawTitle.length > 22 ? rawTitle.slice(0, 20) + "…" : rawTitle;
+
+      const aNode = svgEl(
+        "g",
+        {
+          className: "topo-node",
+          transform: "translate(" + x + "," + y + ")",
+          role: "button",
+          tabindex: "0",
+          onClick: () => openTeamDrawer(team.slug, role.agent_id),
+          onKeydown: (ev) => {
+            if (ev.key === "Enter" || ev.key === " ") {
+              ev.preventDefault();
+              openTeamDrawer(team.slug, role.agent_id);
+            }
+          },
+        },
+        [
+          svgEl("title", { text: role.agent_id + " — " + rawTitle + " (" + (role.model || "medium") + ")" }),
+          svgEl("rect", {
+            className: "topo-node-bg",
+            x: 0,
+            y: 0,
+            width: agentW,
+            height: agentH,
+            rx: 6,
+            fill: "#0f1523",
+            stroke: rState === "active" ? "rgba(34, 211, 238, 0.48)" : "rgba(129, 140, 248, 0.28)",
+            "stroke-width": "1.1",
+          }),
+          svgEl("rect", { x: 0, y: 5, width: 3, height: agentH - 10, rx: 1.5, fill: rAccent }),
+          svgEl("g", { transform: "translate(10, 7)" }, [rBot]),
+          svgEl("text", {
+            x: 42,
+            y: 17,
+            fill: "#eef4ff",
+            "font-size": "11.5",
+            "font-weight": "700",
+            "font-family": "ui-monospace, SFMono-Regular, Menlo, monospace",
+            text: roleSlug + (role.write_tools === false ? " [RO]" : ""),
+          }),
+          svgEl("text", {
+            x: 42,
+            y: 31,
+            fill: "#9fb0c7",
+            "font-size": "10",
+            "font-family": "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif",
+            text: shortTitle,
+          }),
+          svgEl("text", {
+            x: agentW - 10,
+            y: 17,
+            "text-anchor": "end",
+            fill: rState === "active" ? "#22d3ee" : "#6f809b",
+            "font-size": "9.5",
+            "font-family": "ui-monospace, SFMono-Regular, Menlo, monospace",
+            text: role.model || "medium",
+          }),
+        ]
+      );
+      nodesLayer.appendChild(aNode);
+    });
+
+    const scale = zoomMode === "125" ? 1.25 : 1;
+    const dispW = Math.round(svgW * scale);
+    const dispH = Math.round(svgH * scale);
+    const zoomClass =
+      zoomMode === "125" ? "org-svg zoom-125" : zoomMode === "100" ? "org-svg zoom-100" : "org-svg zoom-fit";
+
+    const svg = svgEl(
+      "svg",
+      {
+        className: zoomClass,
+        viewBox: "0 0 " + svgW + " " + svgH,
+        width: dispW,
+        height: dispH,
+        role: "img",
+        "aria-label": "ULTRON Hive Organization Chart",
+      },
+      [primeEdgeLayer, subEdgeLayer, roleEdgeLayer, nodesLayer]
+    );
+
+    return {
+      svg: svg,
+      shownTeamCount: teamPositions.length,
+      shownAgentCount: expandRoles
+        ? agentPositions.length
+        : teamPositions.reduce((sum, tp) => sum + ((tp.team.roles || []).length), 0),
+    };
+  }
+
+  function syncOrgProjectOptions() {
+    const sel = document.getElementById("org-project-filter");
+    if (!sel || !state.snapshot) return;
+    const opts = state.orgOptions;
+    const projects = state.snapshot.projects || [];
+    clearNode(sel);
+    sel.appendChild(el("option", { value: "", text: "All Teams (Full Hive)", selected: opts.project === "" }));
+    sel.appendChild(el("option", { value: "__bound__", text: "Project-Bound Only", selected: opts.project === "__bound__" }));
+    sel.appendChild(el("option", { value: "__unbound__", text: "Legacy / Unbound Only", selected: opts.project === "__unbound__" }));
+    projects
+      .slice()
+      .sort((a, b) => (a.layer || 1) - (b.layer || 1) || String(a.slug).localeCompare(String(b.slug)))
+      .forEach((p) => {
+        sel.appendChild(
+          el("option", {
+            value: p.slug,
+            text: "Project: " + (p.name || p.slug) + " (" + p.slug + ")",
+            selected: opts.project === p.slug,
+          })
+        );
+      });
+  }
+
+  function renderOrgView(container) {
+    const opts = state.orgOptions;
+
+    const toolbar = el("div", { className: "filter-bar" }, [
+      el(
+        "select",
+        {
+          id: "org-project-filter",
+          className: "filter-select",
+          "aria-label": "Filter organization chart by project",
+          onChange: (ev) => {
+            opts.project = ev.target.value;
+            renderOrgChartCanvas();
+          },
+        }
+      ),
+      el("label", { className: "toggle-chip", for: "org-expand-roles" }, [
+        el("input", {
+          id: "org-expand-roles",
+          type: "checkbox",
+          checked: opts.expandRoles,
+          onChange: (ev) => {
+            opts.expandRoles = Boolean(ev.target.checked);
+            renderOrgChartCanvas();
+          },
+        }),
+        el("span", { text: "Show Role Branches" }),
+      ]),
+      el("div", { id: "org-zoom-group", className: "zoom-group", role: "group", "aria-label": "Zoom level" }, [
+        ["fit", "Fit"],
+        ["100", "100%"],
+        ["125", "125%"],
+      ].map(([mode, label]) =>
+        el("button", {
+          className: "btn btn-sm btn-ghost" + (opts.zoom === mode ? " is-selected" : ""),
+          type: "button",
+          text: label,
+          onClick: (ev) => {
+            opts.zoom = mode;
+            const grp = document.getElementById("org-zoom-group");
+            if (grp) {
+              grp.querySelectorAll("button").forEach((b) => b.classList.remove("is-selected"));
+            }
+            ev.currentTarget.classList.add("is-selected");
+            renderOrgChartCanvas();
+          },
+        })
+      )),
+    ]);
+    container.appendChild(toolbar);
+
+    const chartHost = el("div", { id: "org-chart-host" });
+    container.appendChild(chartHost);
+    syncOrgProjectOptions();
+    renderOrgChartCanvas();
+  }
+
+  function renderOrgChartCanvas() {
+    const chartHost = document.getElementById("org-chart-host");
+    if (!chartHost || !state.snapshot) return;
+    clearNode(chartHost);
+
+    const snap = state.snapshot;
+    const opts = state.orgOptions;
+    const baseTeams = state.showArchived
+      ? (snap.teams || [])
+      : (snap.teams || []).filter((t) => !t.archived);
+    const filteredTeams = filterOrgTeams(baseTeams, snap.projects || [], opts.project);
+
+    if (filteredTeams.length === 0) {
+      chartHost.appendChild(
+        el("div", { className: "empty-state" }, [
+          Sprites.renderBotSvg("prime", "standby", 52),
+          el("h3", { text: "No Teams Match This Organization Filter" }),
+          el("p", { text: "Clear the project filter or toggle Show Archived to inspect other pods." }),
+        ])
+      );
+      return;
+    }
+
+    const built = buildHiveOrgSvg(snap.prime || {}, filteredTeams, opts.expandRoles, opts.zoom);
+    const panel = el("section", { className: "topo-panel" }, [
+      el("div", { className: "topo-header" }, [
+        el("div", { className: "team-title-row" }, [
+          el("h3", { className: "panel-card-title", text: "Organization Chart" }),
+          el("span", {
+            className: "badge mono",
+            text: built.shownTeamCount + " team(s) · " + built.shownAgentCount + " role(s)",
+          }),
+        ]),
+        el("div", { className: "topo-legend" }, [
+          el("span", { className: "topo-legend-item" }, [
+            el("span", { className: "legend-line legend-prime" }),
+            "PRIME -> L1 Team",
+          ]),
+          el("span", { className: "topo-legend-item" }, [
+            el("span", { className: "legend-line legend-solid" }),
+            "Parent -> Subteam",
+          ]),
+          opts.expandRoles
+            ? el("span", { className: "topo-legend-item" }, [
+                el("span", { className: "legend-line legend-role" }),
+                "Team -> Role Bot",
+              ])
+            : null,
+        ]),
+      ]),
+      el("div", { className: "topo-svg-wrap org-svg-wrap" }, [built.svg]),
+    ]);
+    chartHost.appendChild(panel);
   }
 
   // Tab 2: Projects Topology
@@ -1809,6 +2540,8 @@
     if (!state.snapshot) return;
     if (state.activeTab === "hive") {
       renderHiveView(view);
+    } else if (state.activeTab === "org") {
+      renderOrgView(view);
     } else if (state.activeTab === "projects") {
       renderProjectsView(view);
     } else if (state.activeTab === "decisions") {
@@ -1820,6 +2553,11 @@
 
   function refreshActiveTabInPlace() {
     if (!state.snapshot) return;
+    if (state.activeTab === "org" && document.getElementById("org-chart-host")) {
+      syncOrgProjectOptions();
+      renderOrgChartCanvas();
+      return;
+    }
     if (state.activeTab === "decisions" && document.getElementById("decisions-list")) {
       renderDecisionsList();
       return;
@@ -1841,7 +2579,7 @@
   }
 
   function switchTab(tab, updateHash) {
-    if (!["hive", "projects", "decisions", "board"].includes(tab)) tab = "hive";
+    if (!["hive", "org", "projects", "decisions", "board"].includes(tab)) tab = "hive";
     state.activeTab = tab;
     if (updateHash !== false && window.location.hash !== "#" + tab) {
       window.history.replaceState(null, "", "#" + tab);
@@ -1852,7 +2590,7 @@
 
   function init() {
     const initialHash = window.location.hash.replace(/^#/, "");
-    if (["hive", "projects", "decisions", "board"].includes(initialHash)) {
+    if (["hive", "org", "projects", "decisions", "board"].includes(initialHash)) {
       state.activeTab = initialHash;
     }
     syncTabButtons(state.activeTab);
@@ -1863,7 +2601,7 @@
 
     window.addEventListener("hashchange", () => {
       const next = window.location.hash.replace(/^#/, "");
-      if (["hive", "projects", "decisions", "board"].includes(next) && next !== state.activeTab) {
+      if (["hive", "org", "projects", "decisions", "board"].includes(next) && next !== state.activeTab) {
         switchTab(next, false);
       }
     });

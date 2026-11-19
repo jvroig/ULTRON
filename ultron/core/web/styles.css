@@ -744,6 +744,59 @@ pre,
   background: rgba(192, 132, 252, 0.22);
 }
 
+/* Hive Organization SVG Chart */
+.org-svg-wrap {
+  max-height: 76vh;
+  overflow: auto;
+}
+
+.org-svg {
+  display: block;
+}
+
+.org-svg.zoom-fit {
+  max-width: 100%;
+  height: auto;
+}
+
+.org-svg.zoom-100,
+.org-svg.zoom-125 {
+  max-width: none;
+}
+
+.org-role-chip {
+  cursor: pointer;
+}
+
+.org-role-chip:hover rect {
+  stroke: var(--accent-active);
+  fill: var(--bg-elevated);
+}
+
+.legend-prime {
+  border-top: 2px solid var(--accent-prime);
+}
+
+.legend-role {
+  border-top: 2px dashed var(--accent-architect);
+}
+
+.zoom-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-inset);
+}
+
+.zoom-group .btn-sm.is-selected {
+  background: var(--bg-elevated);
+  color: var(--accent-active);
+  border-color: var(--border-active);
+}
+
 .list-stack {
   display: flex;
   flex-direction: column;
