@@ -12,6 +12,8 @@ ultron/
 │   ├── ULTRON_PRIME.md          # Boot persona & operational manual for ULTRON PRIME
 │   ├── README.md                # This reference guide
 │   ├── core.py                  # Org registry, Hive scaffolder, JSONL board CLI & harness adapters
+│   ├── web.py                   # Read-only Mission Control stdlib HTTP server & ETag API
+│   ├── web/                     # Offline SPA (`index.html`, `tokens.css`, `styles.css`, `sprites.js`, `app.js`)
 │   ├── .gitignore               # Ignores ephemeral .runtime/ session bindings & lockfiles
 │   ├── templates/               # Charter templates & the per-harness role context template
 │   ├── blueprints/              # Turnkey team blueprints
@@ -99,7 +101,8 @@ python3 ultron/core/core.py remove-project web [--cascade]
 # Register ULTRON PRIME's doorbell address (and its harness)
 python3 ultron/core/core.py register-prime --id "<doorbell-address>" [--harness <name>]
 
-# Inspect full N-layer Hive org tree, teams, integrity & stats (--all includes archived ephemeral teams)
+# Inspect full N-layer Hive org tree, teams, integrity, stats & live read-only Web UI
+python3 ultron/core/core.py ui [--host 127.0.0.1] [--port 8420] [--root <path>] [--no-open]
 python3 ultron/core/core.py org-tree [--all]
 python3 ultron/core/core.py teams [--status active|disabled] [--project <slug>] [--lifespan permanent|ephemeral] [--archived | --all]
 python3 ultron/core/core.py verify

@@ -72,15 +72,23 @@ ULTRON/
 ├── ultron-architecture.html           # Interactive visual architecture diagram & showcase
 ├── docs/
 │   ├── ARCHITECTURE.md                # Deep-dive as-implemented technical specification
-│   └── HARNESSES.md                   # Per-harness actions & requirements (operator reference)
+│   ├── HARNESSES.md                   # Per-harness actions & requirements (operator reference)
+│   ├── PROJECTS_TEAMS_DECISIONS_SPEC.md # Projects, Team Lifespan & Prime Decisions spec
+│   └── WEB_VISUALIZATION_SPEC.md      # Read-only Mission Control web UI & API spec
 ├── tests/
 │   ├── test_ultron_core.py            # Unit, lifecycle, harness-adapter & Git union-merge test suite
+│   ├── test_ultron_web.py             # Read-only Mission Control server, ETag, CSP & CLI tests
 │   └── golden/                        # Expected render-spawn output per harness
 └── ultron/                            # Portable drop-in ULTRON orchestration engine
     ├── core/
     │   ├── ULTRON_PRIME.md            # Boot persona & operational manual for ULTRON PRIME
     │   ├── README.md                  # CLI reference & data model summary
     │   ├── core.py                    # Registry, scaffolder, JSONL board CLI & harness adapters
+    │   ├── web.py                     # Zero-dependency stdlib Mission Control HTTP server & ETag API
+    │   ├── web/                       # Offline read-only SPA + pixel-art SVG bot sprites
+    │   │   ├── index.html, app.js     # CSP-compliant DOM views & LiveSync ETag poller
+    │   │   ├── tokens.css, styles.css # Swappable visual theme tokens & responsive deck layout
+    │   │   └── sprites.js             # Crisp 16x16 pixel-art SVG archetype & state sprites
     │   ├── .gitignore                 # Ignores ephemeral .runtime/ sessions & file locks
     │   ├── templates/                 # Code generation templates for teams, roles & role context
     │   │   ├── team_agents.md.tmpl    # Team charter template
@@ -231,14 +239,17 @@ On Claude Code this stops every session and marks the team disabled. On Antigrav
 
 ---
 
-### Step 6: Verifying System Integrity & Automated Tests
-Validate manifest integrity, detect orphan sessions, and run the automated test suite anytime:
+### Step 6: Inspecting the Live Hive & Verifying Integrity
+Launch the strictly read-only **Mission Control** web visualizer anytime (zero Node/npm dependencies—uses Python stdlib + offline pixel-art SVG bot sprites):
 
 ```bash
+# Open local read-only dashboard at http://127.0.0.1:8420 (or point to another workspace via --root)
+python3 ultron/core/core.py ui [--port 8420] [--root <path>] [--no-open]
+
 # Verify Hive manifests, session consistency, and .gitattributes
 python3 ultron/core/core.py verify
 
-# Run the complete test suite (includes real multi-branch Git union merge tests)
+# Run the complete test suite (includes real multi-branch Git union merge and web server tests)
 python3 -W error -m unittest discover -s tests -v
 ```
 
@@ -250,6 +261,7 @@ python3 -W error -m unittest discover -s tests -v
 | :--- | :--- |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | **Architecture Specification (v2):** Trust model, data schemas, locking, deterministic event folding, lifecycle, visibility, doorbells, and the harness layer (adapters, mixed hives). |
 | [`docs/PROJECTS_TEAMS_DECISIONS_SPEC.md`](docs/PROJECTS_TEAMS_DECISIONS_SPEC.md) | **Projects, Team Lifespan & Prime Decisions Spec:** Schemas, cumulative monorepo path composition, `permanent` vs. `ephemeral` archival, decision review lifecycle, and role context hydration. |
+| [`docs/WEB_VISUALIZATION_SPEC.md`](docs/WEB_VISUALIZATION_SPEC.md) | **Mission Control Web UI Spec:** Strictly read-only stdlib HTTP server (`core.py ui`), `ETag` conditional polling API, pixel-art bot sprite architecture, and CSP/XSS invariants. |
 | [`docs/HARNESSES.md`](docs/HARNESSES.md) | **Harness Reference:** Each action mapped to Claude Code and Antigravity tools, and each harness's requirements. |
 | [`ultron/core/README.md`](ultron/core/README.md) | **CLI & Storage Reference:** Command-line syntax, flag definitions, and schema details for `ultron/core/core.py`. |
 | [`ultron/core/ULTRON_PRIME.md`](ultron/core/ULTRON_PRIME.md) | **Operational Manual for ULTRON PRIME:** Boot persona, hierarchy management, lifecycle workflows, and safety crons. |

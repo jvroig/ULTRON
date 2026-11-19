@@ -389,6 +389,12 @@ Lazily initialized append-only governance ledger (`ultron/core/decisions/d-YYYYM
 - **Chronological Review Folding (`review-decision`):** Subsequent `type: "review"` events transition `review_status` (`approved`, `pending_review`, `needs_improvement`, `overruled`) and optionally record `replacement_decision` (folded in `(created_at, event_id)` order while keeping `original_decision` immutable).
 - **Role Context Hydration (`render_spawn`):** Non-overruled decisions matching `global`, the team's project lineage, or the team's ancestor lineage—along with bound Project details and `needs_improvement` guidance—are injected into `role_context.md.tmpl` via `{{PROJECT_DECISIONS_BLOCK}}` immediately before charters.
 
+### 3.9 Read-Only Web Visualization (`ultron/core/web.py` & `ultron/core/web/`)
+Zero-dependency local Mission Control dashboard launched by `python3 ultron/core/core.py ui [--port 8420] [--root <path>] [--no-open]` (see [`WEB_VISUALIZATION_SPEC.md`](WEB_VISUALIZATION_SPEC.md)):
+- **Strictly Read-Only HTTP Engine:** Stdlib `ThreadingHTTPServer` bound to `127.0.0.1` by default, accepting `GET`/`HEAD` only (`405 Method Not Allowed` with `Connection: close` on mutations) and creating zero lazy directories on read.
+- **`ETag` Conditional Polling (`LiveSync`):** Fast stat-based `ETag` (`st_ino`, `st_mtime_ns`, `st_size`) returns `304 Not Modified` when idle and isolates refresh triggers cleanly so optional SSE pings can be swapped in later without altering views.
+- **Decoupled Pixel-Art Visual Layer:** Design tokens (`tokens.css`) and crisp `16x16` inline SVG bot sprites (`sprites.js`, archetype + active/standby/archived states) stay decoupled from layout (`styles.css`) and CSP-safe DOM rendering (`app.js`) for future `ui-studio` visual polish.
+
 ---
 
 ## 4. Concurrency, Locking & Filesystem Atomicity
@@ -680,6 +686,7 @@ The ULTRON Core engine includes a comprehensive, automated test suite located at
 11. **Adapter Contract:** every adapter maps every tier, implements the full contract, reports identical role identity fields, and leaks no other harness's tool names.
 12. **Claude Code Lifecycle (fake `claude` binary):** spawn/stop/liveness, launch rollback, preflight refusals, per-role settings env, role guard on lifecycle commands.
 13. **Mixed Hives:** per-team harness, cross-harness spawn rules, shell doorbells for both harnesses (fake `agentapi` with live and stale daemon files), cascade refusal across harnesses.
+14. **Read-Only Web Visualization ([`tests/test_ultron_web.py`](../tests/test_ultron_web.py)):** `405` read-only enforcement + keep-alive safety, path traversal refusal, `ETag`/`304` cache consistency under concurrent writes, lazy-directory preservation, CSP headers, and `core.py ui` CLI / role guard coverage.
 
 Run the test suite anytime:
 ```bash
