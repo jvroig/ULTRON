@@ -641,6 +641,109 @@ pre,
   gap: var(--space-4);
 }
 
+/* Projects Topology Graph & Hierarchy Cards */
+.topo-panel {
+  margin-bottom: var(--space-4);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-card);
+}
+
+.topo-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.topo-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.topo-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.legend-line {
+  width: 22px;
+  height: 0;
+  display: inline-block;
+}
+
+.legend-solid {
+  border-top: 2px solid var(--accent-active);
+}
+
+.legend-dashed {
+  border-top: 2px dashed var(--accent-designer);
+}
+
+.topo-svg-wrap {
+  overflow-x: auto;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.topo-svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.topo-node {
+  cursor: pointer;
+}
+
+.topo-node:hover .topo-node-bg,
+.topo-node:focus-visible .topo-node-bg {
+  stroke: var(--accent-active);
+  fill: var(--bg-card-hover);
+}
+
+.project-card {
+  cursor: pointer;
+}
+
+.project-card:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-card-hover);
+}
+
+.project-meta-strip {
+  margin-top: var(--space-3);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.badge-rel {
+  color: #e9d5ff;
+  border-color: rgba(192, 132, 252, 0.45);
+  border-style: dashed;
+  background: rgba(192, 132, 252, 0.12);
+  cursor: pointer;
+}
+
+.badge-rel:hover {
+  background: rgba(192, 132, 252, 0.22);
+}
+
 .list-stack {
   display: flex;
   flex-direction: column;

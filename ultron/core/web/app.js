@@ -118,6 +118,34 @@
     return node;
   }
 
+  const SVG_NS = "http://www.w3.org/2000/svg";
+
+  function svgEl(tag, attrs, children) {
+    const node = document.createElementNS(SVG_NS, tag);
+    if (attrs) {
+      Object.keys(attrs).forEach((k) => {
+        const v = attrs[k];
+        if (v === undefined || v === null || v === false) return;
+        if (k === "text") {
+          node.textContent = String(v);
+        } else if (k === "className") {
+          node.setAttribute("class", String(v));
+        } else if (k.startsWith("on") && typeof v === "function") {
+          node.addEventListener(k.slice(2).toLowerCase(), v);
+        } else {
+          node.setAttribute(k, String(v));
+        }
+      });
+    }
+    if (children !== undefined && children !== null) {
+      const list = Array.isArray(children) ? children : [children];
+      list.forEach((child) => {
+        if (child) node.appendChild(child);
+      });
+    }
+    return node;
+  }
+
   function clearNode(node) {
     while (node.firstChild) {
       node.removeChild(node.firstChild);
@@ -559,6 +587,367 @@
   }
 
   // Tab 2: Projects Topology
+  function buildProjectTopologySvg(projects, byParent) {
+    const visibleSlugs = new Set(projects.map((p) => p.slug));
+    const nodeW = 248;
+    const nodeH = 78;
+    const colGap = 72;
+    const rowGap = 24;
+    const needsLeftGutter = projects.some((p) => {
+      const children = byParent.get(p.slug) || [];
+      if (p.parent_project && visibleSlugs.has(p.parent_project)) return false;
+      return (p.relationships || []).some((r) => {
+        if (!visibleSlugs.has(r.target)) return false;
+        const tgt = projects.find((x) => x.slug === r.target);
+        const tgtIsRoot = tgt && !(tgt.parent_project && visibleSlugs.has(tgt.parent_project));
+        return tgtIsRoot && (children.length > 0 || (byParent.get(tgt.slug) || []).length > 0);
+      });
+    });
+    const padX = needsLeftGutter ? 124 : 28;
+    const padY = 24;
+
+    const posMap = new Map();
+    const hierarchyEdges = [];
+    let leafRow = 0;
+    let maxDepth = 0;
+    const visited = new Set();
+
+    function layoutSubtree(proj, depth) {
+      if (!proj || visited.has(proj.slug)) return null;
+      visited.add(proj.slug);
+      maxDepth = Math.max(maxDepth, depth);
+      const children = (byParent.get(proj.slug) || []).filter((c) => !visited.has(c.slug));
+
+      let y = padY + leafRow * (nodeH + rowGap);
+      let firstY = y;
+      let lastY = y;
+
+      if (children.length === 0) {
+        leafRow += 1;
+      } else {
+        const spans = [];
+        children.forEach((child) => {
+          const sp = layoutSubtree(child, depth + 1);
+          if (sp) spans.push(sp);
+        });
+        if (spans.length > 0) {
+          firstY = spans[0].firstY;
+          lastY = spans[spans.length - 1].lastY;
+          y = Math.round((firstY + lastY) / 2);
+        } else {
+          leafRow += 1;
+        }
+      }
+
+      const x = padX + depth * (nodeW + colGap);
+      const nodeInfo = { proj: proj, depth: depth, x: x, y: y, hasChildren: children.length > 0 };
+      posMap.set(proj.slug, nodeInfo);
+
+      children.forEach((child) => {
+        const childPos = posMap.get(child.slug);
+        if (childPos) hierarchyEdges.push({ from: nodeInfo, to: childPos });
+      });
+
+      return { firstY: firstY, lastY: lastY };
+    }
+
+    (byParent.get("__root__") || []).forEach((rootProj) => layoutSubtree(rootProj, 0));
+
+    const relEdges = [];
+    projects.forEach((p) => {
+      const fromPos = posMap.get(p.slug);
+      if (!fromPos) return;
+      (p.relationships || []).forEach((r) => {
+        if (!visibleSlugs.has(r.target)) return;
+        const toPos = posMap.get(r.target);
+        if (toPos) {
+          relEdges.push({ from: fromPos, to: toPos, relation: r.relation, note: r.note || "" });
+        }
+      });
+    });
+
+    const maxNodeRight = padX + (maxDepth + 1) * nodeW + maxDepth * colGap;
+    const rightGutter = relEdges.length > 0 ? 156 + Math.max(0, relEdges.length - 1) * 34 : 28;
+    const svgW = Math.max(720, maxNodeRight + rightGutter);
+    const svgH = Math.max(
+      140,
+      padY * 2 + Math.max(1, leafRow) * nodeH + Math.max(0, leafRow - 1) * rowGap
+    );
+
+    const defs = svgEl("defs", null, [
+      svgEl(
+        "marker",
+        {
+          id: "topo-arrow",
+          viewBox: "0 0 10 10",
+          refX: "8",
+          refY: "5",
+          markerWidth: "7",
+          markerHeight: "7",
+          orient: "auto-start-reverse",
+        },
+        [svgEl("path", { d: "M 0 1.5 L 8.5 5 L 0 8.5 z", fill: "#c084fc" })]
+      ),
+    ]);
+
+    const edgesLayer = svgEl("g", { className: "topo-edges" });
+    hierarchyEdges.forEach(({ from, to }) => {
+      const sx = from.x + nodeW;
+      const sy = Math.round(from.y + nodeH / 2);
+      const tx = to.x;
+      const ty = Math.round(to.y + nodeH / 2);
+      const midX = Math.round((sx + tx) / 2);
+      edgesLayer.appendChild(
+        svgEl("path", {
+          d: "M " + sx + " " + sy + " C " + midX + " " + sy + ", " + midX + " " + ty + ", " + tx + " " + ty,
+          fill: "none",
+          stroke: "#22d3ee",
+          "stroke-opacity": "0.65",
+          "stroke-width": "2",
+        })
+      );
+      edgesLayer.appendChild(svgEl("circle", { cx: sx, cy: sy, r: 3, fill: "#22d3ee" }));
+      edgesLayer.appendChild(svgEl("circle", { cx: tx, cy: ty, r: 3, fill: "#22d3ee" }));
+    });
+
+    const relLayer = svgEl("g", { className: "topo-rels" });
+    relEdges.forEach((edge, idx) => {
+      const useLeft = edge.from.depth === 0 && edge.from.hasChildren || edge.to.depth === 0 && edge.to.hasChildren;
+      let sx;
+      let sy;
+      let tx;
+      let ty;
+      let cx1;
+      let cy1;
+      let cx2;
+      let cy2;
+
+      if (useLeft && edge.from.depth === 0 && edge.to.depth === 0) {
+        sx = edge.from.x;
+        sy = Math.round(edge.from.y + nodeH / 2);
+        tx = edge.to.x - 4;
+        ty = Math.round(edge.to.y + nodeH / 2);
+        const leftLane = Math.max(24, padX - 64 - idx * 14);
+        cx1 = leftLane;
+        cy1 = sy;
+        cx2 = leftLane;
+        cy2 = ty;
+      } else {
+        sx = edge.from.x + nodeW;
+        sy = Math.round(edge.from.y + nodeH / 2);
+        tx = edge.to.x + nodeW + 4;
+        ty = Math.round(edge.to.y + nodeH / 2);
+        const rightLane = maxNodeRight + 74 + idx * 34;
+        cx1 = rightLane;
+        cy1 = sy;
+        cx2 = rightLane;
+        cy2 = ty;
+      }
+
+      const d =
+        "M " +
+        sx +
+        " " +
+        sy +
+        " C " +
+        cx1 +
+        " " +
+        cy1 +
+        ", " +
+        cx2 +
+        " " +
+        cy2 +
+        ", " +
+        tx +
+        " " +
+        ty;
+      const pathEl = svgEl("path", {
+        d: d,
+        fill: "none",
+        stroke: "#c084fc",
+        "stroke-opacity": "0.85",
+        "stroke-width": "1.75",
+        "stroke-dasharray": "5 4",
+        "marker-end": "url(#topo-arrow)",
+      });
+      pathEl.appendChild(
+        svgEl("title", {
+          text:
+            edge.from.proj.slug +
+            " " +
+            edge.relation +
+            " " +
+            edge.to.proj.slug +
+            (edge.note ? " — " + edge.note : ""),
+        })
+      );
+      relLayer.appendChild(pathEl);
+
+      // Bezier midpoint at t=0.5 puts pill label directly on the curve outside boxes
+      const lx = Math.round(0.125 * sx + 0.375 * cx1 + 0.375 * cx2 + 0.125 * tx);
+      const ly = Math.round(0.125 * sy + 0.375 * cy1 + 0.375 * cy2 + 0.125 * ty);
+      const labelText = edge.relation;
+      const pillW = Math.max(76, labelText.length * 7 + 16);
+      relLayer.appendChild(
+        svgEl("rect", {
+          x: lx - Math.round(pillW / 2),
+          y: ly - 10,
+          width: pillW,
+          height: 20,
+          rx: 5,
+          fill: "#101624",
+          stroke: "#c084fc",
+          "stroke-opacity": "0.7",
+          "stroke-width": "1",
+        })
+      );
+      relLayer.appendChild(
+        svgEl("text", {
+          x: lx,
+          y: ly + 4,
+          "text-anchor": "middle",
+          fill: "#e9d5ff",
+          "font-size": "10.5",
+          "font-family": "ui-monospace, SFMono-Regular, Menlo, monospace",
+          "font-weight": "600",
+          text: labelText,
+        })
+      );
+    });
+
+    const nodesLayer = svgEl("g", { className: "topo-nodes" });
+    posMap.forEach(({ proj, x, y }) => {
+      const statusColor =
+        proj.status === "archived"
+          ? "#475569"
+          : proj.status === "paused"
+            ? "#f59e0b"
+            : "#22d3ee";
+      const rawTitle = String(proj.name || proj.slug);
+      const shortTitle = rawTitle.length > 26 ? rawTitle.slice(0, 24) + "…" : rawTitle;
+      const subLine = "L" + (proj.layer || 1) + " · " + proj.slug + (proj.subpath ? " / " + proj.subpath : "");
+      const shortSub = subLine.length > 31 ? subLine.slice(0, 29) + "…" : subLine;
+      const teamsLabel = (proj.teams || []).length + " team" + ((proj.teams || []).length === 1 ? "" : "s");
+
+      const group = svgEl(
+        "g",
+        {
+          className: "topo-node",
+          transform: "translate(" + x + "," + y + ")",
+          role: "button",
+          tabindex: "0",
+          onClick: () => openProjectDrawer(proj.slug),
+          onKeydown: (ev) => {
+            if (ev.key === "Enter" || ev.key === " ") {
+              ev.preventDefault();
+              openProjectDrawer(proj.slug);
+            }
+          },
+        },
+        [
+          svgEl("title", { text: rawTitle + " — " + (proj.effective_target_path || proj.slug) }),
+          svgEl("rect", {
+            className: "topo-node-bg",
+            x: 0,
+            y: 0,
+            width: nodeW,
+            height: nodeH,
+            rx: 8,
+            fill: "#151d2f",
+            stroke: proj.status === "archived" ? "#334155" : "rgba(148, 163, 184, 0.32)",
+            "stroke-width": "1.2",
+          }),
+          svgEl("rect", {
+            x: 0,
+            y: 8,
+            width: 4,
+            height: nodeH - 16,
+            rx: 2,
+            fill: statusColor,
+          }),
+          svgEl("text", {
+            x: 16,
+            y: 25,
+            fill: "#eef4ff",
+            "font-size": "13",
+            "font-weight": "700",
+            "font-family": "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif",
+            text: shortTitle,
+          }),
+          svgEl("text", {
+            x: 16,
+            y: 44,
+            fill: "#9fb0c7",
+            "font-size": "11",
+            "font-family": "ui-monospace, SFMono-Regular, Menlo, monospace",
+            text: shortSub,
+          }),
+          svgEl("rect", {
+            x: 16,
+            y: 53,
+            width: 66,
+            height: 17,
+            rx: 4,
+            fill: "#0b101b",
+            stroke: "rgba(34, 211, 238, 0.3)",
+            "stroke-width": "1",
+          }),
+          svgEl("text", {
+            x: 49,
+            y: 65,
+            "text-anchor": "middle",
+            fill: "#22d3ee",
+            "font-size": "10",
+            "font-family": "ui-monospace, SFMono-Regular, Menlo, monospace",
+            "font-weight": "600",
+            text: teamsLabel,
+          }),
+          svgEl("text", {
+            x: nodeW - 14,
+            y: 65,
+            "text-anchor": "end",
+            fill: statusColor,
+            "font-size": "10",
+            "font-family": "ui-monospace, SFMono-Regular, Menlo, monospace",
+            "font-weight": "700",
+            text: upperStatus(proj.status, "active"),
+          }),
+        ]
+      );
+      nodesLayer.appendChild(group);
+    });
+
+    const svg = svgEl(
+      "svg",
+      {
+        className: "topo-svg",
+        viewBox: "0 0 " + svgW + " " + svgH,
+        width: svgW,
+        height: svgH,
+        role: "img",
+        "aria-label": "Projects Hierarchy and Relationships Diagram",
+      },
+      [defs, edgesLayer, relLayer, nodesLayer]
+    );
+
+    return el("section", { className: "topo-panel" }, [
+      el("div", { className: "topo-header" }, [
+        el("h3", { className: "panel-card-title", text: "Topology Map" }),
+        el("div", { className: "topo-legend" }, [
+          el("span", { className: "topo-legend-item" }, [
+            el("span", { className: "legend-line legend-solid" }),
+            "Sub-project hierarchy",
+          ]),
+          el("span", { className: "topo-legend-item" }, [
+            el("span", { className: "legend-line legend-dashed" }),
+            "Cross-project relationship",
+          ]),
+        ]),
+      ]),
+      el("div", { className: "topo-svg-wrap" }, [svg]),
+    ]);
+  }
+
   function renderProjectsView(container) {
     const snap = state.snapshot;
     const allProjects = snap.projects || [];
@@ -580,47 +969,114 @@
       return;
     }
 
-    const grid = el("div", { className: "card-grid" });
+    const visibleSlugs = new Set(projects.map((p) => p.slug));
+    const byParent = new Map();
     projects.forEach((p) => {
+      const pKey = p.parent_project && visibleSlugs.has(p.parent_project) ? p.parent_project : "__root__";
+      if (!byParent.has(pKey)) byParent.set(pKey, []);
+      byParent.get(pKey).push(p);
+    });
+    byParent.forEach((arr) =>
+      arr.sort((a, b) => (a.layer || 1) - (b.layer || 1) || String(a.slug || "").localeCompare(String(b.slug || "")))
+    );
+
+    container.appendChild(buildProjectTopologySvg(projects, byParent));
+
+    const treeWrap = el("div", { className: "hive-tree" });
+    const teamsBySlug = new Map((snap.teams || []).map((t) => [t.slug, t]));
+
+    function buildProjectNode(p) {
+      const children = byParent.get(p.slug) || [];
       const statusCls =
         p.status === "archived" ? "badge-archived" : p.status === "paused" ? "badge-warn" : "badge-active";
-      const relChips = (p.relationships || []).map((r) =>
-        el("span", { className: "badge", text: r.relation + " -> " + r.target })
-      );
-      grid.appendChild(
-        el(
-          "article",
-          { className: "panel-card", onClick: () => openProjectDrawer(p.slug) },
+
+      const teamChips = (p.teams || []).map((t) => {
+        const fullTeam = teamsBySlug.get(t.slug);
+        const dotCls = fullTeam && fullTeam.archived ? "archived" : t.status === "active" ? "active" : "standby";
+        return el(
+          "button",
+          {
+            className: "btn btn-sm btn-ghost",
+            type: "button",
+            onClick: (ev) => {
+              ev.stopPropagation();
+              openTeamDrawer(t.slug, null);
+            },
+          },
           [
-            el("div", { className: "panel-card-header" }, [
-              el("h3", { className: "panel-card-title", text: p.name || p.slug }),
-              el("span", { className: "badge " + statusCls, text: upperStatus(p.status, "active") }),
-            ]),
-            el("div", { className: "team-badges", style: "margin-bottom:8px;" }, [
-              el("span", { className: "badge mono", text: "L" + (p.layer || 1) + " · " + p.slug }),
-              p.parent_project
-                ? el("span", { className: "badge", text: "parent:" + p.parent_project })
-                : null,
-            ]),
-            p.description ? el("p", { className: "panel-card-body", text: p.description }) : null,
-            p.effective_target_path
-              ? el("div", {
-                  className: "team-path-row mono",
-                  text: "path: " + p.effective_target_path,
-                })
-              : null,
-            relChips.length > 0
-              ? el("div", { className: "team-badges", style: "margin-top:8px;" }, relChips)
-              : null,
-            el("div", { className: "panel-card-footer" }, [
-              el("span", { text: (p.teams || []).length + " bound team(s)" }),
-              el("span", { text: (p.subprojects || []).length + " subproject(s)" }),
-            ]),
+            el("span", { className: "status-dot " + dotCls }),
+            t.slug,
+            el("span", { className: "badge", text: t.lifespan || "permanent" }),
           ]
-        )
+        );
+      });
+
+      const relChips = (p.relationships || []).map((r) =>
+        el("button", {
+          className: "badge badge-rel",
+          type: "button",
+          title: r.note || r.relation + " -> " + r.target,
+          text: r.relation + " -> " + r.target,
+          onClick: (ev) => {
+            ev.stopPropagation();
+            openProjectDrawer(r.target);
+          },
+        })
       );
-    });
-    container.appendChild(grid);
+
+      const card = el(
+        "article",
+        {
+          className: "team-card project-card" + (p.status === "archived" ? " is-archived" : ""),
+          onClick: () => openProjectDrawer(p.slug),
+        },
+        [
+          el("div", { className: "team-header" }, [
+            el("div", { className: "team-title-block" }, [
+              el("div", { className: "team-title-row" }, [
+                el("h3", { className: "team-name", text: p.name || p.slug }),
+                el("span", { className: "badge mono", text: "L" + (p.layer || 1) + " · " + p.slug }),
+                p.subpath ? el("span", { className: "badge mono", text: "subpath:" + p.subpath }) : null,
+              ]),
+              p.description ? el("p", { className: "team-mission", text: p.description }) : null,
+            ]),
+            el("div", { className: "team-badges" }, [
+              el("span", { className: "badge " + statusCls, text: upperStatus(p.status, "active") }),
+              el("span", { className: "badge", text: (p.subprojects || []).length + " subproject(s)" }),
+            ]),
+          ]),
+          p.effective_target_path
+            ? el("div", {
+                className: "team-path-row mono",
+                text: "path: " + p.effective_target_path,
+              })
+            : null,
+          teamChips.length > 0 || relChips.length > 0
+            ? el("div", { className: "project-meta-strip" }, [
+                teamChips.length > 0
+                  ? el("div", { className: "team-badges" }, teamChips)
+                  : null,
+                relChips.length > 0
+                  ? el("div", { className: "team-badges" }, relChips)
+                  : null,
+              ])
+            : null,
+        ]
+      );
+
+      const nodeWrap = el("div", { className: "hive-node" }, [card]);
+      if (children.length > 0) {
+        const childBox = el("div", { className: "hive-children" });
+        children.forEach((child) => childBox.appendChild(buildProjectNode(child)));
+        nodeWrap.appendChild(childBox);
+      }
+      return nodeWrap;
+    }
+
+    (byParent.get("__root__") || []).forEach((rootProj) =>
+      treeWrap.appendChild(buildProjectNode(rootProj))
+    );
+    container.appendChild(treeWrap);
   }
 
   // Tab 3: Prime Decisions Queue
