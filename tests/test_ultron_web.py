@@ -278,6 +278,36 @@ class UltronWebServerTestCase(unittest.TestCase):
             self.assertEqual(kwargs["port"], 8491)
             self.assertFalse(kwargs["open_browser"])
 
+    def test_real_web_assets_serve_cleanly(self) -> None:
+        from ultron.core.web import ALLOWED_ASSETS, WEB_ASSETS_DIR
+
+        srv = create_server(self.core, host="127.0.0.1", port=0, quiet=True)
+        port = srv.server_address[1]
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        try:
+            self.assertTrue((WEB_ASSETS_DIR / "index.html").is_file())
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            try:
+                conn.request("GET", "/")
+                r = conn.getresponse()
+                body = r.read().decode("utf-8")
+                self.assertEqual(r.status, 200)
+                self.assertIn("ULTRON Mission Control", body)
+                for asset in sorted(ALLOWED_ASSETS):
+                    conn.request("GET", f"/assets/{asset}")
+                    ra = conn.getresponse()
+                    ba = ra.read()
+                    self.assertEqual(ra.status, 200, msg=f"Failed serving {asset}")
+                    self.assertGreater(len(ba), 50)
+                    self.assertNotIn(b"innerHTML", ba)
+            finally:
+                conn.close()
+        finally:
+            srv.shutdown()
+            srv.server_close()
+            t.join(timeout=2)
+
 
 if __name__ == "__main__":
     unittest.main()

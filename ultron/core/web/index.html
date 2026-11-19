@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ULTRON Mission Control — Read-Only Hive Visualizer</title>
+    <link rel="stylesheet" href="/assets/tokens.css" />
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <script defer src="/assets/sprites.js"></script>
+    <script defer src="/assets/app.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-left">
+        <div id="prime-brand-sprite" class="brand-sprite-slot"></div>
+        <div class="brand-meta">
+          <div class="brand-title-row">
+            <h1 class="brand-title">ULTRON Mission Control</h1>
+            <span class="badge badge-ro">READ-ONLY</span>
+            <span id="repo-badge" class="badge badge-repo">...</span>
+          </div>
+          <p class="brand-sub" id="sync-status-line">Connecting to core snapshot...</p>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <button id="pending-pill" class="pill-btn pill-warn hidden" type="button" title="Jump to pending autonomous Prime Decisions"></button>
+
+        <label class="toggle-chip" for="toggle-archived">
+          <input id="toggle-archived" type="checkbox" />
+          <span>Show Archived</span>
+        </label>
+
+        <button id="btn-pause" class="btn btn-ghost" type="button">Pause Sync</button>
+        <button id="btn-refresh" class="btn btn-ghost" type="button">Refresh</button>
+        <button id="btn-verify" class="btn btn-secondary" type="button">Verify</button>
+        <button id="btn-liveness" class="btn btn-secondary" type="button">Liveness</button>
+      </div>
+    </header>
+
+    <section id="diag-banner" class="diag-banner hidden" aria-live="polite"></section>
+
+    <section id="stats-strip" class="stats-strip" aria-label="System Telemetry"></section>
+
+    <nav class="tabbar" role="tablist" aria-label="Mission Control Views">
+      <button class="tab-btn active" data-tab="hive" role="tab" aria-selected="true" type="button">
+        Hive Command Deck <span class="tab-count" id="count-hive">0</span>
+      </button>
+      <button class="tab-btn" data-tab="projects" role="tab" aria-selected="false" type="button">
+        Projects Topology <span class="tab-count" id="count-projects">0</span>
+      </button>
+      <button class="tab-btn" data-tab="decisions" role="tab" aria-selected="false" type="button">
+        Prime Decisions <span class="tab-count" id="count-decisions">0</span>
+      </button>
+      <button class="tab-btn" data-tab="board" role="tab" aria-selected="false" type="button">
+        Board Activity <span class="tab-count" id="count-board">0</span>
+      </button>
+    </nav>
+
+    <main id="main-view" class="main-view"></main>
+
+    <div id="drawer-backdrop" class="drawer-backdrop hidden"></div>
+    <aside id="inspector-drawer" class="drawer hidden" aria-label="Inspector Drawer">
+      <div class="drawer-header">
+        <div>
+          <div id="drawer-kicker" class="drawer-kicker"></div>
+          <h2 id="drawer-title" class="drawer-title"></h2>
+        </div>
+        <button id="drawer-close" class="btn btn-ghost" type="button" aria-label="Close Inspector">Close (Esc)</button>
+      </div>
+      <div id="drawer-body" class="drawer-body"></div>
+    </aside>
+
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+  </body>
+</html>
