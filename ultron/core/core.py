@@ -76,7 +76,7 @@ PRIME_ONLY_COMMANDS = frozenset({
     "activate-agent", "activate-team", "add-role", "create-project", "create-team", "disable-agent",
     "disable-team", "link-project", "log-decision", "register-prime", "remove-project", "remove-team",
     "review-decision", "set-campaign", "set-harness", "set-lifespan", "set-project", "set-target-repo",
-    "spawn-team", "stop-team", "update-project",
+    "spawn-team", "stop-team", "ui", "update-project",
 })
 SUPPRESSING_MEMORY_FILES = ("CLAUDE.md", "CLAUDE.local.md")
 ROLE_CLAUDE_SETTINGS = {
@@ -5240,6 +5240,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_rd.add_argument("--replacement", default="", help="Replacement ruling text (preserves original_decision)")
     p_rd.add_argument("--reviewer", default="user", help="Reviewer identity (default: user)")
 
+    # Read-only Mission Control Web UI
+    p_ui = add_cmd("ui", "Launch local read-only ULTRON Mission Control web dashboard (Prime-only)")
+    p_ui.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
+    p_ui.add_argument("--port", type=int, default=8420, help="HTTP port (default: 8420)")
+    p_ui.add_argument("--no-open", action="store_true", help="Do not open default browser automatically")
+
     return parser
 
 
@@ -6058,6 +6064,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(
                     f"[ULTRON] Reviewed Decision {res['id']} -> {res['review_status']} ({res['title']})"
                 )
+
+        elif cmd == "ui":
+            try:
+                from ultron.core.web import serve as web_serve
+            except ImportError:
+                from web import serve as web_serve  # type: ignore[no-redef]
+            return web_serve(
+                core,
+                host=args.host,
+                port=args.port,
+                open_browser=not args.no_open,
+            )
 
         return 0
 
