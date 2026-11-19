@@ -273,10 +273,97 @@ class UltronWebServerTestCase(unittest.TestCase):
             rc = core_main(["--root", str(self.root), "ui", "--port", "8491", "--no-open"])
             self.assertEqual(rc, 0)
             mocked_serve.assert_called_once()
-            _, kwargs = mocked_serve.call_args
+            call_args, kwargs = mocked_serve.call_args
+            self.assertEqual(call_args[0].repo_root, self.root)
             self.assertEqual(kwargs["host"], "127.0.0.1")
             self.assertEqual(kwargs["port"], 8491)
             self.assertFalse(kwargs["open_browser"])
+
+    def test_tier2_web_audit_fixes_and_cli_flag_ordering(self) -> None:
+        from ultron.core.web import compute_state_etag, main as web_main
+
+        # 1. Keep-alive POST with body returns 405 + Connection: close; subsequent GET works cleanly
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            conn.request(
+                "POST",
+                "/api/snapshot",
+                body=b'{"x":1}',
+                headers={"Content-Type": "application/json", "Content-Length": "7"},
+            )
+            r1 = conn.getresponse()
+            r1.read()
+            self.assertEqual(r1.status, 405)
+            self.assertEqual(r1.getheader("connection"), "close")
+            conn.request("GET", "/api/health")
+            r2 = conn.getresponse()
+            self.assertEqual(r2.status, 200)
+            self.assertTrue(json.loads(r2.read().decode("utf-8"))["ok"])
+        finally:
+            conn.close()
+
+        # 2. Backslash & null-byte refs return 404 (not 400/500)
+        self.assertEqual(self.request("GET", "/api/threads/..%5Ccore")[0], 404)
+        self.assertEqual(self.request("GET", "/api/decisions/bad%00id")[0], 404)
+
+        # 3. compute_state_etag reflects blueprints_dir changes
+        etag_before = compute_state_etag(self.core)
+        bp_dir = self.root / "ultron/core/blueprints/custom-bp"
+        bp_dir.mkdir(parents=True, exist_ok=True)
+        (bp_dir / "blueprint.json").write_text('{"slug":"custom-bp"}\n', encoding="utf-8")
+        self.assertNotEqual(compute_state_etag(self.core), etag_before)
+
+        # 4. Concurrent ETag change during build_snapshot retries & never poisons cache
+        etags = iter(['"etag-a"', '"etag-b"', '"etag-c"', '"etag-c"'])
+        with (
+            mock.patch("ultron.core.web.compute_state_etag", side_effect=lambda _c: next(etags)),
+            mock.patch("ultron.core.web.build_snapshot", return_value={"snap": 1}),
+        ):
+            st, et, body = self.server.get_snapshot_payload(None)
+            self.assertEqual(st, 200)
+            self.assertEqual(et, '"etag-c"')
+            self.assertEqual(self.server._cached_etag, '"etag-c"')
+            self.assertIsNotNone(body)
+
+        # Persistent ETag churn across both retries does not poison cache with stale tag
+        self.server._cached_etag = None
+        self.server._cached_snapshot = None
+        churn_etags = iter(['"e1"', '"e2"', '"e3"', '"e4"'])
+        with (
+            mock.patch("ultron.core.web.compute_state_etag", side_effect=lambda _c: next(churn_etags)),
+            mock.patch("ultron.core.web.build_snapshot", return_value={"snap": 2}),
+        ):
+            st2, et2, _ = self.server.get_snapshot_payload(None)
+            self.assertEqual(st2, 200)
+            self.assertEqual(et2, '"e4"')
+            self.assertIsNone(self.server._cached_etag)
+
+        # 5. Direct web.py main() enforces ULTRON_AGENT_ID prime-only guard
+        import contextlib
+        import io
+
+        err_buf = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, {"ULTRON_AGENT_ID": "team/coder"}),
+            contextlib.redirect_stderr(err_buf),
+        ):
+            self.assertEqual(web_main(["--root", str(self.root), "--no-open"]), 1)
+        self.assertIn("ultron-prime only", err_buf.getvalue())
+
+        # 6. CLI --root and --json work both BEFORE and AFTER any subcommand
+        for argv in (
+            ["--root", str(self.root), "--json", "stats"],
+            ["stats", "--root", str(self.root), "--json"],
+        ):
+            res = subprocess.run(
+                [sys.executable, str(REPO_ROOT / "ultron/core/core.py"), *argv],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(res.returncode, 0, msg=res.stderr)
+            parsed = json.loads(res.stdout)
+            self.assertEqual(Path(parsed["repo_root"]).resolve(), self.root)
 
     def test_real_web_assets_serve_cleanly(self) -> None:
         from ultron.core.web import ALLOWED_ASSETS, WEB_ASSETS_DIR

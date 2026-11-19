@@ -30,7 +30,7 @@ ASSET_MIME_TYPES = {
 }
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8420
-LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost"})
 
 WATCHED_FILENAMES = frozenset({"AGENTS.md", ".gitattributes"})
 WATCHED_SUFFIXES = (".json", ".jsonl")
@@ -52,13 +52,28 @@ def compute_state_etag(core: Any) -> str:
     if core.sessions_file.is_file():
         try:
             st = core.sessions_file.stat()
-            entries.append(f".runtime/sessions.json:{st.st_mtime_ns}:{st.st_size}")
+            entries.append(
+                f".runtime/sessions.json:{st.st_ino}:{st.st_mtime_ns}:{st.st_size}"
+            )
         except OSError:
             pass
 
-    for root_dir in (core.hive_dir, core.projects_dir, core.decisions_dir, core.threads_dir):
-        if not root_dir.is_dir():
+    seen_dirs: set[Path] = set()
+    watch_dirs: List[Path] = [
+        core.hive_dir,
+        core.projects_dir,
+        core.decisions_dir,
+        core.threads_dir,
+        getattr(core, "blueprints_dir", Path("")),
+        getattr(core, "_builtin_blueprints_dir", Path("")),
+    ]
+    for root_dir in watch_dirs:
+        if not root_dir or not str(root_dir) or not root_dir.is_dir():
             continue
+        resolved_dir = root_dir.resolve()
+        if resolved_dir in seen_dirs:
+            continue
+        seen_dirs.add(resolved_dir)
         for dirpath, dirnames, filenames in os.walk(root_dir, followlinks=False):
             dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
             for fname in sorted(filenames):
@@ -75,7 +90,7 @@ def compute_state_etag(core: Any) -> str:
                     rel = fpath.relative_to(core.repo_root).as_posix()
                 except ValueError:
                     rel = fpath.as_posix()
-                entries.append(f"{rel}:{st.st_mtime_ns}:{st.st_size}")
+                entries.append(f"{rel}:{st.st_ino}:{st.st_mtime_ns}:{st.st_size}")
 
     entries.sort()
     digest = hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()[:24]
@@ -152,20 +167,22 @@ class UltronWebServer(ThreadingHTTPServer):
 
     def get_snapshot_payload(self, if_none_match: Optional[str]) -> Tuple[int, str, Optional[bytes]]:
         with self._cache_lock:
-            etag = compute_state_etag(self.core)
-            if _etag_matches(if_none_match, etag):
-                return HTTPStatus.NOT_MODIFIED, etag, None
-            if self._cached_etag == etag and self._cached_snapshot is not None:
-                return HTTPStatus.OK, etag, self._cached_snapshot
-            snapshot = build_snapshot(self.core)
-            payload = json.dumps(
-                snapshot, ensure_ascii=False, separators=(",", ":")
-            ).encode("utf-8")
-            etag_after = compute_state_etag(self.core)
-            self._cached_etag = etag_after
-            self._cached_snapshot = payload
-            if _etag_matches(if_none_match, etag_after):
-                return HTTPStatus.NOT_MODIFIED, etag_after, None
+            for _ in range(2):
+                etag = compute_state_etag(self.core)
+                if _etag_matches(if_none_match, etag):
+                    return HTTPStatus.NOT_MODIFIED, etag, None
+                if self._cached_etag == etag and self._cached_snapshot is not None:
+                    return HTTPStatus.OK, etag, self._cached_snapshot
+                snapshot = build_snapshot(self.core)
+                payload = json.dumps(
+                    snapshot, ensure_ascii=False, separators=(",", ":")
+                ).encode("utf-8")
+                etag_after = compute_state_etag(self.core)
+                if etag_after == etag:
+                    self._cached_etag = etag
+                    self._cached_snapshot = payload
+                    return HTTPStatus.OK, etag, payload
+            # Concurrent external writes persisted across both attempts; return fresh response without caching mismatch
             return HTTPStatus.OK, etag_after, payload
 
 
@@ -236,10 +253,11 @@ class UltronWebHandler(BaseHTTPRequestHandler):
         )
 
     def _reject_mutation(self) -> None:
+        self.close_connection = True
         self._send_json(
             HTTPStatus.METHOD_NOT_ALLOWED,
             {"ok": False, "error": "ULTRON Web UI is strictly read-only."},
-            extra_headers={"Allow": "GET, HEAD"},
+            extra_headers={"Allow": "GET, HEAD", "Connection": "close"},
         )
 
     def do_POST(self) -> None:
@@ -315,6 +333,16 @@ class UltronWebHandler(BaseHTTPRequestHandler):
         )
 
     def _dispatch(self, head_only: bool) -> None:
+        try:
+            self._dispatch_inner(head_only=head_only)
+        except Exception as exc:
+            self._send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"ok": False, "error": str(exc)},
+                head_only=head_only,
+            )
+
+    def _dispatch_inner(self, head_only: bool) -> None:
         parsed = urlparse(self.path)
         raw_path = parsed.path or "/"
 
@@ -339,17 +367,9 @@ class UltronWebHandler(BaseHTTPRequestHandler):
             return
 
         if raw_path == "/api/snapshot":
-            try:
-                status, etag, payload = self.server.get_snapshot_payload(
-                    self.headers.get("If-None-Match")
-                )
-            except (ValueError, OSError, RuntimeError) as exc:
-                self._send_json(
-                    HTTPStatus.INTERNAL_SERVER_ERROR,
-                    {"ok": False, "error": str(exc)},
-                    head_only=head_only,
-                )
-                return
+            status, etag, payload = self.server.get_snapshot_payload(
+                self.headers.get("If-None-Match")
+            )
             if status == HTTPStatus.NOT_MODIFIED:
                 self._send_empty(
                     HTTPStatus.NOT_MODIFIED,
@@ -368,7 +388,7 @@ class UltronWebHandler(BaseHTTPRequestHandler):
 
         if raw_path.startswith("/api/threads/"):
             ref = unquote(raw_path[len("/api/threads/") :])
-            if not ref or "/" in ref:
+            if not ref or "/" in ref or "\\" in ref or "\x00" in ref:
                 self._send_json(
                     HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found"}, head_only=head_only
                 )
@@ -392,7 +412,7 @@ class UltronWebHandler(BaseHTTPRequestHandler):
 
         if raw_path.startswith("/api/decisions/"):
             ref = unquote(raw_path[len("/api/decisions/") :])
-            if not ref or "/" in ref:
+            if not ref or "/" in ref or "\\" in ref or "\x00" in ref:
                 self._send_json(
                     HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found"}, head_only=head_only
                 )
@@ -430,7 +450,7 @@ class UltronWebHandler(BaseHTTPRequestHandler):
             try:
                 res = self.server.core.probe_liveness(team_slug=team)
                 self._send_json(HTTPStatus.OK, {"ok": True, **res}, head_only=head_only)
-            except (ValueError, RuntimeError, FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            except (ValueError, RuntimeError, FileNotFoundError, OSError, subprocess.TimeoutExpired) as exc:
                 self._send_json(
                     HTTPStatus.OK, {"ok": False, "error": str(exc)}, head_only=head_only
                 )
@@ -500,6 +520,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Port (default: {DEFAULT_PORT})")
     parser.add_argument("--no-open", action="store_true", help="Do not launch default browser")
     args = parser.parse_args(argv)
+    role_id = os.environ.get("ULTRON_AGENT_ID", "").strip()
+    if role_id and role_id != PRIME_ID:
+        print(
+            f"[ULTRON Error] 'ui' is for {PRIME_ID} only; this shell belongs to role '{role_id}'.",
+            file=sys.stderr,
+        )
+        return 1
     core = UltronCore(repo_root=args.root)
     return serve(core, host=args.host, port=args.port, open_browser=not args.no_open)
 

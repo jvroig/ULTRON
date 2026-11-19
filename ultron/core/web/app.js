@@ -3,7 +3,7 @@
 
   const Sprites = window.UltronSprites;
 
-  // Isolated ETag polling transport; can be replaced with SSE invalidation later without touching views.
+  // Isolated ETag polling transport; can be swapped to SSE invalidation later without touching views.
   class LiveSync {
     constructor(intervalMs, onSnapshot, onStatus) {
       this.intervalMs = intervalMs;
@@ -81,6 +81,7 @@
     activeTab: "hive",
     showArchived: false,
     drawerMode: null,
+    drawerRequestSeq: 0,
     decisionFilters: { status: "", origin: "", scope: "", query: "" },
     boardFilters: { visibility: "", status: "", team: "", query: "" },
     toastTimer: null,
@@ -123,6 +124,29 @@
     }
   }
 
+  async function fetchJson(url) {
+    const resp = await fetch(url, { cache: "no-store" });
+    const raw = await resp.text();
+    let parsed = null;
+    try {
+      parsed = raw ? JSON.parse(raw) : {};
+    } catch (_err) {
+      throw new Error("HTTP " + resp.status + ": " + (raw.slice(0, 140) || "Invalid JSON response"));
+    }
+    if (!resp.ok) {
+      throw new Error((parsed && parsed.error) || "HTTP " + resp.status);
+    }
+    return parsed;
+  }
+
+  function shellQuote(value) {
+    return "'" + String(value || "").replace(/'/g, "'\"'\"'") + "'";
+  }
+
+  function upperStatus(value, fallback) {
+    return String(value || fallback || "unknown").toUpperCase();
+  }
+
   function showToast(msg) {
     const toast = document.getElementById("toast");
     toast.textContent = msg;
@@ -162,7 +186,13 @@
 
   function shortTime(isoStr) {
     if (!isoStr) return "—";
-    return String(isoStr).replace("T", " ").slice(0, 19) + "Z";
+    const s = String(isoStr).trim();
+    if (!s) return "—";
+    const parsed = new Date(s);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString().replace("T", " ").slice(0, 19) + "Z";
+    }
+    return s;
   }
 
   function cliSnippetBox(label, cmd) {
@@ -193,16 +223,16 @@
   }
 
   function formatScopeBadge(d) {
-    if (d.scope === "project" && d.project_slug) return "project:" + d.project_slug;
-    if (d.scope === "team" && d.team_slug) return "team:" + d.team_slug;
-    return d.scope || "global";
+    if (d && d.scope === "project" && d.project_slug) return "project:" + d.project_slug;
+    if (d && d.scope === "team" && d.team_slug) return "team:" + d.team_slug;
+    return (d && d.scope) || "global";
   }
 
   function formatThreadScope(t) {
-    if (t.visibility === "personal") return "personal:" + (t.owner_agent || "");
-    if (t.visibility === "team") {
+    if (t && t.visibility === "personal") return "personal:" + (t.owner_agent || "");
+    if (t && t.visibility === "team") {
       return t.with_team
-        ? "team:" + t.team_slug + "<->" + t.with_team
+        ? "team:" + (t.team_slug || "") + "<->" + t.with_team
         : "team:" + (t.team_slug || "");
     }
     return "global";
@@ -228,10 +258,31 @@
     );
   }
 
+  function buildTruncationNotice(shownCount, totalCount, noun) {
+    if (!totalCount || shownCount >= totalCount) return null;
+    return el("div", {
+      className: "badge badge-warn",
+      style: "margin-bottom:12px;display:inline-flex;",
+      text:
+        "Showing latest " +
+        shownCount +
+        " of " +
+        totalCount +
+        " " +
+        noun +
+        "; use the core CLI to query older entries.",
+    });
+  }
+
   // Top Header & Stats Strip
   function renderHeader() {
     const snap = state.snapshot;
     if (!snap) return;
+
+    const teams = snap.teams || [];
+    const projects = snap.projects || [];
+    const decisions = snap.decisions || [];
+    const threads = snap.threads || [];
 
     const primeSlot = document.getElementById("prime-brand-sprite");
     clearNode(primeSlot);
@@ -244,21 +295,20 @@
     const pendingCount = (snap.stats && snap.stats.pending_decisions) || 0;
     const pendingBtn = document.getElementById("pending-pill");
     if (pendingCount > 0) {
-      pendingBtn.textContent = pendingCount + " Decision" + (pendingCount === 1 ? "" : "s") + " Pending Review";
+      pendingBtn.textContent =
+        pendingCount + " Decision" + (pendingCount === 1 ? "" : "s") + " Pending Review";
       pendingBtn.classList.remove("hidden");
     } else {
       pendingBtn.classList.add("hidden");
     }
 
-    const visibleTeams = state.showArchived
-      ? snap.teams
-      : snap.teams.filter((t) => !t.archived);
+    const visibleTeams = state.showArchived ? teams : teams.filter((t) => !t.archived);
     document.getElementById("count-hive").textContent = String(visibleTeams.length);
     document.getElementById("count-projects").textContent = String(
-      (state.showArchived ? snap.projects : snap.projects.filter((p) => p.status !== "archived")).length
+      (state.showArchived ? projects : projects.filter((p) => p.status !== "archived")).length
     );
-    document.getElementById("count-decisions").textContent = String(snap.decisions.length);
-    document.getElementById("count-board").textContent = String(snap.threads.length);
+    document.getElementById("count-decisions").textContent = String(decisions.length);
+    document.getElementById("count-board").textContent = String(threads.length);
 
     const stats = snap.stats || {};
     const strip = document.getElementById("stats-strip");
@@ -313,6 +363,8 @@
     const snap = state.snapshot;
     const prime = snap.prime || {};
     const primeState = Sprites.stateForAgent(prime, null);
+    const blueprints = snap.blueprints || [];
+    const teams = snap.teams || [];
 
     const primeCard = el(
       "article",
@@ -330,11 +382,9 @@
               el("h2", { className: "team-name", text: "ULTRON PRIME" }),
               el("span", {
                 className: "badge " + (prime.status === "active" ? "badge-active" : "badge-standby"),
-                text: String(prime.status || "unregistered").toUpperCase(),
+                text: upperStatus(prime.status, "unregistered"),
               }),
-              prime.harness
-                ? el("span", { className: "badge", text: prime.harness })
-                : null,
+              prime.harness ? el("span", { className: "badge", text: prime.harness }) : null,
             ]),
             el("p", {
               className: "team-mission",
@@ -349,16 +399,14 @@
           }),
           el("span", {
             className: "badge",
-            text: snap.blueprints.length + " blueprints ready",
+            text: blueprints.length + " blueprints ready",
           }),
         ]),
       ]
     );
     container.appendChild(primeCard);
 
-    const visibleTeams = state.showArchived
-      ? snap.teams
-      : snap.teams.filter((t) => !t.archived);
+    const visibleTeams = state.showArchived ? teams : teams.filter((t) => !t.archived);
 
     if (visibleTeams.length === 0) {
       container.appendChild(
@@ -367,7 +415,7 @@
           el("h3", { text: "No Active or Standing Teams in This Workspace" }),
           el("p", {
             text:
-              "Create a project or team via ULTRON PRIME (or launch Mission Control with --root ~/Dev/ULTRON_IMPERATIVE to view your populated multi-team Hive).",
+              "Create a project or team via ULTRON PRIME (or launch Mission Control with `ui --root ~/Dev/ULTRON_IMPERATIVE` to view your populated multi-team Hive).",
           }),
         ])
       );
@@ -387,7 +435,7 @@
 
     function buildTeamNode(team) {
       const children = (byParent.get(team.slug) || []).slice().sort((a, b) =>
-        a.slug.localeCompare(b.slug)
+        String(a.slug || "").localeCompare(String(b.slug || ""))
       );
 
       const lifespanBadge = team.archived
@@ -395,7 +443,7 @@
         : el("span", {
             className:
               "badge " + (team.lifespan === "ephemeral" ? "badge-ephemeral" : "badge-permanent"),
-            text: String(team.lifespan || "permanent").toUpperCase(),
+            text: upperStatus(team.lifespan, "permanent"),
           });
 
       const botBay = el("div", { className: "bot-bay" });
@@ -422,14 +470,14 @@
               el("div", { className: "bot-tile-info" }, [
                 el("div", { className: "bot-tile-role" }, [
                   el("span", { className: "status-dot " + botState }),
-                  role.role,
+                  role.role || role.agent_id,
                   roBadge,
                 ]),
-                el("div", { className: "bot-tile-title", text: role.title }),
+                el("div", { className: "bot-tile-title", text: role.title || role.role || "Role" }),
                 el("div", {
                   className: "bot-tile-meta",
                   text:
-                    role.model +
+                    (role.model || "medium") +
                     (role.harness ? " · " + role.harness : "") +
                     (team.archived ? " · archived" : role.status === "active" ? " · live" : " · standby"),
                 }),
@@ -457,10 +505,10 @@
             [
               el("div", { className: "team-title-block" }, [
                 el("div", { className: "team-title-row" }, [
-                  el("h3", { className: "team-name", text: team.name }),
+                  el("h3", { className: "team-name", text: team.name || team.slug }),
                   el("span", { className: "badge mono", text: "L" + team.layer + " · " + team.slug }),
                 ]),
-                el("p", { className: "team-mission", text: team.mission }),
+                el("p", { className: "team-mission", text: team.mission || "" }),
               ]),
               el("div", { className: "team-badges" }, [
                 el("span", {
@@ -504,7 +552,7 @@
 
     (byParent.get("__root__") || [])
       .slice()
-      .sort((a, b) => a.layer - b.layer || a.slug.localeCompare(b.slug))
+      .sort((a, b) => (a.layer || 1) - (b.layer || 1) || String(a.slug || "").localeCompare(String(b.slug || "")))
       .forEach((rootTeam) => treeWrap.appendChild(buildTeamNode(rootTeam)));
 
     container.appendChild(treeWrap);
@@ -513,9 +561,10 @@
   // Tab 2: Projects Topology
   function renderProjectsView(container) {
     const snap = state.snapshot;
+    const allProjects = snap.projects || [];
     const projects = state.showArchived
-      ? snap.projects
-      : snap.projects.filter((p) => p.status !== "archived");
+      ? allProjects
+      : allProjects.filter((p) => p.status !== "archived");
 
     if (projects.length === 0) {
       container.appendChild(
@@ -544,11 +593,11 @@
           { className: "panel-card", onClick: () => openProjectDrawer(p.slug) },
           [
             el("div", { className: "panel-card-header" }, [
-              el("h3", { className: "panel-card-title", text: p.name }),
-              el("span", { className: "badge " + statusCls, text: p.status.toUpperCase() }),
+              el("h3", { className: "panel-card-title", text: p.name || p.slug }),
+              el("span", { className: "badge " + statusCls, text: upperStatus(p.status, "active") }),
             ]),
             el("div", { className: "team-badges", style: "margin-bottom:8px;" }, [
-              el("span", { className: "badge mono", text: "L" + p.layer + " · " + p.slug }),
+              el("span", { className: "badge mono", text: "L" + (p.layer || 1) + " · " + p.slug }),
               p.parent_project
                 ? el("span", { className: "badge", text: "parent:" + p.parent_project })
                 : null,
@@ -576,16 +625,16 @@
 
   // Tab 3: Prime Decisions Queue
   function renderDecisionsView(container) {
-    const snap = state.snapshot;
     const f = state.decisionFilters;
 
     const filterBar = el("div", { className: "filter-bar" }, [
       el("select", {
+        id: "dec-status-filter",
         className: "filter-select",
         "aria-label": "Filter decisions by status",
         onChange: (ev) => {
           f.status = ev.target.value;
-          renderMain();
+          renderDecisionsList();
         },
       }, [
         el("option", { value: "", text: "All Review Statuses", selected: f.status === "" }),
@@ -595,11 +644,12 @@
         el("option", { value: "overruled", text: "Overruled", selected: f.status === "overruled" }),
       ]),
       el("select", {
+        id: "dec-origin-filter",
         className: "filter-select",
         "aria-label": "Filter decisions by origin",
         onChange: (ev) => {
           f.origin = ev.target.value;
-          renderMain();
+          renderDecisionsList();
         },
       }, [
         el("option", { value: "", text: "All Origins", selected: f.origin === "" }),
@@ -607,11 +657,12 @@
         el("option", { value: "user_guided", text: "user_guided", selected: f.origin === "user_guided" }),
       ]),
       el("select", {
+        id: "dec-scope-filter",
         className: "filter-select",
         "aria-label": "Filter decisions by scope",
         onChange: (ev) => {
           f.scope = ev.target.value;
-          renderMain();
+          renderDecisionsList();
         },
       }, [
         el("option", { value: "", text: "All Scopes", selected: f.scope === "" }),
@@ -620,30 +671,39 @@
         el("option", { value: "team", text: "team", selected: f.scope === "team" }),
       ]),
       el("input", {
+        id: "dec-search-filter",
         className: "filter-input",
         type: "search",
         placeholder: "Search title, ruling, tags, project...",
         value: f.query,
         onInput: (ev) => {
           f.query = ev.target.value;
-          renderDecisionsList(listHost);
+          renderDecisionsList();
         },
       }),
     ]);
     container.appendChild(filterBar);
 
-    const listHost = el("div", { className: "list-stack" });
+    const listHost = el("div", { id: "decisions-list", className: "list-stack" });
     container.appendChild(listHost);
-    renderDecisionsList(listHost);
+    renderDecisionsList();
   }
 
-  function renderDecisionsList(listHost) {
+  function renderDecisionsList() {
+    const listHost = document.getElementById("decisions-list");
+    if (!listHost || !state.snapshot) return;
     clearNode(listHost);
+
     const snap = state.snapshot;
+    const decisions = snap.decisions || [];
+    const totalDecisions = (snap.stats && snap.stats.total_decisions) || decisions.length;
+    const trunc = buildTruncationNotice(decisions.length, totalDecisions, "decisions");
+    if (trunc) listHost.appendChild(trunc);
+
     const f = state.decisionFilters;
     const q = f.query.trim().toLowerCase();
 
-    const matches = (snap.decisions || []).filter((d) => {
+    const matches = decisions.filter((d) => {
       if (f.status && d.review_status !== f.status) return false;
       if (f.origin && d.origin !== f.origin) return false;
       if (f.scope && d.scope !== f.scope) return false;
@@ -663,7 +723,7 @@
           el("h3", { text: "No Matching Prime Decisions" }),
           el("p", {
             text:
-              snap.decisions.length === 0
+              decisions.length === 0
                 ? "Autonomous Prime rulings and User-guided directives logged via `log-decision` will appear here for review."
                 : "Adjust your status, origin, or search filters to view other recorded decisions.",
           }),
@@ -678,12 +738,10 @@
           ? "badge-ro"
           : d.review_status === "overruled"
             ? "badge-danger"
-            : d.review_status === "needs_improvement"
-              ? "badge-warn"
-              : "badge-warn";
+            : "badge-warn";
       const copyCmd =
         "python3 ultron/core/core.py review-decision " +
-        d.id +
+        shellQuote(d.id) +
         ' --status approved --notes "Confirmed."';
 
       listHost.appendChild(
@@ -692,17 +750,17 @@
           { className: "panel-card", onClick: () => openDecisionDrawer(d.id) },
           [
             el("div", { className: "panel-card-header" }, [
-              el("h3", { className: "panel-card-title", text: d.title }),
+              el("h3", { className: "panel-card-title", text: d.title || d.id }),
               el("div", { className: "team-badges" }, [
-                el("span", { className: "badge " + stCls, text: d.review_status.toUpperCase() }),
-                el("span", { className: "badge", text: d.origin }),
+                el("span", { className: "badge " + stCls, text: upperStatus(d.review_status, "pending_review") }),
+                el("span", { className: "badge", text: d.origin || "prime_autonomous" }),
                 el("span", { className: "badge badge-repo", text: formatScopeBadge(d) }),
                 d.original_decision && d.original_decision !== d.decision
                   ? el("span", { className: "badge badge-ephemeral", text: "REVISED" })
                   : null,
               ]),
             ]),
-            el("p", { className: "panel-card-body", text: d.decision }),
+            el("p", { className: "panel-card-body", text: d.decision || "" }),
             d.latest_review_notes
               ? el("div", {
                   className: "team-path-row",
@@ -732,19 +790,16 @@
 
   // Tab 4: Board Activity Feed
   function renderBoardView(container) {
-    const snap = state.snapshot;
     const f = state.boardFilters;
-    const teamOptions = Array.from(
-      new Set((snap.threads || []).map((t) => t.team_slug).filter(Boolean))
-    ).sort();
 
     const filterBar = el("div", { className: "filter-bar" }, [
       el("select", {
+        id: "board-vis-filter",
         className: "filter-select",
         "aria-label": "Filter board by visibility",
         onChange: (ev) => {
           f.visibility = ev.target.value;
-          renderBoardList(listHost);
+          renderBoardList();
         },
       }, [
         el("option", { value: "", text: "All Visibilities", selected: f.visibility === "" }),
@@ -753,11 +808,12 @@
         el("option", { value: "personal", text: "personal", selected: f.visibility === "personal" }),
       ]),
       el("select", {
+        id: "board-status-filter",
         className: "filter-select",
         "aria-label": "Filter board by status",
         onChange: (ev) => {
           f.status = ev.target.value;
-          renderBoardList(listHost);
+          renderBoardList();
         },
       }, [
         el("option", { value: "", text: "All Statuses", selected: f.status === "" }),
@@ -768,48 +824,69 @@
         el("option", { value: "closed", text: "closed", selected: f.status === "closed" }),
       ]),
       el("select", {
+        id: "board-team-filter",
         className: "filter-select",
         "aria-label": "Filter board by team",
         onChange: (ev) => {
           f.team = ev.target.value;
-          renderBoardList(listHost);
+          renderBoardList();
         },
-      }, [
-        el("option", { value: "", text: "All Teams", selected: f.team === "" }),
-        ...teamOptions.map((slug) =>
-          el("option", { value: slug, text: slug, selected: f.team === slug })
-        ),
-      ]),
+      }),
       el("input", {
+        id: "board-search-filter",
         className: "filter-input",
         type: "search",
-        placeholder: "Search thread title, ID, author, tags...",
+        placeholder: "Search thread title, ID, author, category...",
         value: f.query,
         onInput: (ev) => {
           f.query = ev.target.value;
-          renderBoardList(listHost);
+          renderBoardList();
         },
       }),
     ]);
     container.appendChild(filterBar);
 
-    const listHost = el("div", { className: "list-stack" });
+    const listHost = el("div", { id: "board-list", className: "list-stack" });
     container.appendChild(listHost);
-    renderBoardList(listHost);
+    syncBoardTeamOptions();
+    renderBoardList();
   }
 
-  function renderBoardList(listHost) {
+  function syncBoardTeamOptions() {
+    const sel = document.getElementById("board-team-filter");
+    if (!sel || !state.snapshot) return;
+    const f = state.boardFilters;
+    const threads = state.snapshot.threads || [];
+    const teamOptions = Array.from(
+      new Set(threads.map((t) => t.team_slug).filter(Boolean))
+    ).sort();
+    clearNode(sel);
+    sel.appendChild(el("option", { value: "", text: "All Teams", selected: f.team === "" }));
+    teamOptions.forEach((slug) => {
+      sel.appendChild(el("option", { value: slug, text: slug, selected: f.team === slug }));
+    });
+  }
+
+  function renderBoardList() {
+    const listHost = document.getElementById("board-list");
+    if (!listHost || !state.snapshot) return;
     clearNode(listHost);
+
     const snap = state.snapshot;
+    const threads = snap.threads || [];
+    const totalThreads = (snap.stats && snap.stats.total_threads) || threads.length;
+    const trunc = buildTruncationNotice(threads.length, totalThreads, "threads");
+    if (trunc) listHost.appendChild(trunc);
+
     const f = state.boardFilters;
     const q = f.query.trim().toLowerCase();
 
-    const matches = (snap.threads || []).filter((t) => {
+    const matches = threads.filter((t) => {
       if (f.visibility && t.visibility !== f.visibility) return false;
       if (f.status && t.status !== f.status) return false;
       if (f.team && t.team_slug !== f.team && t.with_team !== f.team) return false;
       if (q) {
-        const hay = [t.id, t.title, t.author, t.category, t.team_slug, t.with_team, t.tags]
+        const hay = [t.id, t.title, t.author, t.category, t.team_slug, t.with_team]
           .join(" ")
           .toLowerCase();
         if (!hay.includes(q)) return false;
@@ -843,17 +920,17 @@
           { className: "panel-card", onClick: () => openThreadDrawer(t.id) },
           [
             el("div", { className: "panel-card-header" }, [
-              el("h3", { className: "panel-card-title", text: t.title }),
+              el("h3", { className: "panel-card-title", text: t.title || t.id }),
               el("div", { className: "team-badges" }, [
-                el("span", { className: "badge " + statusCls, text: t.status.toUpperCase() }),
-                el("span", { className: "badge", text: t.category }),
+                el("span", { className: "badge " + statusCls, text: upperStatus(t.status, "open") }),
+                el("span", { className: "badge", text: t.category || "general" }),
                 el("span", { className: "badge badge-repo", text: formatThreadScope(t) }),
               ]),
             ]),
             el("div", { className: "panel-card-footer" }, [
               el("span", {
                 className: "mono",
-                text: t.id + " · by @" + t.author + " · updated " + shortTime(t.updated_at),
+                text: t.id + " · by @" + (t.author || "unknown") + " · updated " + shortTime(t.updated_at),
               }),
               el("span", { className: "badge", text: (t.post_count || 1) + " post(s)" }),
             ]),
@@ -875,14 +952,28 @@
   }
 
   function closeDrawer() {
+    state.drawerRequestSeq += 1;
     state.drawerMode = null;
     document.getElementById("drawer-backdrop").classList.add("hidden");
     document.getElementById("inspector-drawer").classList.add("hidden");
   }
 
+  function refreshOpenDrawer() {
+    if (!state.drawerMode || !state.snapshot) return;
+    if (state.drawerMode.kind === "prime") {
+      openPrimeDrawer();
+    } else if (state.drawerMode.kind === "team") {
+      openTeamDrawer(state.drawerMode.slug, state.drawerMode.agentId);
+    } else if (state.drawerMode.kind === "project") {
+      openProjectDrawer(state.drawerMode.slug);
+    }
+  }
+
   function openPrimeDrawer() {
     const snap = state.snapshot;
+    if (!snap) return;
     const p = snap.prime || {};
+    state.drawerRequestSeq += 1;
     state.drawerMode = { kind: "prime" };
     openDrawer("Root Orchestrator", "ULTRON PRIME", [
       renderKvSection("Registration & Runtime", [
@@ -902,8 +993,10 @@
 
   function openTeamDrawer(teamSlug, focusAgentId) {
     const snap = state.snapshot;
-    const team = snap.teams.find((t) => t.slug === teamSlug);
+    if (!snap) return;
+    const team = (snap.teams || []).find((t) => t.slug === teamSlug);
     if (!team) return;
+    state.drawerRequestSeq += 1;
     state.drawerMode = { kind: "team", slug: teamSlug, agentId: focusAgentId };
 
     const focusRole = focusAgentId
@@ -941,18 +1034,28 @@
             ),
             el("div", { className: "bot-tile-info" }, [
               el("div", { className: "bot-tile-role", text: r.agent_id }),
-              el("div", { className: "bot-tile-title", text: r.title + " (" + r.model + ")" }),
+              el("div", {
+                className: "bot-tile-title",
+                text: (r.title || r.role || "Role") + " (" + (r.model || "medium") + ")",
+              }),
             ]),
           ]
         )
       );
     });
 
-    const recentThreads = snap.threads
-      .filter((t) => t.team_slug === teamSlug || t.with_team === teamSlug)
-      .slice(0, 8);
+    const allTeamThreads = (snap.threads || []).filter(
+      (t) => t.team_slug === teamSlug || t.with_team === teamSlug
+    );
+    const recentThreads = allTeamThreads.slice(0, 8);
+    const threadHeading =
+      "Team Board Threads (" +
+      recentThreads.length +
+      (allTeamThreads.length > recentThreads.length ? " of " + allTeamThreads.length : "") +
+      ")";
+
     const threadSec = el("div", { className: "detail-section" }, [
-      el("h3", { text: "Team Board Threads (" + recentThreads.length + ")" }),
+      el("h3", { text: threadHeading }),
       recentThreads.length === 0
         ? el("p", { className: "panel-card-body", text: "No board threads for this team yet." })
         : el(
@@ -968,20 +1071,25 @@
                   onClick: () => openThreadDrawer(t.id),
                 },
                 [
-                  el("span", { text: t.title }),
-                  el("span", { className: "badge", text: t.status }),
+                  el("span", { text: t.title || t.id }),
+                  el("span", { className: "badge", text: t.status || "open" }),
                 ]
               )
             )
           ),
     ]);
 
+    const teamTitleBase = team.name || team.slug;
+    const teamDrawerTitle = teamTitleBase.endsWith("(" + team.slug + ")")
+      ? teamTitleBase
+      : teamTitleBase + " (" + team.slug + ")";
+
     const spawnCmd =
       "python3 ultron/core/core.py " +
       (team.status === "active" ? "stop-team " : "spawn-team ") +
-      team.slug;
+      shellQuote(team.slug);
 
-    openDrawer("Team · Layer " + team.layer, team.name + " (" + team.slug + ")", [
+    openDrawer("Team · Layer " + (team.layer || 1), teamDrawerTitle, [
       renderKvSection("Manifest & Project Binding", [
         ["status", team.status],
         ["lifespan", team.archived ? team.lifespan + " (archived)" : team.lifespan],
@@ -1009,9 +1117,30 @@
 
   function openProjectDrawer(projectSlug) {
     const snap = state.snapshot;
-    const proj = snap.projects.find((p) => p.slug === projectSlug);
+    if (!snap) return;
+    const proj = (snap.projects || []).find((p) => p.slug === projectSlug);
     if (!proj) return;
+    state.drawerRequestSeq += 1;
     state.drawerMode = { kind: "project", slug: projectSlug };
+
+    const relSection =
+      (proj.relationships || []).length > 0
+        ? el("div", { className: "detail-section" }, [
+            el("h3", { text: "Relationships (" + proj.relationships.length + ")" }),
+            el(
+              "div",
+              { className: "team-badges" },
+              proj.relationships.map((r) =>
+                el("button", {
+                  className: "btn btn-sm btn-ghost",
+                  type: "button",
+                  text: r.relation + " -> " + r.target + (r.note ? " (" + r.note + ")" : ""),
+                  onClick: () => openProjectDrawer(r.target),
+                })
+              )
+            ),
+          ])
+        : null;
 
     const boundSection = el("div", { className: "detail-section" }, [
       el("h3", { text: "Bound Teams (" + (proj.teams || []).length + ")" }),
@@ -1031,43 +1160,47 @@
           ),
     ]);
 
-    openDrawer("Project Catalog · Layer " + proj.layer, proj.name + " (" + proj.slug + ")", [
-      renderKvSection("Hierarchy & Path Resolution", [
-        ["slug", proj.slug],
-        ["status", proj.status],
-        ["parent_project", proj.parent_project || "(root)"],
-        ["lineage", (proj.lineage || []).join(" -> ")],
-        ["repo_path", proj.repo_path],
-        ["subpath", proj.subpath],
-        ["effective_path", proj.effective_target_path],
-        ["target_path_abs", proj.target_path_abs],
-        ["description", proj.description],
-      ]),
-      boundSection,
-      cliSnippetBox(
-        "Create Bound Team CLI",
-        "python3 ultron/core/core.py create-team --slug " +
-          proj.slug +
-          '-dev --blueprint coding-light --project ' +
-          proj.slug +
-          ' --lifespan permanent --mission "Own ' +
-          proj.name +
-          '"'
-      ),
-    ]);
+    openDrawer(
+      "Project Catalog · Layer " + (proj.layer || 1),
+      (proj.name || proj.slug) + " (" + proj.slug + ")",
+      [
+        renderKvSection("Hierarchy & Path Resolution", [
+          ["slug", proj.slug],
+          ["status", proj.status],
+          ["parent_project", proj.parent_project || "(root)"],
+          ["lineage", (proj.lineage || []).join(" -> ")],
+          ["repo_path", proj.repo_path],
+          ["subpath", proj.subpath],
+          ["effective_path", proj.effective_target_path],
+          ["target_path_abs", proj.target_path_abs],
+          ["description", proj.description],
+        ]),
+        relSection,
+        boundSection,
+        cliSnippetBox(
+          "Create Bound Team CLI",
+          "python3 ultron/core/core.py create-team --slug " +
+            shellQuote(proj.slug + "-dev") +
+            " --blueprint coding-light --project " +
+            shellQuote(proj.slug) +
+            " --lifespan permanent --mission " +
+            shellQuote("Own " + (proj.name || proj.slug))
+        ),
+      ]
+    );
   }
 
   async function openDecisionDrawer(decisionId) {
+    const seq = ++state.drawerRequestSeq;
     state.drawerMode = { kind: "decision", id: decisionId };
     openDrawer("Prime Decision", decisionId, [
       el("p", { className: "panel-card-body", text: "Loading decision stream..." }),
     ]);
     try {
-      const resp = await fetch("/api/decisions/" + encodeURIComponent(decisionId), {
-        cache: "no-store",
-      });
-      const d = await resp.json();
-      if (!resp.ok) throw new Error(d.error || "HTTP " + resp.status);
+      const d = await fetchJson("/api/decisions/" + encodeURIComponent(decisionId));
+      if (seq !== state.drawerRequestSeq || !state.drawerMode || state.drawerMode.id !== decisionId) {
+        return;
+      }
 
       const reviewsSec = el("div", { className: "detail-section" }, [
         el("h3", { text: "Chronological Review History (" + (d.reviews || []).length + ")" }),
@@ -1081,7 +1214,11 @@
                   el("div", { className: "post-meta" }, [
                     el("span", {
                       className: "post-author",
-                      text: "@" + rev.reviewer + " -> " + rev.review_status.toUpperCase(),
+                      text:
+                        "@" +
+                        (rev.reviewer || "user") +
+                        " -> " +
+                        upperStatus(rev.review_status, "approved"),
                     }),
                     el("span", { className: "mono", text: shortTime(rev.created_at) }),
                   ]),
@@ -1099,29 +1236,36 @@
             ),
       ]);
 
-      openDrawer("Prime Decision · " + d.review_status.toUpperCase(), d.title, [
-        renderKvSection("Decision Stream", [
-          ["decision_id", d.id],
-          ["review_status", d.review_status],
-          ["origin", d.origin],
-          ["scope", formatScopeBadge(d)],
-          ["decided_by", d.decided_by],
-          ["current_ruling", d.decision],
-          ["original_ruling", d.original_decision],
-          ["rationale", d.rationale],
-          ["tags", d.tags],
-          ["created_at", shortTime(d.created_at)],
-          ["updated_at", shortTime(d.updated_at)],
-        ]),
-        reviewsSec,
-        cliSnippetBox(
-          "Validate / Refine Decision CLI",
-          "python3 ultron/core/core.py review-decision " +
-            d.id +
-            ' --status approved --notes "Validated"'
-        ),
-      ]);
+      openDrawer(
+        "Prime Decision · " + upperStatus(d.review_status, "pending_review"),
+        d.title || d.id,
+        [
+          renderKvSection("Decision Stream", [
+            ["decision_id", d.id],
+            ["review_status", d.review_status],
+            ["origin", d.origin],
+            ["scope", formatScopeBadge(d)],
+            ["decided_by", d.decided_by],
+            ["current_ruling", d.decision],
+            ["original_ruling", d.original_decision],
+            ["rationale", d.rationale],
+            ["tags", d.tags],
+            ["created_at", shortTime(d.created_at)],
+            ["updated_at", shortTime(d.updated_at)],
+          ]),
+          reviewsSec,
+          cliSnippetBox(
+            "Validate / Refine Decision CLI",
+            "python3 ultron/core/core.py review-decision " +
+              shellQuote(d.id) +
+              ' --status approved --notes "Validated"'
+          ),
+        ]
+      );
     } catch (err) {
+      if (seq !== state.drawerRequestSeq || !state.drawerMode || state.drawerMode.id !== decisionId) {
+        return;
+      }
       openDrawer("Prime Decision Error", decisionId, [
         el("p", { className: "panel-card-body", text: String(err.message || err) }),
       ]);
@@ -1129,22 +1273,23 @@
   }
 
   async function openThreadDrawer(threadId) {
+    const seq = ++state.drawerRequestSeq;
     state.drawerMode = { kind: "thread", id: threadId };
     openDrawer("ULTRON Board Thread", threadId, [
       el("p", { className: "panel-card-body", text: "Loading folded thread events..." }),
     ]);
     try {
-      const resp = await fetch("/api/threads/" + encodeURIComponent(threadId), {
-        cache: "no-store",
-      });
-      const t = await resp.json();
-      if (!resp.ok) throw new Error(t.error || "HTTP " + resp.status);
+      const t = await fetchJson("/api/threads/" + encodeURIComponent(threadId));
+      if (seq !== state.drawerRequestSeq || !state.drawerMode || state.drawerMode.id !== threadId) {
+        return;
+      }
 
       const postsList = el("div", { className: "list-stack" });
       (t.posts || []).forEach((post) => {
-        const [tSlug, rSlug] = String(post.author || "").split("/");
+        const parts = String(post.author || "").split("/");
+        const rSlug = parts.length > 1 ? parts[1] : parts[0];
         const botSvg = Sprites.renderBotSvg(
-          Sprites.archetypeForRole({ agent_id: post.author, role: rSlug || post.author }),
+          Sprites.archetypeForRole({ agent_id: post.author, role: rSlug }),
           "active",
           24
         );
@@ -1153,24 +1298,27 @@
             el("div", { className: "post-meta" }, [
               el("span", { className: "post-author" }, [
                 botSvg,
-                "@" + post.author,
+                "@" + (post.author || "unknown"),
                 post.parent_post_id
                   ? el("span", { className: "badge", text: "reply to " + post.parent_post_id })
                   : null,
               ]),
-              el("span", { className: "mono", text: post.id + " · " + shortTime(post.created_at) }),
+              el("span", {
+                className: "mono",
+                text: post.id + " · " + shortTime(post.created_at),
+              }),
             ]),
             post.tags
               ? el("div", { className: "team-badges", style: "margin-bottom:6px;" }, [
                   el("span", { className: "badge", text: "tags: " + post.tags }),
                 ])
               : null,
-            el("pre", { className: "post-content", text: post.content }),
+            el("pre", { className: "post-content", text: post.content || "" }),
           ])
         );
       });
 
-      openDrawer("Board Thread · " + formatThreadScope(t), t.title, [
+      openDrawer("Board Thread · " + formatThreadScope(t), t.title || t.id, [
         renderKvSection("Thread Metadata", [
           ["thread_id", t.id],
           ["status", t.status],
@@ -1186,10 +1334,13 @@
         ]),
         cliSnippetBox(
           "Inspect Thread CLI",
-          "python3 ultron/core/core.py view " + t.id + " --all"
+          "python3 ultron/core/core.py view " + shellQuote(t.id) + " --all"
         ),
       ]);
     } catch (err) {
+      if (seq !== state.drawerRequestSeq || !state.drawerMode || state.drawerMode.id !== threadId) {
+        return;
+      }
       openDrawer("Board Thread Error", threadId, [
         el("p", { className: "panel-card-body", text: String(err.message || err) }),
       ]);
@@ -1211,17 +1362,35 @@
     }
   }
 
-  function switchTab(tab) {
-    if (!["hive", "projects", "decisions", "board"].includes(tab)) tab = "hive";
-    state.activeTab = tab;
-    if (window.location.hash !== "#" + tab) {
-      window.history.replaceState(null, "", "#" + tab);
+  function refreshActiveTabInPlace() {
+    if (!state.snapshot) return;
+    if (state.activeTab === "decisions" && document.getElementById("decisions-list")) {
+      renderDecisionsList();
+      return;
     }
+    if (state.activeTab === "board" && document.getElementById("board-list")) {
+      syncBoardTeamOptions();
+      renderBoardList();
+      return;
+    }
+    renderMain();
+  }
+
+  function syncTabButtons(tab) {
     document.querySelectorAll(".tab-btn").forEach((btn) => {
       const isCurrent = btn.getAttribute("data-tab") === tab;
       btn.classList.toggle("active", isCurrent);
       btn.setAttribute("aria-selected", isCurrent ? "true" : "false");
     });
+  }
+
+  function switchTab(tab, updateHash) {
+    if (!["hive", "projects", "decisions", "board"].includes(tab)) tab = "hive";
+    state.activeTab = tab;
+    if (updateHash !== false && window.location.hash !== "#" + tab) {
+      window.history.replaceState(null, "", "#" + tab);
+    }
+    syncTabButtons(tab);
     renderMain();
   }
 
@@ -1230,20 +1399,28 @@
     if (["hive", "projects", "decisions", "board"].includes(initialHash)) {
       state.activeTab = initialHash;
     }
+    syncTabButtons(state.activeTab);
 
     document.querySelectorAll(".tab-btn").forEach((btn) => {
-      btn.addEventListener("click", () => switchTab(btn.getAttribute("data-tab")));
+      btn.addEventListener("click", () => switchTab(btn.getAttribute("data-tab"), true));
+    });
+
+    window.addEventListener("hashchange", () => {
+      const next = window.location.hash.replace(/^#/, "");
+      if (["hive", "projects", "decisions", "board"].includes(next) && next !== state.activeTab) {
+        switchTab(next, false);
+      }
     });
 
     document.getElementById("pending-pill").addEventListener("click", () => {
       state.decisionFilters.status = "pending_review";
-      switchTab("decisions");
+      switchTab("decisions", true);
     });
 
     document.getElementById("toggle-archived").addEventListener("change", (ev) => {
       state.showArchived = Boolean(ev.target.checked);
       renderHeader();
-      renderMain();
+      refreshActiveTabInPlace();
     });
 
     document.getElementById("drawer-close").addEventListener("click", closeDrawer);
@@ -1257,7 +1434,8 @@
       (snapshot) => {
         state.snapshot = snapshot;
         renderHeader();
-        switchTab(state.activeTab);
+        refreshActiveTabInPlace();
+        refreshOpenDrawer();
       },
       (statusInfo) => {
         const line = document.getElementById("sync-status-line");
@@ -1288,8 +1466,7 @@
 
     document.getElementById("btn-verify").addEventListener("click", async () => {
       try {
-        const resp = await fetch("/api/verify", { cache: "no-store" });
-        const res = await resp.json();
+        const res = await fetchJson("/api/verify");
         if (res.ok) {
           showDiagBanner(
             true,
@@ -1316,8 +1493,7 @@
 
     document.getElementById("btn-liveness").addEventListener("click", async () => {
       try {
-        const resp = await fetch("/api/liveness", { cache: "no-store" });
-        const res = await resp.json();
+        const res = await fetchJson("/api/liveness");
         if (res.ok) {
           const agentKeys = Object.keys(res.agents || {});
           const summary =

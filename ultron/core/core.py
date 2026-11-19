@@ -4670,9 +4670,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         description="ULTRON Core: Pure Git-Native Org Registry, N-Layer Hive Scaffolder & JSONL Message Board",
-        parents=[common],
     )
-    parser.set_defaults(root=None, json=False)
+    parser.add_argument(
+        "--root", dest="_global_root", default=None, help="Override ULTRON repository root"
+    )
+    parser.add_argument(
+        "--json",
+        dest="_global_json",
+        action="store_true",
+        default=False,
+        help="Emit machine-readable JSON output",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add_cmd(
@@ -5252,6 +5260,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    args.root = getattr(args, "root", args._global_root)
+    args.json = bool(getattr(args, "json", args._global_json))
 
     try:
         core = UltronCore(repo_root=args.root)
