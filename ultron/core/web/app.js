@@ -80,6 +80,7 @@
     snapshot: null,
     activeTab: "hive",
     showArchived: false,
+    activeOnly: false,
     drawerMode: null,
     drawerRequestSeq: 0,
     orgOptions: { project: "", expandRoles: false, zoom: "fit" },
@@ -303,12 +304,62 @@
     });
   }
 
+  function getBaseTeams(snap) {
+    const teams = (snap && snap.teams) || [];
+    return state.showArchived ? teams : teams.filter((t) => !t.archived);
+  }
+
+  function getVisibleHiveTeams(snap) {
+    const base = getBaseTeams(snap);
+    return state.activeOnly ? base.filter((t) => t.status === "active") : base;
+  }
+
+  function setActiveOnly(nextVal) {
+    state.activeOnly = Boolean(nextVal);
+    renderHeader();
+    refreshActiveTabInPlace();
+  }
+
+  function buildActiveOnlyToggle(inputId, activeCount, totalCount) {
+    return el(
+      "label",
+      {
+        id: inputId + "-chip",
+        className: "toggle-chip" + (state.activeOnly ? " is-active" : ""),
+        for: inputId,
+      },
+      [
+        el("input", {
+          id: inputId,
+          type: "checkbox",
+          checked: state.activeOnly,
+          onChange: (ev) => setActiveOnly(ev.target.checked),
+        }),
+        el("span", { className: "status-dot active" }),
+        el("span", { text: "Active Teams Only" }),
+        el("span", {
+          id: inputId + "-count",
+          className: "toggle-count mono",
+          text: activeCount + "/" + totalCount,
+        }),
+      ]
+    );
+  }
+
+  function syncActiveOnlyToggle(inputId, activeCount, totalCount) {
+    const input = document.getElementById(inputId);
+    const chip = document.getElementById(inputId + "-chip");
+    const countEl = document.getElementById(inputId + "-count");
+    if (input) input.checked = state.activeOnly;
+    if (chip) chip.classList.toggle("is-active", state.activeOnly);
+    if (countEl) countEl.textContent = activeCount + "/" + totalCount;
+  }
+
   // Top Header & Stats Strip
   function renderHeader() {
     const snap = state.snapshot;
     if (!snap) return;
 
-    const teams = snap.teams || [];
     const projects = snap.projects || [];
     const decisions = snap.decisions || [];
     const threads = snap.threads || [];
@@ -331,7 +382,7 @@
       pendingBtn.classList.add("hidden");
     }
 
-    const visibleTeams = state.showArchived ? teams : teams.filter((t) => !t.archived);
+    const visibleTeams = getVisibleHiveTeams(snap);
     document.getElementById("count-hive").textContent = String(visibleTeams.length);
     const orgCountEl = document.getElementById("count-org");
     if (orgCountEl) orgCountEl.textContent = String(visibleTeams.length);
@@ -395,7 +446,6 @@
     const prime = snap.prime || {};
     const primeState = Sprites.stateForAgent(prime, null);
     const blueprints = snap.blueprints || [];
-    const teams = snap.teams || [];
 
     const primeCard = el(
       "article",
@@ -437,9 +487,28 @@
     );
     container.appendChild(primeCard);
 
-    const visibleTeams = state.showArchived ? teams : teams.filter((t) => !t.archived);
+    const baseTeams = getBaseTeams(snap);
+    const activeCount = baseTeams.filter((t) => t.status === "active").length;
+    const visibleTeams = state.activeOnly
+      ? baseTeams.filter((t) => t.status === "active")
+      : baseTeams;
 
-    if (visibleTeams.length === 0) {
+    const filterBar = el("div", { className: "filter-bar" }, [
+      buildActiveOnlyToggle("hive-active-only", activeCount, baseTeams.length),
+      el("span", {
+        className: "filter-summary",
+        text: state.activeOnly
+          ? "Showing " +
+            visibleTeams.length +
+            " active · " +
+            (baseTeams.length - visibleTeams.length) +
+            " standby hidden"
+          : activeCount + " active · " + (baseTeams.length - activeCount) + " standby",
+      }),
+    ]);
+    container.appendChild(filterBar);
+
+    if (baseTeams.length === 0) {
       container.appendChild(
         el("div", { className: "empty-state" }, [
           Sprites.renderBotSvg("specialist", "standby", 56),
@@ -448,6 +517,30 @@
             text:
               "Create a project or team via ULTRON PRIME (or launch Mission Control with `ui --root ~/Dev/ULTRON_IMPERATIVE` to view your populated multi-team Hive).",
           }),
+        ])
+      );
+      return;
+    }
+
+    if (visibleTeams.length === 0) {
+      container.appendChild(
+        el("div", { className: "empty-state" }, [
+          Sprites.renderBotSvg("specialist", "standby", 56),
+          el("h3", { text: "No Active Teams Right Now" }),
+          el("p", {
+            text:
+              "All " +
+              baseTeams.length +
+              " team(s) in this workspace are currently on standby.",
+          }),
+          el("div", { className: "empty-actions" }, [
+            el("button", {
+              className: "btn btn-secondary",
+              type: "button",
+              text: "Show All Teams",
+              onClick: () => setActiveOnly(false),
+            }),
+          ]),
         ])
       );
       return;
@@ -559,6 +652,9 @@
                         team.project +
                         (team.project_missing ? " (missing)" : ""),
                     })
+                  : null,
+                team.parent_team && !visibleSlugs.has(team.parent_team)
+                  ? el("span", { className: "badge mono", text: "parent:" + team.parent_team })
                   : null,
               ]),
             ]
@@ -918,17 +1014,27 @@
             : "#818cf8";
       const rawName = String(team.name || team.slug);
       const shortName = rawName.length > 23 ? rawName.slice(0, 21) + "…" : rawName;
+      const hiddenParent = team.parent_team && !visibleSlugs.has(team.parent_team) ? team.parent_team : "";
       const metaRaw =
         "L" +
         (team.layer || 1) +
         " · " +
         team.slug +
-        (team.project ? " · " + team.project : "");
+        (hiddenParent ? " · ↑" + hiddenParent : team.project ? " · " + team.project : "");
       const shortMeta = metaRaw.length > 35 ? metaRaw.slice(0, 33) + "…" : metaRaw;
       const statusText = isArch ? "ARCH" : isAct ? "LIVE" : team.lifespan === "ephemeral" ? "EPHEM" : "PERM";
 
       const childrenNodes = [
-        svgEl("title", { text: rawName + " (" + team.slug + ") — " + (team.mission || "") }),
+        svgEl("title", {
+          text:
+            rawName +
+            " (" +
+            team.slug +
+            ")" +
+            (hiddenParent ? " [parent: " + hiddenParent + "]" : "") +
+            " — " +
+            (team.mission || ""),
+        }),
         svgEl("rect", {
           className: "topo-node-bg",
           x: 0,
@@ -1207,6 +1313,8 @@
 
   function renderOrgView(container) {
     const opts = state.orgOptions;
+    const baseTeams = getBaseTeams(state.snapshot);
+    const activeCount = baseTeams.filter((t) => t.status === "active").length;
 
     const toolbar = el("div", { className: "filter-bar" }, [
       el(
@@ -1221,6 +1329,7 @@
           },
         }
       ),
+      buildActiveOnlyToggle("org-active-only", activeCount, baseTeams.length),
       el("label", { className: "toggle-chip", for: "org-expand-roles" }, [
         el("input", {
           id: "org-expand-roles",
@@ -1269,19 +1378,65 @@
 
     const snap = state.snapshot;
     const opts = state.orgOptions;
-    const baseTeams = state.showArchived
-      ? (snap.teams || [])
-      : (snap.teams || []).filter((t) => !t.archived);
-    const filteredTeams = filterOrgTeams(baseTeams, snap.projects || [], opts.project);
+    const baseTeams = getBaseTeams(snap);
+    const activeCount = baseTeams.filter((t) => t.status === "active").length;
+    syncActiveOnlyToggle("org-active-only", activeCount, baseTeams.length);
+
+    const statusFiltered = state.activeOnly
+      ? baseTeams.filter((t) => t.status === "active")
+      : baseTeams;
+    const filteredTeams = filterOrgTeams(statusFiltered, snap.projects || [], opts.project);
 
     if (filteredTeams.length === 0) {
-      chartHost.appendChild(
-        el("div", { className: "empty-state" }, [
-          Sprites.renderBotSvg("prime", "standby", 52),
-          el("h3", { text: "No Teams Match This Organization Filter" }),
-          el("p", { text: "Clear the project filter or toggle Show Archived to inspect other pods." }),
-        ])
-      );
+      if (state.activeOnly) {
+        const actions = [];
+        if (opts.project) {
+          actions.push(
+            el("button", {
+              className: "btn btn-ghost",
+              type: "button",
+              text: "Clear Project Filter",
+              onClick: () => {
+                opts.project = "";
+                const sel = document.getElementById("org-project-filter");
+                if (sel) sel.value = "";
+                renderOrgChartCanvas();
+              },
+            })
+          );
+        }
+        actions.push(
+          el("button", {
+            className: "btn btn-secondary",
+            type: "button",
+            text: "Show All Teams",
+            onClick: () => setActiveOnly(false),
+          })
+        );
+        chartHost.appendChild(
+          el("div", { className: "empty-state" }, [
+            Sprites.renderBotSvg("prime", "standby", 52),
+            el("h3", {
+              text: opts.project ? "No Active Teams Match This Filter" : "No Active Teams Right Now",
+            }),
+            el("p", {
+              text:
+                activeCount === 0
+                  ? "All " + baseTeams.length + " team(s) in this workspace are currently on standby."
+                  : activeCount + " active team(s) exist outside this project filter.",
+            }),
+            el("div", { className: "empty-actions" }, actions),
+          ])
+        );
+      } else {
+        chartHost.appendChild(
+          el("div", { className: "empty-state" }, [
+            Sprites.renderBotSvg("prime", "standby", 52),
+            el("h3", { text: "No Teams Match This Organization Filter" }),
+            el("p", { text: "Clear the project filter or toggle Show Archived to inspect other pods." }),
+          ])
+        );
+      }
       return;
     }
 
