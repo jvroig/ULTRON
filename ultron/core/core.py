@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -45,19 +46,26 @@ PLACEHOLDER_RE = re.compile(r"\{\{([A-Z0-9_]+)\}\}")
 MODEL_TIERS = ("small", "medium", "large")
 LEGACY_MODEL_ALIASES = {"flash_lite": "small", "flash": "medium", "pro": "large"}
 VALID_MODELS = {"inherit", *MODEL_TIERS}
+MODEL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}$")
 DEFAULT_MODEL_TIER = "medium"
 CLAUDE_MODEL_FOR_TIER = {"small": "haiku", "medium": "sonnet", "large": "opus"}
-# Antigravity invoke_subagent only accepts ['inherit', 'flash_lite', 'flash', 'pro'].
-# Map medium (the daily-driver default) to 'inherit' so teams use Prime's active
-# Gemini 4 Hydrogen model instead of downgrading to the legacy Flash tier.
-ANTIGRAVITY_MODEL_FOR_TIER = {"small": "flash_lite", "medium": "inherit", "large": "pro"}
+# Antigravity native `swarm` supports the full model roster (`swarm(action="models", all=true)`).
+# Map portable tiers to balanced defaults while also allowing explicit model IDs via --model / set-model:
+# - small  -> gemini-4-hydrogen-medium
+# - medium -> inherit (omits `model` in swarm(action="add") so workers follow Prime's active model)
+# - large  -> gemini-4-argon-medium
+ANTIGRAVITY_MODEL_FOR_TIER = {
+    "small": "gemini-4-hydrogen-medium",
+    "medium": "inherit",
+    "large": "gemini-4-argon-medium",
+}
 VALID_WORKSPACES = {"inherit", "share", "branch"}
 ROLE_CONTEXT_FILENAME = "role_context.generated.md"
 ROLE_CONTEXT_IMPORT = f"@{ROLE_CONTEXT_FILENAME}"
 HARNESS_TOOLS = {
     "antigravity": {
         "shell": "run_command", "read": "read_file", "write": "write_file", "edit": "edit_file",
-        "grep": "grep_search", "find": "find_by_name", "doorbell": "send_message",
+        "grep": "grep_search", "find": "find_by_name", "doorbell": "post_message",
     },
     "claude-code": {
         "shell": "Bash", "read": "Read", "write": "Write", "edit": "Edit",
@@ -75,7 +83,7 @@ ROLE_ID_ENV = "ULTRON_AGENT_ID"
 PRIME_ONLY_COMMANDS = frozenset({
     "activate-agent", "activate-team", "add-role", "create-project", "create-team", "disable-agent",
     "disable-team", "link-project", "log-decision", "register-prime", "remove-project", "remove-team",
-    "review-decision", "set-campaign", "set-harness", "set-lifespan", "set-project", "set-target-repo",
+    "review-decision", "set-campaign", "set-harness", "set-lifespan", "set-model", "set-project", "set-target-repo",
     "spawn-team", "stop-team", "ui", "update-project",
 })
 SUPPRESSING_MEMORY_FILES = ("CLAUDE.md", "CLAUDE.local.md")
@@ -136,13 +144,45 @@ def render_template(template_text: str, values: Mapping[str, Any]) -> str:
 def normalize_model(value: str, source: str = "") -> str:
     cleaned = str(value).strip().lower()
     cleaned = LEGACY_MODEL_ALIASES.get(cleaned, cleaned)
-    if cleaned not in VALID_MODELS:
-        where = f" in {source}" if source else ""
-        raise ValueError(
-            f"Invalid model '{value}'{where}. Must be one of {sorted(VALID_MODELS)} "
-            f"(legacy aliases: {sorted(LEGACY_MODEL_ALIASES)})."
-        )
-    return cleaned
+    if cleaned in VALID_MODELS or MODEL_ID_RE.match(cleaned):
+        return cleaned
+    where = f" in {source}" if source else ""
+    raise ValueError(
+        f"Invalid model '{value}'{where}. Must be one of {sorted(VALID_MODELS)} "
+        f"(legacy aliases: {sorted(LEGACY_MODEL_ALIASES)}) or an explicit model ID "
+        f"matching {MODEL_ID_RE.pattern}."
+    )
+
+
+def resolve_antigravity_model(model: str) -> Optional[str]:
+    """Resolve a normalized model tier or explicit model ID for Antigravity swarm(action='add').
+
+    Returns None when the worker should inherit Prime's active model (omit `model`).
+    """
+    if model == "inherit":
+        return None
+    mapped = ANTIGRAVITY_MODEL_FOR_TIER.get(model, model)
+    return None if mapped == "inherit" else mapped
+
+
+def swarm_name_for(agent_id: str) -> str:
+    """Deterministically map an ULTRON agent_id to a valid Antigravity swarm roster name.
+
+    Swarm worker names must be lowercase, start with a letter or digit, be <= 24 chars of
+    [a-z0-9_-], and never be 'all', 'coordinator', or 'coordinator-*'.
+    ULTRON PRIME maps to 'coordinator' (the swarm coordinator handle).
+    """
+    if agent_id == PRIME_ID:
+        return "coordinator"
+    team_slug, role_slug = agent_id.split("/", 1)
+    base = f"{team_slug}-{role_slug}".lower()
+    if base in {"all", "coordinator"} or base.startswith("coordinator-"):
+        base = f"u-{base}"
+    if len(base) <= 24:
+        return base
+    digest = hashlib.sha256(agent_id.encode("utf-8")).hexdigest()[:4]
+    prefix = base[:19].rstrip("-_") or "u"
+    return f"{prefix}-{digest}"
 
 
 def with_role_context_import(charter_md: str) -> str:
@@ -320,6 +360,9 @@ class HarnessAdapter:
     def doorbell_call(self) -> str:
         raise NotImplementedError
 
+    def doorbell_resolve_cmd(self, core: "UltronCore") -> str:
+        return f"{self.core_cmd(core)} whois <target_agent_id> --id-only"
+
     def charters_block(self, ctx: Mapping[str, Any]) -> str:
         raise NotImplementedError
 
@@ -343,6 +386,7 @@ class HarnessAdapter:
                 "TARGET_REPO_SUMMARY": self.target_repo_summary(core, ctx),
                 "CORE_CMD": self.core_cmd(core),
                 "ROUTING_SUMMARY": self.routing_summary(core, ctx),
+                "DOORBELL_RESOLVE_CMD": self.doorbell_resolve_cmd(core),
                 "DOORBELL_CALL": self.doorbell_call(),
                 "TOOL_DOORBELL": self.tools["doorbell"],
                 "CRON_TOOL": self.cron_tool,
@@ -369,14 +413,17 @@ class AntigravityAdapter(HarnessAdapter):
     cron_tool = "schedule"
 
     def spawn(self, core: "UltronCore", team: Mapping[str, Any], specs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        for sp in specs:
+            Path(sp["role_context_path"]).write_text(sp["role_context"], encoding="utf-8")
         return {
             "harness": self.name,
             "team_slug": team["slug"],
             "status": "awaiting_prime",
             "specs": specs,
             "next_steps": [
-                "For each spec: define_subagent(**spec['define_subagent']), then invoke_subagent(**spec['invoke_subagent']).",
-                f"Bind the returned conversation UUIDs: activate-team {team['slug']} --uuids '{{\"<role>\": \"<uuid>\", ...}}'",
+                f"Optional (first team): swarm(action=\"title\", title=\"ULTRON: {team['slug']}\").",
+                "For each spec: swarm(**spec['swarm_add']) (verify models with swarm(action='models', all=true) if needed).",
+                f"Bind the returned conversation_id UUIDs: activate-team {team['slug']} --uuids '{{\"<role>\": \"<uuid>\", ...}}'",
                 "Arm a recurring Safety Cron (`schedule`, e.g. '*/10 * * * *') while the team works, and commit & push ultron/hive/ and ultron/core/threads/ to origin.",
             ],
         }
@@ -385,26 +432,29 @@ class AntigravityAdapter(HarnessAdapter):
         self, core: "UltronCore", plan: Dict[str, Any], sessions: Mapping[str, Any], cascade: bool
     ) -> Dict[str, Any]:
         cascade_flag = " --cascade" if cascade else ""
+        swarm_names = [swarm_name_for(a["agent_id"]) for a in plan["agents_to_kill"]]
+        kill_calls = ", ".join(f'swarm(action="kill", name="{n}")' for n in swarm_names)
         return {
             **plan,
             "harness": self.name,
             "status": "awaiting_prime",
+            "swarm_names_to_kill": swarm_names,
             "stop_failures": {},
             "missing_session_ids": [],
             "next_steps": [
-                f"manage_subagents(Action=\"kill\", ConversationIds={plan['conversation_ids_to_kill']})",
+                f"Kill each swarm worker: {kill_calls}" if kill_calls else "No live swarm workers to kill.",
                 f"disable-team {plan['team_slug']}{cascade_flag}",
                 "Commit & push ultron/hive/ and ultron/core/threads/ to origin (and cancel the Safety Cron if no active teams remain).",
             ],
         }
 
     def probe(self, agents: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any]:
-        ids = sorted(str(a.get("conversation_id", "")) for a in agents.values())
+        swarm_names = sorted(swarm_name_for(aid) for aid in agents)
         return {
             "harness": self.name,
             "agents": {aid: {"state": "unknown", "detail": "probe from Antigravity"} for aid in agents},
             "next_steps": [
-                f"manage_subagents(Action=\"list\") and check these conversation IDs are listed: {ids}",
+                f"swarm(action=\"status\") and verify these workers are waiting/working (not stopped/killed): {swarm_names}",
                 "Checkpoint any new board posts or hive updates: git add ultron/core/threads ultron/hive && git commit && git push.",
             ],
         }
@@ -453,10 +503,19 @@ class AntigravityAdapter(HarnessAdapter):
         return ctx["role"]["role_path"], ctx["role_workspace_rel"], str(core.repo_root)
 
     def doorbell_address(self, ctx: Mapping[str, Any]) -> str:
-        return "your conversation UUID, bound by `activate-team`"
+        return (
+            f"`@{swarm_name_for(ctx['agent_id'])}` (swarm board) / "
+            "conversation UUID bound by `activate-team` (cross-harness)"
+        )
+
+    def doorbell_resolve_cmd(self, core: "UltronCore") -> str:
+        return f"{self.core_cmd(core)} whois <target_agent_id> --swarm-name"
 
     def doorbell_call(self) -> str:
-        return 'call `send_message(Recipient="<address>", Message="Doorbell: Posted on Thread <thread_id> (\'Title\')...")`'
+        return (
+            'call `post_message(text="@<swarm_name> Doorbell: Posted on Thread <thread_id> (\'Title\')...")` '
+            '(use `@coordinator` for `ultron-prime`)'
+        )
 
     def charters_block(self, ctx: Mapping[str, Any]) -> str:
         return (
@@ -482,50 +541,54 @@ class AntigravityAdapter(HarnessAdapter):
     def build_spec(self, core: "UltronCore", ctx: Mapping[str, Any]) -> Dict[str, Any]:
         r, team, aid = ctx["role"], ctx["team"], ctx["agent_id"]
         clean_team, r_slug = ctx["team_slug"], r["role"]
+        role_dir = ctx["role_dir"]
         repo_abs = ctx["target_repo_abs"]
-        system_prompt = self.render_role_context(core, ctx)
-        initial_prompt = (
-            f"Boot sequence for `{aid}` ({r['title']}):\n"
-            f"1. Run your startup hydration commands (`list --as {aid} --visibility personal`, "
-            f"`list --as {aid} --visibility team`, `list --as {aid} --visibility global`, and `directory {aid}`).\n"
-        )
+        s_name = swarm_name_for(aid)
+        role_context = self.render_role_context(core, ctx)
+        role_context_path = str(role_dir.resolve() / ROLE_CONTEXT_FILENAME)
+
+        brief_lines = [
+            f"ULTRON role assignment: `{aid}` ({r['title']}, team `{clean_team}`, swarm `@{s_name}`).",
+            f"1. IMMEDIATELY call `read_file` on `{role_context_path}` to load your full role charter, inherited charters, project decisions, and routing rules before doing anything else.",
+            f"2. Run your startup hydration commands (`python3 ultron/core/core.py list --as {aid} --visibility personal`, `--visibility team`, `--visibility global`, and `directory {aid}`).",
+            "3. Hard governance rule: Only ULTRON PRIME spawns or stops agents — NEVER call `swarm(action='add')` or `swarm(action='kill')`.",
+        ]
         if repo_abs:
-            initial_prompt += (
-                f"2. Note your assigned target project repository at `{repo_abs}` "
-                f"(shell commands start in ULTRON HQ `{core.repo_root}`).\n"
+            brief_lines.append(
+                f"4. Target project repository: `{repo_abs}` (shell commands start in ULTRON HQ `{core.repo_root}`)."
             )
-        step_num = 3 if repo_abs else 2
-        if ctx["mission_brief"]:
-            initial_prompt += f"{step_num}. Initial directive: {ctx['mission_brief']}\n"
+            step_num = 5
         else:
-            initial_prompt += (
-                f"{step_num}. Confirm readiness in a brief reply to ULTRON PRIME and await doorbelled tasks on the board."
+            step_num = 4
+        if ctx["mission_brief"]:
+            brief_lines.append(f"{step_num}. Initial directive: {ctx['mission_brief']}")
+        else:
+            brief_lines.append(
+                f"{step_num}. Post a brief readiness reply to `@coordinator` via `post_message`, then end your turn and await doorbelled tasks."
             )
-        subagent_type = f"ultron--{clean_team}--{r_slug}"
+        short_brief = "\n".join(brief_lines)
+
+        resolved_model = resolve_antigravity_model(r["model"])
+        swarm_add: Dict[str, Any] = {
+            "action": "add",
+            "name": s_name,
+            "workspace": team["workspace_mode"],
+            "brief": short_brief,
+        }
+        if resolved_model is not None:
+            swarm_add["model"] = resolved_model
+
         return {
             "agent_id": aid,
             "team_slug": clean_team,
             "role": r_slug,
+            "swarm_name": s_name,
             "read_only_mode": ctx["read_only"],
             "target_repo": ctx["target_repo"],
             "target_repo_abs": repo_abs,
-            "define_subagent": {
-                "Name": subagent_type,
-                "Description": f"ULTRON [{clean_team}] {r['title']} ({aid})",
-                "SystemPrompt": system_prompt,
-                # Antigravity gates `run_command` under EnableWriteTools; keep True so
-                # every Hive role can execute `python3 ultron/core/core.py` CLI commands.
-                "EnableWriteTools": True,
-                "EnableSubagentTools": False,  # Hard invariant: only ULTRON PRIME spawns agents
-                "EnableMCPTools": bool(r["mcp_tools"]),
-            },
-            "invoke_subagent": {
-                "TypeName": subagent_type,
-                "Role": f"{team['name']} - {r['title']}"[:60],
-                "Model": self.model_for_tier.get(r["model"], r["model"]),
-                "Workspace": team["workspace_mode"],
-                "Prompt": initial_prompt,
-            },
+            "role_context_path": role_context_path,
+            "role_context": role_context,
+            "swarm_add": swarm_add,
         }
 
 
@@ -781,7 +844,7 @@ class ClaudeCodeAdapter(HarnessAdapter):
             "role_dir": str(role_dir.resolve()),
             "session_name": session_name,
             "model_tier": r["model"],
-            "claude_model": self.model_for_tier.get(r["model"], ""),
+            "claude_model": "" if r["model"] == "inherit" else self.model_for_tier.get(r["model"], r["model"]),
             "workspace_mode": team["workspace_mode"],
             "role_context": role_context,
             "initial_prompt": boot_prompt,
@@ -980,6 +1043,7 @@ class UltronCore:
                 "role": "prime",
                 "role_path": "ultron/core",
                 "status": p_status,
+                "swarm_name": swarm_name_for(PRIME_ID),
                 "harness": str(p_sess.get("harness", "")) if p_status == "active" else "",
                 "target_repo": "",
                 "target_repo_abs": "",
@@ -1105,6 +1169,7 @@ class UltronCore:
                         "role": r_slug,
                         "role_path": self._rel_posix(role_dir),
                         "status": r_status,
+                        "swarm_name": swarm_name_for(aid),
                         "harness": str(sess.get("harness", "")) if r_status == "active" else "",
                         "target_repo": r_target_repo,
                         "target_repo_abs": r_target_repo_abs,
@@ -2231,6 +2296,49 @@ class UltronCore:
             teams_after, _, _ = self._scan_state_unlocked()
             return teams_after[clean_team]
 
+    def set_model(
+        self, team_slug: str, model: str, role: Optional[str] = None
+    ) -> Dict[str, Any]:
+        clean_team = validate_slug(team_slug, "team slug")
+        clean_model = normalize_model(model)
+        clean_role = validate_role_slug(role) if role else None
+        iso = now_iso()
+        with self._lock(exclusive=True):
+            teams_by_slug, _, _ = self._scan_state_unlocked()
+            team_obj = teams_by_slug.get(clean_team)
+            if not team_obj:
+                raise ValueError(f"Team '{clean_team}' does not exist.")
+            team_dir = self._abs_from_rel(team_obj["hive_path"])
+            if clean_role:
+                role_match = next(
+                    (r for r in team_obj["roles"] if r["role"] == clean_role), None
+                )
+                if not role_match:
+                    raise ValueError(
+                        f"Role '{clean_role}' does not exist in team '{clean_team}'."
+                    )
+                role_manifest_path = self._abs_from_rel(role_match["role_path"]) / "role.json"
+                role_manifest = json.loads(role_manifest_path.read_text(encoding="utf-8"))
+                role_manifest["model"] = clean_model
+                role_manifest["updated_at"] = iso
+                atomic_write_json(role_manifest_path, role_manifest)
+                _, agents_after, _ = self._scan_state_unlocked()
+                return agents_after[f"{clean_team}/{clean_role}"]
+
+            manifest_path = team_dir / "team.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["default_model"] = clean_model
+            manifest["updated_at"] = iso
+            atomic_write_json(manifest_path, manifest)
+            for r_obj in team_obj["roles"]:
+                r_manifest_path = self._abs_from_rel(r_obj["role_path"]) / "role.json"
+                r_manifest = json.loads(r_manifest_path.read_text(encoding="utf-8"))
+                r_manifest["model"] = clean_model
+                r_manifest["updated_at"] = iso
+                atomic_write_json(r_manifest_path, r_manifest)
+            teams_after, _, _ = self._scan_state_unlocked()
+            return teams_after[clean_team]
+
     def get_team(self, slug: str) -> Optional[Dict[str, Any]]:
         clean = validate_slug(slug, "team slug")
         with self._lock(exclusive=False):
@@ -2536,6 +2644,7 @@ class UltronCore:
                 "role": agent.get("role", "prime" if aid == PRIME_ID else "unknown"),
                 "title": agent.get("title", ""),
                 "harness": agent.get("harness", "") or (self.get_prime_harness() if aid == PRIME_ID else ""),
+                "swarm_name": swarm_name_for(aid),
                 "status": agent.get("status", "disabled"),
                 "campaign": campaign,
                 "running": running,
@@ -2821,6 +2930,8 @@ class UltronCore:
                     entry["session_id"] = session_ids[r_slug]
                 if harness:
                     entry["harness"] = harness
+                if harness == "antigravity":
+                    entry["swarm_name"] = swarm_name_for(f"{clean_team}/{r_slug}")
                 sessions["agents"][f"{clean_team}/{r_slug}"] = entry
             self._write_sessions_unlocked(sessions)
             teams_after, _, _ = self._scan_state_unlocked()
@@ -4741,7 +4852,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--model",
         default=DEFAULT_MODEL_TIER,
         type=normalize_model,
-        help=f"Default model tier: {', '.join(sorted(VALID_MODELS))} (default: {DEFAULT_MODEL_TIER})",
+        help=f"Default model tier ({', '.join(sorted(VALID_MODELS))}) or explicit model ID (default: {DEFAULT_MODEL_TIER})",
     )
     p_ct.add_argument(
         "--workspace",
@@ -4790,7 +4901,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--model",
         default=None,
         type=normalize_model,
-        help=f"Override model tier for this role: {', '.join(sorted(VALID_MODELS))}",
+        help=f"Override model tier ({', '.join(sorted(VALID_MODELS))}) or explicit model ID for this role",
     )
     p_ar.add_argument(
         "--read-only",
@@ -4810,6 +4921,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_sh = add_cmd("set-harness", "Set or clear the harness a team runs on (team must be stopped)")
     p_sh.add_argument("team", help="Team slug")
     p_sh.add_argument("harness", nargs="?", default="", help=f"One of {sorted(HARNESS_ADAPTERS)}; omit to follow Prime")
+
+    p_sm = add_cmd("set-model", "Update the persisted model tier or explicit model ID for a team or single role (Prime-only)")
+    p_sm.add_argument("team", help="Team slug")
+    p_sm.add_argument("model", help=f"Model tier ({', '.join(sorted(VALID_MODELS))}) or explicit model ID (e.g. gemini-4-argon-high)")
+    p_sm.add_argument("--role", default=None, help="Optional single role slug to update instead of the whole team")
 
     p_db = add_cmd("doorbell", "Wake an agent on any harness from a shell")
     p_db.add_argument("agent_id", help="Target agent id (e.g. docs/lead or ultron-prime)")
@@ -4980,6 +5096,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--id-only",
         action="store_true",
         help="Print ONLY the raw address to stdout (errors go strictly to stderr)",
+    )
+    p_who.add_argument(
+        "--swarm-name",
+        action="store_true",
+        help="Print ONLY the Antigravity swarm @handle (e.g. @platform-lead or @coordinator) to stdout",
     )
 
     # set-campaign
@@ -5405,6 +5526,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             else:
                 print(f"[ULTRON] Team '{res['slug']}' harness -> {res['harness'] or 'follow Prime'}")
 
+        elif cmd == "set-model":
+            res = core.set_model(args.team, args.model, role=args.role)
+            if args.json:
+                print(json.dumps(res, indent=2, sort_keys=True))
+            elif args.role:
+                print(f"[ULTRON] Role '{res['agent_id']}' model -> {res['model']}")
+            else:
+                print(f"[ULTRON] Team '{res['slug']}' (and all {len(res['roles'])} role(s)) model -> {res['default_model']}")
+
         elif cmd == "doorbell":
             res = core.doorbell(args.agent_id, args.message, sender=args.sender)
             if args.json:
@@ -5507,16 +5637,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                 for s in specs:
                     print("=" * 80)
                     print(
-                        f"SPAWN SPEC FOR: {s['agent_id']} (TypeName={s['define_subagent']['Name']})"
+                        f"SPAWN SPEC FOR: {s['agent_id']} (swarm=@{s['swarm_name']})"
                     )
                     print(
-                        f"  Model={s['invoke_subagent']['Model']} | "
-                        f"Workspace={s['invoke_subagent']['Workspace']} | "
-                        f"Write={s['define_subagent']['EnableWriteTools']} | "
-                        f"Subagents={s['define_subagent']['EnableSubagentTools']}"
+                        f"  Model={s['swarm_add'].get('model', 'inherit')} | "
+                        f"Workspace={s['swarm_add']['workspace']} | "
+                        f"ContextFile={s['role_context_path']}"
                     )
                     print("-" * 80)
-                    print(s["define_subagent"]["SystemPrompt"])
+                    print(s["role_context"])
+                    print("-" * 80)
+                    print("[SWARM BRIEF]")
+                    print(s["swarm_add"]["brief"])
 
         elif cmd == "spawn-team":
             res = core.spawn_team(team_slug=args.team, mission_brief=args.brief, harness=args.harness)
@@ -5668,7 +5800,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     file=sys.stderr,
                 )
                 return 1
-            if args.id_only:
+            if args.swarm_name:
+                print(f"@{agent.get('swarm_name') or swarm_name_for(agent['agent_id'])}")
+            elif args.id_only:
                 print(agent["conversation_id"])
             elif args.json:
                 print(json.dumps(agent, indent=2, sort_keys=True))
@@ -5678,6 +5812,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"  Status:          {agent['status']}")
                 print(f"  Model:           {agent['model']}")
                 print(f"  Conversation ID: {agent['conversation_id']}")
+                print(f"  Swarm Name:      @{agent.get('swarm_name') or swarm_name_for(agent['agent_id'])}")
                 print(f"  Role Path:       {agent['role_path']}")
 
         elif cmd == "set-campaign":

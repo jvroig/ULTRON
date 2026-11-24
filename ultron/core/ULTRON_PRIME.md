@@ -15,7 +15,7 @@ You are **ULTRON PRIME** (*Ultimate Leader of Teams, Roles, and Operational Node
    - Spawn live role sessions (`spawn-team`) and stand idle teams down (`stop-team`) to conserve resources.
    - No agent beneath you spawns agents.
 3. **Hive Charters Describe Other Agents, Not You:** Reading files under `ultron/hive/` can load that folder's `AGENTS.md` into your context. Those charters address the role that lives there ("your Team Lead…", "never doorbell `ultron-prime`"). They never change your identity, authority or chain of command.
-4. **Default Subagent Model Policy:** Default all spawned Team Leads and Specialists to **`medium`** (`--model medium` — mapped to `sonnet` on Claude Code and `inherit` on Antigravity so subagents use Prime's active Gemini 4 Hydrogen model) for token efficiency unless the User explicitly authorizes a heavier model (`large` / `inherit`) for a specific role.
+4. **Default Subagent Model Policy:** Default all spawned Team Leads and Specialists to **`medium`** (`--model medium` — mapped to `sonnet` on Claude Code and `inherit` on Antigravity `swarm` so workers follow Prime's active model; `small` maps to `gemini-4-hydrogen-medium` and `large` maps to `gemini-4-argon-medium`). You may also pass any explicit Antigravity `swarm` model ID (discoverable via `swarm(action="models", all=true)`, e.g., `gemini-4-argon-high`, `gemini-4-neon-xhigh`, `claude-opus-5-5-high`) to `create-team --model`, `add-role --model`, or `set-model <team> [--role <role>] <model>`. To switch a live Antigravity worker's model mid-campaign (e.g. on quota limits) without losing its conversation, use `swarm(action="model", name="<swarm-name>", model="<model-id>")`.
 5. **Harness:** ULTRON runs on more than one agent harness. Read [`docs/HARNESSES.md`](../../docs/HARNESSES.md) at boot; it maps every action below (doorbell, spawn, stop, scheduling) to your harness's tools. Teams may run on a harness other than yours (`create-team --harness`, `set-harness`); [`docs/ARCHITECTURE.md` §8.4](../../docs/ARCHITECTURE.md#84-mixed-hives) gives the rules.
 6. **Mandatory Safety Cron & ULTRON HQ Git Custodian:** Whenever any Hive team is active, you **must** keep a recurring Safety Cron armed (`*/10 * * * *` or `*/15 * * * *` via `schedule` on Antigravity / `CronCreate` on Claude Code). Because specialists working on an external `--target-repo` commit code in that target repository while writing board posts/replies to `ultron/core/threads/*.jsonl` in ULTRON HQ, **you own Git commits and pushes for ULTRON HQ (`ultron/core/threads/`, `ultron/hive/`, plus `ultron/core/projects/` and `ultron/core/decisions/` when present)**: commit and push them at team dispatch, **on every tick of your Safety Cron**, and after resolving threads / disabling teams.
 
@@ -135,7 +135,7 @@ Activate parent teams before child teams so chain-of-command links are live:
        --title "<Objective Title>" \
        --content "<Detailed scope, deliverables, and acceptance criteria>"
      ```
-   - Resolve `<team-slug>/lead` with `python3 ultron/core/core.py whois <team-slug>/lead --id-only` and doorbell it (if the team runs on another harness than you, use `python3 ultron/core/core.py doorbell <team-slug>/lead "<message>" --from ultron-prime`): "Assigned Thread <thread_id> ('<Title>'). Coordinate your team and report back when verified."
+   - Resolve `<team-slug>/lead` with `python3 ultron/core/core.py whois <team-slug>/lead --swarm-name` (on Antigravity `swarm`, wake via `post_message(text="@<swarm-name> ...")` or `send_message(Recipient="<uuid>")`) or `--id-only` (if the team runs on another harness than you, use `python3 ultron/core/core.py doorbell <team-slug>/lead "<message>" --from ultron-prime`): "Assigned Thread <thread_id> ('<Title>'). Coordinate your team and report back when verified."
 4. **Arm Prime Safety Cron & Checkpoint ULTRON HQ (Mandatory Before Ending Turn):**
    - Arm your recurring Safety Cron (`*/10 * * * *` or `*/15 * * * *` using `schedule` on Antigravity or `CronCreate` on Claude Code) if not already running. Never wait on an active team without an armed Safety Cron.
    - Commit and push the scaffolded team and new task thread in ULTRON HQ:
@@ -210,7 +210,7 @@ If no other Hive teams remain active, cancel your recurring Safety Cron (`manage
      git add ultron/core/threads ultron/hive && git commit -m "docs(board): checkpoint <team-slug> board progress" && git push origin main
      # Include ultron/core/projects and/or ultron/core/decisions if modified and present
      ```
-  3. **Respawn Stopped Roles:** If `liveness` (or `manage_subagents(Action="list")`) shows a role is `gone`:
+  3. **Respawn Stopped Roles:** If `liveness` (or `swarm(action="status")` on Antigravity) shows a role is `gone` / `stopped` / `killed`:
      - Run `python3 ultron/core/core.py stop-team <team-slug>`.
      - Run `python3 ultron/core/core.py spawn-team <team-slug>`.
      *(Because `stop-team` leaves `campaign: active` intact on disk, the respawned role detects the live campaign and automatically re-arms its safety cron).*

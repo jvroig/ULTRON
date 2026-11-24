@@ -23,7 +23,19 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from ultron.core.core import BG_SESSION_ID_RE, PRIME_ID, ROLE_CONTEXT_FILENAME, ROLE_CONTEXT_IMPORT, UltronCore, normalize_project_subpath  # noqa: E402
+from ultron.core.core import (  # noqa: E402
+    BG_SESSION_ID_RE,
+    PRIME_ID,
+    ROLE_CONTEXT_FILENAME,
+    ROLE_CONTEXT_IMPORT,
+    ROLE_ID_ENV,
+    UltronCore,
+    main as ultron_main,
+    normalize_model,
+    normalize_project_subpath,
+    resolve_antigravity_model,
+    swarm_name_for,
+)
 
 
 class UltronCoreTestCase(unittest.TestCase):
@@ -177,18 +189,18 @@ class UltronCoreTestCase(unittest.TestCase):
         lead_spec, auditor_spec = specs[0], specs[1]
 
         self.assertEqual(lead_spec["agent_id"], "core-eng/lead")
-        self.assertFalse(lead_spec["define_subagent"]["EnableSubagentTools"])
-        self.assertTrue(lead_spec["define_subagent"]["EnableWriteTools"])
-        self.assertEqual(lead_spec["invoke_subagent"]["Model"], "inherit")
-        self.assertIn('{"strict": true, "retries": 3}', lead_spec["define_subagent"]["SystemPrompt"])
-        self.assertIn("--visibility personal", lead_spec["define_subagent"]["SystemPrompt"])
+        self.assertEqual(lead_spec["swarm_name"], "core-eng-lead")
+        self.assertEqual(lead_spec["swarm_add"]["action"], "add")
+        self.assertEqual(lead_spec["swarm_add"]["name"], "core-eng-lead")
+        self.assertNotIn("model", lead_spec["swarm_add"])
+        self.assertIn('{"strict": true, "retries": 3}', lead_spec["role_context"])
+        self.assertIn("--visibility personal", lead_spec["role_context"])
 
         self.assertEqual(auditor_spec["agent_id"], "core-eng/auditor")
         self.assertTrue(auditor_spec["read_only_mode"])
-        self.assertFalse(auditor_spec["define_subagent"]["EnableSubagentTools"])
-        self.assertTrue(auditor_spec["define_subagent"]["EnableWriteTools"])
-        self.assertIn("[READ-ONLY ROLE MODE]", auditor_spec["define_subagent"]["SystemPrompt"])
-        self.assertEqual(auditor_spec["invoke_subagent"]["Model"], "flash_lite")
+        self.assertEqual(auditor_spec["swarm_add"]["name"], "core-eng-auditor")
+        self.assertIn("[READ-ONLY ROLE MODE]", auditor_spec["role_context"])
+        self.assertEqual(auditor_spec["swarm_add"]["model"], "gemini-4-hydrogen-medium")
 
     def test_lifecycle_guards_whois_and_clean_git_working_tree(self) -> None:
         self.core.create_team(slug="parent-t", name="Parent", mission="Parent team")
@@ -631,15 +643,15 @@ class UltronCoreTestCase(unittest.TestCase):
 
         # render-spawn injects Dual-Directory Execution Rule
         specs = {s["role"]: s for s in self.core.render_spawn("game-team")}
-        self.assertIn("Dual-Directory Execution Rule", specs["lead"]["define_subagent"]["SystemPrompt"])
-        self.assertIn(str(ext_game.resolve()), specs["lead"]["define_subagent"]["SystemPrompt"])
-        self.assertIn("XCOMBench", specs["benchmarker"]["define_subagent"]["SystemPrompt"])
+        self.assertIn("Dual-Directory Execution Rule", specs["lead"]["role_context"])
+        self.assertIn(str(ext_game.resolve()), specs["lead"]["role_context"])
+        self.assertIn("XCOMBench", specs["benchmarker"]["role_context"])
 
         # Target repo guideline detection
         ext_game.mkdir(parents=True, exist_ok=True)
         (ext_game / "AGENTS.md").write_text("# Game Repo Guidelines\nCommit early and often.\n", encoding="utf-8")
         specs_with_guidelines = {s["role"]: s for s in self.core.render_spawn("game-team")}
-        prompt = specs_with_guidelines["lead"]["define_subagent"]["SystemPrompt"]
+        prompt = specs_with_guidelines["lead"]["role_context"]
         self.assertIn("Project Guidelines Detected:", prompt)
         self.assertIn("`AGENTS.md`", prompt)
         self.assertIn("Target Project Guidelines", prompt)
@@ -685,7 +697,7 @@ class UltronCoreTestCase(unittest.TestCase):
         self.assertTrue(tl_specs["anti-slop-qa"]["read_only_mode"])
         self.assertIn(
             "Mandatory Anti-Slop Inspection Categories",
-            tl_specs["anti-slop-qa"]["define_subagent"]["SystemPrompt"],
+            tl_specs["anti-slop-qa"]["role_context"],
         )
 
         # Instantiate a tech-docs team and verify auditor is read-only
@@ -699,11 +711,11 @@ class UltronCoreTestCase(unittest.TestCase):
         self.assertTrue(td_specs["auditor"]["read_only_mode"])
         self.assertIn(
             "[READ-ONLY ROLE MODE]",
-            td_specs["auditor"]["define_subagent"]["SystemPrompt"],
+            td_specs["auditor"]["role_context"],
         )
         self.assertIn(
             "Strict Inline SVG Markup Hygiene",
-            td_specs["visualizer"]["define_subagent"]["SystemPrompt"],
+            td_specs["visualizer"]["role_context"],
         )
 
         # Instantiate a team from coding-light blueprint via CLI without needing --name
@@ -742,19 +754,19 @@ class UltronCoreTestCase(unittest.TestCase):
         specs = {s["role"]: s for s in self.core.render_spawn("alpha-code")}
         self.assertIn(
             "Formal Intra-Team Workflow (`coding-light` State Machine)",
-            specs["spec"]["define_subagent"]["SystemPrompt"],
+            specs["spec"]["role_context"],
         )
         self.assertIn(
             "Phase 4 — Final Spec & Architectural Compliance Audit",
-            specs["spec"]["define_subagent"]["SystemPrompt"],
+            specs["spec"]["role_context"],
         )
         self.assertIn(
             "Phase 3 — Rigorous Verification Against the Spec",
-            specs["qa"]["define_subagent"]["SystemPrompt"],
+            specs["qa"]["role_context"],
         )
         self.assertIn(
             "Collaborate Directly Within Your Team:",
-            specs["dev"]["define_subagent"]["SystemPrompt"],
+            specs["dev"]["role_context"],
         )
 
         # Test user-extensible save-blueprint -> instantiate round-trip
@@ -814,10 +826,10 @@ class UltronCoreTestCase(unittest.TestCase):
             cc_specs = {s["role"]: s for s in self.core.render_spawn(team_slug, harness="claude-code")}
             self.assertEqual(set(agy_specs.keys()), {"lead", "explorer", "analyst", "critic"})
             for r_slug in ("lead", "explorer", "analyst", "critic"):
-                prompt = agy_specs[r_slug]["define_subagent"]["SystemPrompt"]
+                prompt = agy_specs[r_slug]["role_context"]
                 self.assertNotIn("{{", prompt, msg=f"Unrendered placeholder in {bp_slug}/{r_slug}")
                 self.assertIn(f"{team_slug}/{r_slug}", prompt)
-                self.assertEqual(agy_specs[r_slug]["invoke_subagent"]["Model"], "inherit")
+                self.assertNotIn("model", agy_specs[r_slug]["swarm_add"])
                 self.assertEqual(cc_specs[r_slug]["claude_model"], "sonnet")
 
     def test_ui_studio_blueprint_renders_cleanly_and_enforces_read_only_critic(self) -> None:
@@ -851,17 +863,17 @@ class UltronCoreTestCase(unittest.TestCase):
         self.assertTrue(agy_specs["ux-critic"]["read_only_mode"])
         self.assertIn(
             "[READ-ONLY ROLE MODE]",
-            agy_specs["ux-critic"]["define_subagent"]["SystemPrompt"],
+            agy_specs["ux-critic"]["role_context"],
         )
         self.assertIn(
             "Mandatory Form-Factor Envelope Profiles",
-            agy_specs["ux-architect"]["define_subagent"]["SystemPrompt"],
+            agy_specs["ux-architect"]["role_context"],
         )
         for r_slug in ("lead", "ux-architect", "visual-crafter", "ux-critic"):
-            prompt = agy_specs[r_slug]["define_subagent"]["SystemPrompt"]
+            prompt = agy_specs[r_slug]["role_context"]
             self.assertNotIn("{{", prompt, msg=f"Unrendered placeholder in ui-studio/{r_slug}")
             self.assertIn(f"ui-pod/{r_slug}", prompt)
-            self.assertEqual(agy_specs[r_slug]["invoke_subagent"]["Model"], "inherit")
+            self.assertNotIn("model", agy_specs[r_slug]["swarm_add"])
             self.assertEqual(cc_specs[r_slug]["claude_model"], "sonnet")
 
     def test_projects_catalog_hierarchy_relationships_and_cli(self) -> None:
@@ -1197,7 +1209,7 @@ class UltronCoreTestCase(unittest.TestCase):
 
         # 3. Role context hydration injects project & active/pending/needs_improvement decisions (excluding overruled), cleanly before Charters
         specs_sub = self.core.render_spawn("subapp-dev", harness="antigravity")
-        prompt_sub = specs_sub[0]["define_subagent"]["SystemPrompt"]
+        prompt_sub = specs_sub[0]["role_context"]
         self.assertIn("## Project & Prime Decisions Context", prompt_sub)
         self.assertIn("Assigned Project:** `subapp` (Subapp) — `~/Dev/suite/subapp`", prompt_sub)
         self.assertIn("Zero third-party deps", prompt_sub)
@@ -1643,9 +1655,10 @@ class UltronCoreTestCase(unittest.TestCase):
         self.assertEqual(agents["api/coder"]["model"], "medium")
 
     def test_unknown_model_tier_is_refused(self) -> None:
-        with self.assertRaises(ValueError):
-            self.core.create_team(slug="api", name="API", mission="m", default_model="gpt")
-        res = self.run_cli("create-team", "--slug", "api", "--name", "API", "--mission", "m", "--model", "gpt")
+        for bad in ("", "bad model!", "gemini;rm -rf /", "a" * 65):
+            with self.assertRaises(ValueError):
+                self.core.create_team(slug="api", name="API", mission="m", default_model=bad)
+        res = self.run_cli("create-team", "--slug", "api", "--name", "API", "--mission", "m", "--model", "bad model!")
         self.assertNotEqual(res.returncode, 0)
         res = self.run_cli("create-team", "--slug", "api", "--name", "API", "--mission", "m", "--model", "pro")
         self.assertEqual(res.returncode, 0, res.stderr)
@@ -1866,7 +1879,8 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
         self.core.activate_team("api", {"lead": "uuid-lead", "coder": "uuid-coder"})
         res = self.core.stop_team("api", harness="antigravity")
         self.assertEqual(res["status"], "awaiting_prime")
-        self.assertIn("uuid-coder", res["next_steps"][0])
+        self.assertEqual(res["swarm_names_to_kill"], ["api-coder", "api-lead"])
+        self.assertIn('swarm(action="kill", name="api-coder")', res["next_steps"][0])
         self.assertTrue(any("ultron/core/threads/" in step for step in res["next_steps"]))
         self.assertEqual(self.calls(), [])
         self.assertEqual(self.core.get_team("api")["status"], "active")
@@ -2006,7 +2020,7 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
         self.assertEqual(self.core.get_prime_harness(), "claude-code")
 
     def test_render_spawn_cli_prints_each_harness_without_crashing(self) -> None:
-        for harness, marker in (("claude-code", "ultron--api--coder"), ("antigravity", "TypeName=ultron--api--coder")):
+        for harness, marker in (("claude-code", "ultron--api--coder"), ("antigravity", "swarm=@api-coder")):
             with self.subTest(harness=harness):
                 res = self.run_cli("render-spawn", "api", "--harness", harness)
                 self.assertEqual(res.returncode, 0, res.stderr)
@@ -2017,7 +2031,7 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
         os.environ["ANTIGRAVITY_CONVERSATION_ID"] = "conv-1"
         res = self.run_cli("render-spawn", "api")
         self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertIn("TypeName=ultron--api--coder", res.stdout)
+        self.assertIn("swarm=@api-coder", res.stdout)
 
     def test_without_env_markers_the_harness_follows_prime(self) -> None:
         self.core.register_prime("prime-uuid", harness="antigravity")
@@ -2036,7 +2050,7 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
 
     def test_antigravity_system_prompt_omits_the_claude_import_line(self) -> None:
         for spec in self.core.render_spawn("api", harness="antigravity"):
-            self.assertNotIn(ROLE_CONTEXT_IMPORT, spec["define_subagent"]["SystemPrompt"])
+            self.assertNotIn(ROLE_CONTEXT_IMPORT, spec["role_context"])
 
     def test_session_id_parsing_accepts_non_hex_ids(self) -> None:
         match = BG_SESSION_ID_RE.search("  claude attach 3f2a9c1e-bg_Z7    open in this terminal")
@@ -2074,7 +2088,8 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
         self.core.activate_team("api", {"lead": "u1", "coder": "u2"}, harness="antigravity")
         res = self.core.probe_liveness(harness="antigravity")
         self.assertEqual({r["state"] for r in res["agents"].values()}, {"unknown"})
-        self.assertIn("['u1', 'u2']", res["next_steps"][0])
+        self.assertIn("swarm(action=\"status\")", res["next_steps"][0])
+        self.assertIn("['api-coder', 'api-lead']", res["next_steps"][0])
         self.assertTrue(any("git add ultron/core/threads ultron/hive" in step for step in res["next_steps"]))
 
     def test_spawn_refuses_an_already_active_team(self) -> None:
@@ -2130,7 +2145,7 @@ class RenderSpawnGoldenTestCase(unittest.TestCase):
 class HarnessAdapterContractTestCase(unittest.TestCase):
     FOREIGN_TOOL_NAMES = {
         "claude-code": ["run_command", "write_file", "edit_file", "read_file", "grep_search",
-                        "find_by_name", "send_message", "manage_task", "WaitMsBeforeAsync"],
+                        "find_by_name", "send_message", "post_message", "manage_task", "WaitMsBeforeAsync"],
         "antigravity": ["SendMessage", "EnterWorktree", "`Bash`", "`Write`", "`Edit`"],
     }
     SHARED_SPEC_KEYS = {"agent_id", "team_slug", "role", "read_only_mode", "target_repo", "target_repo_abs"}
@@ -2380,6 +2395,164 @@ class DirectoryAndBoardUseTestCase(unittest.TestCase):
         self.assertNotIn("alpha/reviewer", coder_prompt)
         self.assertNotIn("sub/lead", coder_prompt)
         self.assertNotIn("sub/worker", coder_prompt)
+
+
+class AntigravitySwarmTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmpdir.name).resolve()
+        (self.root / "ultron" / "core" / "threads").mkdir(parents=True)
+        (self.root / "ultron" / "hive").mkdir(parents=True)
+        shutil.copytree(REPO_ROOT / "ultron" / "core" / "templates", self.root / "ultron" / "core" / "templates")
+        self.core = UltronCore(repo_root=self.root)
+
+    def tearDown(self) -> None:
+        self._tmpdir.cleanup()
+
+    def test_swarm_name_for_determinism_length_and_reserved_guards(self) -> None:
+        import re
+
+        valid_re = re.compile(r"^[a-z0-9][a-z0-9_-]{0,23}$")
+        self.assertEqual(swarm_name_for(PRIME_ID), "coordinator")
+        self.assertEqual(swarm_name_for("api/coder"), "api-coder")
+        self.assertEqual(swarm_name_for("xcom-dev/lead"), "xcom-dev-lead")
+
+        # Reserved prefix guard ('coordinator' / 'coordinator-*')
+        guarded = swarm_name_for("coordinator/lead")
+        self.assertTrue(valid_re.match(guarded))
+        self.assertFalse(guarded == "coordinator" or guarded.startswith("coordinator-"))
+
+        # Long slug truncation + deterministic 4-char hash suffix
+        long_a = swarm_name_for("very-long-team-slug/very-long-role-name-a")
+        long_b = swarm_name_for("very-long-team-slug/very-long-role-name-b")
+        self.assertLessEqual(len(long_a), 24)
+        self.assertLessEqual(len(long_b), 24)
+        self.assertTrue(valid_re.match(long_a))
+        self.assertTrue(valid_re.match(long_b))
+        self.assertEqual(long_a, swarm_name_for("very-long-team-slug/very-long-role-name-a"))
+        self.assertNotEqual(long_a, long_b)
+
+    def test_normalize_and_resolve_antigravity_models(self) -> None:
+        # Canonical tiers + legacy aliases
+        self.assertEqual(resolve_antigravity_model(normalize_model("small")), "gemini-4-hydrogen-medium")
+        self.assertEqual(resolve_antigravity_model(normalize_model("flash_lite")), "gemini-4-hydrogen-medium")
+        self.assertIsNone(resolve_antigravity_model(normalize_model("medium")))
+        self.assertIsNone(resolve_antigravity_model(normalize_model("inherit")))
+        self.assertEqual(resolve_antigravity_model(normalize_model("large")), "gemini-4-argon-medium")
+        self.assertEqual(resolve_antigravity_model(normalize_model("pro")), "gemini-4-argon-medium")
+
+        # Explicit model IDs pass through verbatim (normalized lowercase)
+        for explicit in ("gemini-4-argon-high", "gemini-4-neon-xhigh", "claude-opus-5-5-high", "gpt-oss-120b-medium"):
+            self.assertEqual(resolve_antigravity_model(normalize_model(explicit)), explicit)
+
+        # Invalid/unsafe strings rejected
+        for bad in ("", "   ", "gemini 4", "model;ls", "$(whoami)", "-leading-dash", "x" * 65):
+            with self.assertRaises(ValueError):
+                normalize_model(bad)
+
+    def test_antigravity_spawn_writes_role_context_and_keeps_brief_short(self) -> None:
+        self.core.register_prime("prime-uuid", harness="antigravity")
+        self.core.create_team(slug="solver", name="Solver", mission="Solve puzzles", default_model="gemini-4-neon-high")
+        self.core.add_role("solver", "arch", "Architect", "Design search", model="gemini-4-argon-high")
+        self.core.add_role("solver", "qa", "QA", "Verify", model="medium", write_tools=False)
+
+        plan = self.core.spawn_team("solver", harness="antigravity")
+        self.assertEqual(plan["status"], "awaiting_prime")
+        specs = {s["role"]: s for s in plan["specs"]}
+
+        # Model resolution
+        self.assertEqual(specs["lead"]["swarm_add"]["model"], "gemini-4-neon-high")
+        self.assertEqual(specs["arch"]["swarm_add"]["model"], "gemini-4-argon-high")
+        self.assertNotIn("model", specs["qa"]["swarm_add"])
+
+        # role_context.generated.md written on disk; public brief stays concise and points to it
+        for r_slug, sp in specs.items():
+            ctx_path = Path(sp["role_context_path"])
+            self.assertTrue(ctx_path.is_file(), f"Missing {ctx_path}")
+            self.assertEqual(ctx_path.read_text(encoding="utf-8"), sp["role_context"])
+            brief = sp["swarm_add"]["brief"]
+            self.assertIn(str(ctx_path), brief)
+            self.assertIn("NEVER call `swarm(action='add')`", brief)
+            self.assertNotIn("## Inherited Team & Ancestor Charters", brief)
+            self.assertLess(len(brief), len(sp["role_context"]))
+
+        self.assertIn("[READ-ONLY ROLE MODE]", specs["qa"]["role_context"])
+
+    def test_set_model_cli_team_role_and_prime_only_guard(self) -> None:
+        self.core.create_team(slug="xcom", name="XCOM", mission="Tactics", default_model="medium")
+        self.core.add_role("xcom", "dev", "Developer", "Code")
+        self.core.add_role("xcom", "qa", "QA", "Test")
+
+        # Team-wide set-model updates team default_model AND all roles
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = ultron_main(["--root", str(self.root), "set-model", "xcom", "gemini-4-argon-medium"])
+        self.assertEqual(rc, 0, err.getvalue())
+        team = self.core.get_team("xcom")
+        assert team is not None
+        self.assertEqual(team["default_model"], "gemini-4-argon-medium")
+        self.assertEqual({r["role"]: r["model"] for r in team["roles"]}, {
+            "lead": "gemini-4-argon-medium",
+            "dev": "gemini-4-argon-medium",
+            "qa": "gemini-4-argon-medium",
+        })
+
+        # Single-role set-model updates only that role
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = ultron_main(["--root", str(self.root), "set-model", "xcom", "--role", "dev", "gemini-4-argon-high"])
+        self.assertEqual(rc, 0, err.getvalue())
+        team = self.core.get_team("xcom")
+        assert team is not None
+        self.assertEqual({r["role"]: r["model"] for r in team["roles"]}, {
+            "lead": "gemini-4-argon-medium",
+            "dev": "gemini-4-argon-high",
+            "qa": "gemini-4-argon-medium",
+        })
+
+        # Non-prime role cannot run set-model
+        old_env = os.environ.get(ROLE_ID_ENV)
+        try:
+            os.environ[ROLE_ID_ENV] = "xcom/dev"
+            out, err = io.StringIO(), io.StringIO()
+            with redirect_stdout(out), redirect_stderr(err):
+                rc = ultron_main(["--root", str(self.root), "set-model", "xcom", "small"])
+            self.assertEqual(rc, 1)
+            self.assertIn("is for ultron-prime only", err.getvalue())
+        finally:
+            if old_env is None:
+                os.environ.pop(ROLE_ID_ENV, None)
+            else:
+                os.environ[ROLE_ID_ENV] = old_env
+
+    def test_whois_swarm_name_and_directory_expose_swarm_handles(self) -> None:
+        self.core.register_prime("prime-uuid", harness="antigravity")
+        self.core.create_team(slug="xcom", name="XCOM", mission="Tactics")
+        self.core.add_role("xcom", "dev", "Developer", "Code")
+        self.core.activate_team("xcom", {"lead": "u-lead", "dev": "u-dev"}, harness="antigravity")
+
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = ultron_main(["--root", str(self.root), "whois", "xcom/dev", "--swarm-name"])
+        self.assertEqual(rc, 0, err.getvalue())
+        self.assertEqual(out.getvalue().strip(), "@xcom-dev")
+
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = ultron_main(["--root", str(self.root), "whois", "ultron-prime", "--swarm-name"])
+        self.assertEqual(rc, 0, err.getvalue())
+        self.assertEqual(out.getvalue().strip(), "@coordinator")
+
+        # --id-only still returns conversation_id UUID for cross-harness compatibility
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = ultron_main(["--root", str(self.root), "whois", "xcom/dev", "--id-only"])
+        self.assertEqual(rc, 0, err.getvalue())
+        self.assertEqual(out.getvalue().strip(), "u-dev")
+
+        # directory exposes swarm_name
+        dev_entry = self.core.directory("xcom/dev", no_probe=True)
+        self.assertEqual(dev_entry["swarm_name"], "xcom-dev")
 
 
 if __name__ == "__main__":

@@ -7,14 +7,14 @@ delivery, mixed hives, shell doorbell) is in [ARCHITECTURE.md §7.2 and §8](ARC
 
 | Action | `claude-code` | `antigravity` |
 |---|---|---|
-| Prime's doorbell address | its session name (`ListAgents` prints "This session is …") | its Conversation ID from `<user_information>` |
-| Doorbell, same harness | `SendMessage` with `to` = address | `send_message(Recipient=<address>, Message=…)` |
-| Doorbell, any harness | `core.py doorbell <agent> "<msg>" --from <you>` | same |
-| Spawn a team | `spawn-team` launches and binds every role | `spawn-team` prints a plan: `define_subagent` + `invoke_subagent` per spec, then `activate-team` |
-| Stop a team | `stop-team` stops every session and disables the team | `stop-team` prints a plan: `manage_subagents(Action="kill")`, then `disable-team`; the team stays active until then |
-| Check roles are running | `liveness [team]` checks `claude agents --json`; exits 1 if a role is gone | `liveness` prints a plan: `manage_subagents(Action="list")` |
+| Prime's doorbell address | its session name (`ListAgents` prints "This session is …") | its Conversation ID from `<user_information>` (and `@coordinator` on the swarm board) |
+| Doorbell, same harness | `SendMessage` with `to` = address | `post_message(text="@<swarm_name> ...")` (resolve handle via `whois <agent> --swarm-name`; `@coordinator` for Prime) |
+| Doorbell, any harness | `core.py doorbell <agent> "<msg>" --from <you>` | same (`agentapi send-message <conversation_id>`) |
+| Spawn a team | `spawn-team` launches and binds every role | `spawn-team` writes `role_context.generated.md` and prints a plan: `swarm(**spec['swarm_add'])` per spec, then `activate-team` with the returned `conversation_id` UUIDs |
+| Stop a team | `stop-team` stops every session and disables the team | `stop-team` prints a plan: `swarm(action="kill", name=...)` per worker, then `disable-team`; the team stays active until then |
+| Check roles are running | `liveness [team]` checks `claude agents --json`; exits 1 if a role is gone | `liveness` prints a plan: `swarm(action="status")` |
 | Safety heartbeat | `CronCreate` | `schedule` |
-| Model tiers `small` / `medium` / `large` | haiku / sonnet / opus | flash_lite / inherit / pro |
+| Model tiers `small` / `medium` / `large` | haiku / sonnet / opus | `gemini-4-hydrogen-medium` / `inherit` / `gemini-4-argon-medium` (plus any explicit `swarm` model ID via `--model` or `set-model`) |
 
 ## Claude Code requirements
 
@@ -37,12 +37,18 @@ Sessions are named `ultron--<team>--<role>`; that name is the role's doorbell ad
 - **Liveness probing:** Shell-based probes (`core.py liveness`, `core.py directory`) report `unknown`
   for Antigravity roles because `agentapi` does not expose a conversation/subagent listing command
   (it only supports `get-conversation-metadata`, `new-conversation`, and `send-message`). Within an
-  Antigravity Prime conversation, live subagent status is inspected using `manage_subagents(Action="list")`.
+  Antigravity Prime conversation, live worker status (`waiting`, `working`, `stopped`, `killed`) is
+  inspected using `swarm(action="status")`.
 - An Antigravity team is spawned by an Antigravity Prime only.
-- **Model mapping (`medium` -> `inherit`):** Antigravity's `invoke_subagent` schema only accepts
-  `['inherit', 'flash_lite', 'flash', 'pro']` and has no explicit `hydrogen` value. Because
-  `inherit` uses Prime's active model (Gemini 4 Hydrogen), the Antigravity adapter maps the
-  `medium` daily-driver tier to `inherit` instead of legacy `flash`.
+- **Swarm roster names & role context:** Each role maps deterministically to a `<= 24`-char
+  `swarm` roster name (`@<swarm_name>`, surfaced in `whois --swarm-name` and `directory`). Full
+  charters are written to `<role_dir>/role_context.generated.md` so public swarm briefs stay short.
+- **Model mapping & explicit IDs:** Antigravity's `swarm` adapter maps portable tiers to
+  `small -> gemini-4-hydrogen-medium`, `medium -> inherit` (omits `model` so workers follow Prime's
+  active model), and `large -> gemini-4-argon-medium`. Any explicit model ID from
+  `swarm(action="models", all=true)` (e.g. `gemini-4-argon-high`, `gemini-4-neon-xhigh`,
+  `claude-opus-5-5-high`) can also be passed via `--model` or updated with `core.py set-model`.
+  Live waiting workers can be hot-switched via `swarm(action="model", name=..., model=...)`.
 
 ## Mixed hives
 

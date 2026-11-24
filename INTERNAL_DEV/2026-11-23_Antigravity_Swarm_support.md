@@ -1,7 +1,7 @@
 # Implementation Plan: Antigravity `swarm` Support (Replacing `invoke_subagent`)
 
 - **Date:** 2026-11-23
-- **Status:** Plan finalized — awaiting Commander go-ahead to implement
+- **Status:** Implemented (2026-11-24 — 93/93 unit tests passing with `-W error`)
 - **Scope:** Migrate ULTRON's `antigravity` harness adapter (`ultron/core/core.py`) from `define_subagent` / `invoke_subagent` / `manage_subagents` to Antigravity's native `swarm` tool (`swarm`, `post_message`, `read_board`, `swarm_wait`), add `set-model` CLI support for standing teams/roles, and preserve 100% of ULTRON's Hive manifests, board threads, and bidirectional cross-harness (mixed-hive) doorbells.
 
 **Approved Commander Decisions:**

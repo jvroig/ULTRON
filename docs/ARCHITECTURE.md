@@ -506,10 +506,10 @@ If a developer switches Git branches or runs `git checkout`, an entire team dire
 1. The harness is the team's `harness`, else Prime's (§8.1).
 2. Refused if the team is active, its parent is disabled, or Prime's harness cannot launch the team's harness (only Claude Code launches from the CLI; an Antigravity team needs an Antigravity Prime).
 3. **Claude Code:** preflight (no `CLAUDE.md`/`CLAUDE.local.md` at or above the role folder; charter contains the role-context import; `workspace_mode` is not `branch`), write the generated role files (§3.4), run `claude --bg` per role in its role folder (lead first), then `activate-team` with session names and IDs. A failed launch stops the roles already started.
-4. **Antigravity:** returns a plan (`define_subagent` / `invoke_subagent` payloads); ULTRON PRIME carries it out and binds the conversation UUIDs with `activate-team`.
+4. **Antigravity:** writes `<role_dir>/role_context.generated.md` for each role and returns a plan (`swarm(action="add", ...)` payloads with short briefs); ULTRON PRIME carries it out and binds the returned `conversation_id` UUIDs with `activate-team`.
 
 ### 5.6 Liveness (`liveness [team]`)
-Checks every active role's session against its harness. Claude Code: the recorded `session_id` must appear in `claude agents --json` with a `pid`; a missing one is `gone` and the command exits 1. Antigravity: returns a `manage_subagents(Action="list")` check for Prime. A `gone` role is restored with `stop-team`, then `spawn-team`. ULTRON PRIME's safety heartbeat runs it.
+Checks every active role's session against its harness. Claude Code: the recorded `session_id` must appear in `claude agents --json` with a `pid`; a missing one is `gone` and the command exits 1. Antigravity: returns a `swarm(action="status")` check for Prime. A `gone` role is restored with `stop-team`, then `spawn-team`. ULTRON PRIME's safety heartbeat runs it.
 
 ---
 
