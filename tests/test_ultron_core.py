@@ -2021,7 +2021,11 @@ class ClaudeCodeLifecycleTestCase(unittest.TestCase):
         self.assertEqual(self.core.get_prime_harness(), "claude-code")
 
     def test_render_spawn_cli_prints_each_harness_without_crashing(self) -> None:
-        for harness, marker in (("claude-code", "ultron--api--coder"), ("antigravity", "swarm=@api-coder")):
+        for harness, marker in (
+            ("claude-code", "ultron--api--coder"),
+            ("antigravity", "swarm=@api-coder"),
+            ("opencode", "opencode title=ultron--api--coder"),
+        ):
             with self.subTest(harness=harness):
                 res = self.run_cli("render-spawn", "api", "--harness", harness)
                 self.assertEqual(res.returncode, 0, res.stderr)
@@ -2142,12 +2146,18 @@ class RenderSpawnGoldenTestCase(unittest.TestCase):
     def test_claude_code_spawn_output_is_unchanged(self) -> None:
         self.assert_matches_golden("claude-code")
 
+    def test_opencode_spawn_output_is_unchanged(self) -> None:
+        self.assert_matches_golden("opencode")
+
 
 class HarnessAdapterContractTestCase(unittest.TestCase):
     FOREIGN_TOOL_NAMES = {
         "claude-code": ["run_command", "write_file", "edit_file", "read_file", "grep_search",
                         "find_by_name", "send_message", "post_message", "manage_task", "WaitMsBeforeAsync"],
         "antigravity": ["SendMessage", "EnterWorktree", "`Bash`", "`Write`", "`Edit`"],
+        "opencode": ["run_command", "write_file", "edit_file", "read_file", "grep_search",
+                     "find_by_name", "send_message", "post_message", "SendMessage", "EnterWorktree",
+                     "`Bash`", "`Write`", "`Edit`", "manage_task", "WaitMsBeforeAsync"],
     }
     SHARED_SPEC_KEYS = {"agent_id", "team_slug", "role", "read_only_mode", "target_repo", "target_repo_abs"}
 
@@ -2191,6 +2201,7 @@ class HarnessAdapterContractTestCase(unittest.TestCase):
                     self.assertLessEqual(self.SHARED_SPEC_KEYS, set(sp))
         identity = {h: [{k: sp[k] for k in self.SHARED_SPEC_KEYS} for sp in specs] for h, specs in by_harness.items()}
         self.assertEqual(identity["antigravity"], identity["claude-code"])
+        self.assertEqual(identity["antigravity"], identity["opencode"])
 
     def test_unknown_harness_is_refused(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unknown harness"):
@@ -2281,8 +2292,8 @@ class DirectoryAndBoardUseTestCase(unittest.TestCase):
 
     def test_startup_step_reads_global_threads(self) -> None:
         self.core.create_team(slug="sample", name="Sample", mission="Sample mission")
-        # Check rendered startup prompt across both harnesses
-        for harness in ("antigravity", "claude-code"):
+        # Check rendered startup prompt across all harnesses
+        for harness in ("antigravity", "claude-code", "opencode"):
             specs = self.core.render_spawn("sample", harness=harness)
             for sp in specs:
                 prompt_to_check = sp.get("role_context") or sp.get("define_subagent", {}).get("SystemPrompt", "")

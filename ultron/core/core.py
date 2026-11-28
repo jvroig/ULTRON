@@ -17,6 +17,7 @@ Storage Architecture (Zero SQLite / Zero External Dependencies):
 from __future__ import annotations
 
 import argparse
+import base64
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
@@ -29,6 +30,9 @@ import subprocess
 import sys
 import tempfile
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Set, Tuple
+import urllib.error
+import urllib.parse
+import urllib.request
 
 try:
     import fcntl
@@ -76,11 +80,20 @@ HARNESS_TOOLS = {
         "shell": "Bash", "read": "Read", "write": "Write", "edit": "Edit",
         "grep": "Grep", "find": "Glob", "doorbell": "SendMessage",
     },
+    "opencode": {
+        "shell": "bash", "read": "read", "write": "write", "edit": "edit",
+        "grep": "grep", "find": "glob", "doorbell": "bash",
+    },
 }
 CLAUDE_BIN_ENV = "ULTRON_CLAUDE_BIN"
 HARNESS_ENV = "ULTRON_HARNESS"
 BG_SESSION_ID_RE = re.compile(r"claude attach\s+([A-Za-z0-9_-]+)")
 ANTIGRAVITY_ENV_MARKERS = ("ANTIGRAVITY_AGENT", "ANTIGRAVITY_CONVERSATION_ID")
+OPENCODE_ENV_MARKERS = ("OPENCODE", "OPENCODE_SESSION_ID")
+OPENCODE_URL_ENV = "ULTRON_OPENCODE_URL"
+DEFAULT_OPENCODE_URL = "http://127.0.0.1:4096"
+OPENCODE_SERVER_USER_ENV = "OPENCODE_SERVER_USERNAME"
+OPENCODE_SERVER_PASS_ENV = "OPENCODE_SERVER_PASSWORD"
 AGENTAPI_BIN_ENV = "ULTRON_AGENTAPI_BIN"
 ANTIGRAVITY_DAEMON_DIR_ENV = "ULTRON_ANTIGRAVITY_DAEMON_DIR"
 CLAUDE_DOORBELL_MODEL = "haiku"
@@ -903,7 +916,337 @@ class ClaudeCodeAdapter(HarnessAdapter):
         }
 
 
-HARNESS_ADAPTERS = {a.name: a for a in (AntigravityAdapter(), ClaudeCodeAdapter())}
+class OpenCodeAdapter(HarnessAdapter):
+    """Connect-only HTTP adapter for OpenCode headless server (`opencode serve`, OpenAPI 3.1)."""
+
+    name = "opencode"
+    tools = HARNESS_TOOLS["opencode"]
+    model_for_tier = OPENCODE_MODEL_TIER_ENVS
+    cron_tool = "host-cron (monitored by ULTRON PRIME's Safety Cron)"
+    launches_from_cli = True
+
+    @staticmethod
+    def server_url() -> str:
+        return (os.environ.get(OPENCODE_URL_ENV, "") or DEFAULT_OPENCODE_URL).strip().rstrip("/")
+
+    @staticmethod
+    def _auth_header() -> Optional[str]:
+        password = os.environ.get(OPENCODE_SERVER_PASS_ENV, "")
+        if not password:
+            return None
+        username = os.environ.get(OPENCODE_SERVER_USER_ENV, "") or "opencode"
+        token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+        return f"Basic {token}"
+
+    @classmethod
+    def _request(
+        cls,
+        method: str,
+        path: str,
+        query: Optional[Mapping[str, str]] = None,
+        body: Optional[Mapping[str, Any]] = None,
+        timeout: int = 30,
+    ) -> Tuple[int, Any]:
+        base = cls.server_url()
+        qs = f"?{urllib.parse.urlencode(query)}" if query else ""
+        url = f"{base}{path}{qs}"
+        headers: Dict[str, str] = {}
+        auth = cls._auth_header()
+        if auth:
+            headers["Authorization"] = auth
+        data: Optional[bytes] = None
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+            data = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8", errors="replace").strip()
+                parsed = json.loads(raw) if raw else None
+                return resp.status, parsed
+        except urllib.error.HTTPError as exc:
+            err_body = exc.read().decode("utf-8", errors="replace").strip()
+            raise RuntimeError(
+                f"OpenCode server {method} {path} failed (HTTP {exc.code}): {err_body or exc.reason}"
+            ) from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise RuntimeError(
+                f"OpenCode server not reachable at '{base}' ({exc}). "
+                f"Start it with 'opencode serve --port 4096' (or Docker: "
+                f"'docker run -d -p 127.0.0.1:4096:4096 -v <repo>:<repo> ghcr.io/anomalyco/opencode "
+                f"serve --hostname 0.0.0.0 --port 4096'), or set {OPENCODE_URL_ENV}."
+            ) from exc
+
+    @classmethod
+    def check_health(cls) -> Dict[str, Any]:
+        _, data = cls._request("GET", "/global/health", timeout=5)
+        if not isinstance(data, dict) or not data.get("healthy"):
+            raise RuntimeError(f"OpenCode server at '{cls.server_url()}' reported unhealthy status: {data!r}")
+        return data
+
+    @staticmethod
+    def _permission_ruleset(read_only: bool) -> List[Dict[str, str]]:
+        rules: List[Dict[str, str]] = [
+            {"permission": "*", "pattern": "*", "action": "allow"},
+            {"permission": "task", "pattern": "*", "action": "deny"},
+            {"permission": "question", "pattern": "*", "action": "deny"},
+        ]
+        if read_only:
+            rules.extend([
+                {"permission": "edit", "pattern": "*", "action": "deny"},
+                {"permission": "write", "pattern": "*", "action": "deny"},
+                {"permission": "apply_patch", "pattern": "*", "action": "deny"},
+            ])
+        for cmd in (
+            "spawn-team", "stop-team", "create-team", "remove-team",
+            "add-role", "activate-team", "disable-team", "set-model",
+        ):
+            rules.append({"permission": "bash", "pattern": f"*core.py*{cmd}*", "action": "deny"})
+        return rules
+
+    def _delete_session(self, session_id: str, directory: str = "") -> Optional[str]:
+        query = {"directory": directory} if directory else None
+        try:
+            self._request("POST", f"/session/{session_id}/abort", query=query, timeout=15)
+        except RuntimeError:
+            pass
+        try:
+            self._request("DELETE", f"/session/{session_id}", query=query, timeout=15)
+            return None
+        except RuntimeError as exc:
+            if "HTTP 404" in str(exc):
+                return None
+            return str(exc)
+
+    def spawn(self, core: "UltronCore", team: Mapping[str, Any], specs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if team["workspace_mode"] == "branch":
+            raise ValueError(
+                f"Team '{team['slug']}' uses workspace_mode 'branch', which the opencode harness does not support yet."
+            )
+        resolved_models: Dict[str, Optional[Dict[str, str]]] = {}
+        for sp in specs:
+            resolved_models[sp["role"]] = resolve_opencode_model(sp["model"])
+        self.check_health()
+
+        for sp in specs:
+            Path(sp["role_context_path"]).write_text(sp["role_context"], encoding="utf-8")
+
+        created: List[Tuple[str, str, str]] = []  # (role, session_id, role_dir)
+        try:
+            for sp in specs:
+                role_dir = sp["role_dir"]
+                m = resolved_models[sp["role"]]
+                create_body: Dict[str, Any] = {
+                    "title": sp["session_name"],
+                    "permission": sp["permission"],
+                }
+                if m is not None:
+                    create_body["model"] = {"providerID": m["providerID"], "id": m["modelID"]}
+                _, sess = self._request("POST", "/session", query={"directory": role_dir}, body=create_body)
+                if not isinstance(sess, dict) or not sess.get("id"):
+                    raise RuntimeError(f"OpenCode POST /session returned unexpected payload for '{sp['agent_id']}': {sess!r}")
+                sid = str(sess["id"])
+                created.append((sp["role"], sid, role_dir))
+
+                prompt_body: Dict[str, Any] = {
+                    "system": sp["role_context"],
+                    "tools": sp["tools"],
+                    "parts": [{"type": "text", "text": sp["initial_prompt"]}],
+                }
+                if m is not None:
+                    prompt_body["model"] = m
+                self._request(
+                    "POST",
+                    f"/session/{sid}/prompt_async",
+                    query={"directory": role_dir},
+                    body=prompt_body,
+                )
+        except Exception as exc:
+            cleanup_errors = {
+                role: err for role, sid, rdir in created if (err := self._delete_session(sid, rdir))
+            }
+            raise RuntimeError(
+                f"Launching OpenCode team '{team['slug']}' failed: {exc}. "
+                f"Cleaned up sessions {[r for r, _, _ in created]}"
+                + (f"; cleanup errors: {cleanup_errors}" if cleanup_errors else "")
+            ) from exc
+
+        addresses = {role: sid for role, sid, _ in created}
+        session_ids = {role: sid for role, sid, _ in created}
+        core.activate_team(team["slug"], addresses, session_ids=session_ids, harness=self.name)
+        return {
+            "harness": self.name,
+            "team_slug": team["slug"],
+            "status": "active",
+            "sessions": [
+                {
+                    "agent_id": sp["agent_id"],
+                    "session_name": sp["session_name"],
+                    "session_id": session_ids[sp["role"]],
+                    "model": (
+                        f"{resolved_models[sp['role']]['providerID']}/{resolved_models[sp['role']]['modelID']}"
+                        if resolved_models[sp["role"]]
+                        else "inherit"
+                    ),
+                }
+                for sp in specs
+            ],
+            "next_steps": [],
+        }
+
+    def stop(
+        self, core: "UltronCore", plan: Dict[str, Any], sessions: Mapping[str, Any], cascade: bool
+    ) -> Dict[str, Any]:
+        self.check_health()
+        stop_failures: Dict[str, str] = {}
+        missing_session_ids: List[str] = []
+        for agent in plan["agents_to_kill"]:
+            aid = agent["agent_id"]
+            sid = str(sessions.get("agents", {}).get(aid, {}).get("session_id") or agent.get("conversation_id") or "").strip()
+            if not sid:
+                missing_session_ids.append(aid)
+                continue
+            directory = ""
+            try:
+                _, meta = self._request("GET", f"/session/{sid}", timeout=10)
+                if isinstance(meta, dict):
+                    directory = str(meta.get("directory") or "")
+            except RuntimeError:
+                pass
+            err = self._delete_session(sid, directory=directory)
+            if err:
+                stop_failures[aid] = err
+        if not stop_failures:
+            core.disable_team(plan["team_slug"], cascade=cascade)
+        return {
+            **plan,
+            "harness": self.name,
+            "status": "disabled" if not stop_failures else "partial_stop",
+            "stop_failures": stop_failures,
+            "missing_session_ids": missing_session_ids,
+            "next_steps": [],
+        }
+
+    def probe(self, agents: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any]:
+        self.check_health()
+        _, raw_sessions = self._request("GET", "/experimental/session", timeout=15)
+        live_by_id: Dict[str, Dict[str, Any]] = {}
+        if isinstance(raw_sessions, list):
+            for s in raw_sessions:
+                if isinstance(s, dict) and s.get("id"):
+                    live_by_id[str(s["id"])] = s
+
+        # Best-effort per-directory status lookup (idle / busy / retry)
+        status_by_id: Dict[str, str] = {}
+        dirs = sorted({str(live_by_id[sid].get("directory") or "") for sid in live_by_id if live_by_id[sid].get("directory")})
+        for d in dirs:
+            try:
+                _, st = self._request("GET", "/session/status", query={"directory": d}, timeout=10)
+                if isinstance(st, dict):
+                    for sid, val in st.items():
+                        status_by_id[str(sid)] = str(val.get("type", val) if isinstance(val, dict) else val)
+            except RuntimeError:
+                pass
+
+        results: Dict[str, Dict[str, str]] = {}
+        for aid, entry in agents.items():
+            sid = str(entry.get("session_id") or entry.get("conversation_id") or "").strip()
+            if not sid:
+                results[aid] = {"state": "unknown", "detail": "no session id recorded"}
+            elif sid in live_by_id:
+                results[aid] = {"state": "alive", "detail": status_by_id.get(sid, "idle")}
+            else:
+                results[aid] = {"state": "gone", "detail": f"session {sid} not found on {self.server_url()}"}
+        return {"harness": self.name, "agents": results, "next_steps": []}
+
+    def shell_doorbell(self, address: str, text: str) -> None:
+        self.check_health()
+        directory = ""
+        try:
+            _, meta = self._request("GET", f"/session/{address}", timeout=10)
+            if isinstance(meta, dict):
+                directory = str(meta.get("directory") or "")
+        except RuntimeError:
+            pass
+        query = {"directory": directory} if directory else None
+        self._request(
+            "POST",
+            f"/session/{address}/prompt_async",
+            query=query,
+            body={"parts": [{"type": "text", "text": text}]},
+            timeout=30,
+        )
+
+    def core_cmd(self, core: "UltronCore") -> str:
+        return f'python3 "{core.repo_root / "ultron" / "core" / "core.py"}"'
+
+    def role_paths(self, core: "UltronCore", ctx: Mapping[str, Any]) -> Tuple[str, str, str]:
+        role_dir = ctx["role_dir"].resolve()
+        return str(role_dir), str(role_dir / "workspace"), str(role_dir)
+
+    def doorbell_address(self, ctx: Mapping[str, Any]) -> str:
+        return "your OpenCode session ID (`ses_...`), bound by `spawn-team`"
+
+    def doorbell_call(self) -> str:
+        return 'run `core.py doorbell <target_agent_id> "Doorbell: Posted on Thread <thread_id> (\'Title\')..." --from <your_agent_id>` via `bash`'
+
+    def charters_block(self, ctx: Mapping[str, Any]) -> str:
+        return (
+            f"\n---\n\n## Inherited Team & Ancestor Charters\n{ctx['inherited_charters']}\n\n---\n\n"
+            f"## Role Charter (`{ctx['role']['role_path']}/AGENTS.md`)\n{without_role_context_import(ctx['role_charter'])}"
+        )
+
+    def target_repo_summary(self, core: "UltronCore", ctx: Mapping[str, Any]) -> str:
+        repo, repo_abs = ctx["target_repo"], ctx["target_repo_abs"]
+        if not (repo and repo_abs):
+            return f"Local ULTRON Repository (`{core.repo_root}`)"
+        t = self.tools
+        _, guidelines_note = detect_target_repo_guidelines(repo_abs)
+        return (
+            f"`{repo_abs}` (configured as `{repo}`)\n"
+            f"  - **Dual-Directory Execution Rule:** Your shell sessions start in your role folder (`{ctx['role_dir'].resolve()}`).\n"
+            f"  - Run all project build, test, and Git commands inside the target repository: `cd \"{repo_abs}\" && <command>`.\n"
+            f"  - Pass absolute paths under `{repo_abs}/...` to `{t['read']}`, `{t['edit']}`, `{t['write']}`, `{t['grep']}` and `{t['find']}`.\n"
+            f"{guidelines_note}"
+        )
+
+    def build_spec(self, core: "UltronCore", ctx: Mapping[str, Any]) -> Dict[str, Any]:
+        r, team, aid = ctx["role"], ctx["team"], ctx["agent_id"]
+        role_dir = ctx["role_dir"].resolve()
+        session_name = session_name_for(aid)
+        role_context = self.render_role_context(core, ctx)
+        role_context_path = str(role_dir / ROLE_CONTEXT_FILENAME)
+        boot_prompt = (
+            f"Boot sequence for `{aid}` ({r['title']}): run the Mandatory Startup Hydration "
+            f"commands from your role context (`{role_context_path}`).\n"
+        )
+        if ctx["mission_brief"]:
+            boot_prompt += f"Initial directive: {ctx['mission_brief']}\n"
+        else:
+            boot_prompt += "Then await doorbelled tasks on the board; end your turn without polling."
+        tools_flags: Dict[str, bool] = {"task": False, "question": False}
+        if ctx["read_only"]:
+            tools_flags.update({"edit": False, "write": False, "apply_patch": False})
+        return {
+            "agent_id": aid,
+            "team_slug": ctx["team_slug"],
+            "role": r["role"],
+            "read_only_mode": ctx["read_only"],
+            "target_repo": ctx["target_repo"],
+            "target_repo_abs": ctx["target_repo_abs"],
+            "role_dir": str(role_dir),
+            "role_context_path": role_context_path,
+            "session_name": session_name,
+            "model": r["model"],
+            "workspace_mode": team["workspace_mode"],
+            "permission": self._permission_ruleset(ctx["read_only"]),
+            "tools": tools_flags,
+            "role_context": role_context,
+            "initial_prompt": boot_prompt,
+        }
+
+
+HARNESS_ADAPTERS = {a.name: a for a in (AntigravityAdapter(), ClaudeCodeAdapter(), OpenCodeAdapter())}
 
 
 def resolve_harness(explicit: Optional[str] = None, core: Optional["UltronCore"] = None) -> str:
@@ -912,6 +1255,8 @@ def resolve_harness(explicit: Optional[str] = None, core: Optional["UltronCore"]
         chosen = "antigravity"
     if not chosen and os.environ.get("CLAUDE_CODE_SESSION_ID"):
         chosen = "claude-code"
+    if not chosen and any(os.environ.get(v) for v in OPENCODE_ENV_MARKERS):
+        chosen = "opencode"
     if not chosen and core is not None:
         chosen = core.get_prime_harness()
     if not chosen:
@@ -5683,6 +6028,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                     print("=" * 80)
                     print(f"SPAWN SPEC FOR: {s['agent_id']} (session {s['session_name']})")
                     print(f"  Model={s['claude_model'] or 'inherit'} | Dir={s['role_dir']}")
+                    print("-" * 80)
+                    print(s["role_context"])
+            elif harness == "opencode":
+                for s in specs:
+                    print("=" * 80)
+                    print(f"SPAWN SPEC FOR: {s['agent_id']} (opencode title={s['session_name']})")
+                    print(f"  Model={s['model']} | Dir={s['role_dir']} | ContextFile={s['role_context_path']}")
                     print("-" * 80)
                     print(s["role_context"])
             else:
