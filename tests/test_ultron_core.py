@@ -34,6 +34,7 @@ from ultron.core.core import (  # noqa: E402
     normalize_model,
     normalize_project_subpath,
     resolve_antigravity_model,
+    resolve_opencode_model,
     swarm_name_for,
 )
 
@@ -1655,7 +1656,7 @@ class UltronCoreTestCase(unittest.TestCase):
         self.assertEqual(agents["api/coder"]["model"], "medium")
 
     def test_unknown_model_tier_is_refused(self) -> None:
-        for bad in ("", "bad model!", "gemini;rm -rf /", "a" * 65):
+        for bad in ("", "bad model!", "gemini;rm -rf /", "a" * 129, "ollama/../evil", "ollama/model/"):
             with self.assertRaises(ValueError):
                 self.core.create_team(slug="api", name="API", mission="m", default_model=bad)
         res = self.run_cli("create-team", "--slug", "api", "--name", "API", "--mission", "m", "--model", "bad model!")
@@ -2446,9 +2447,46 @@ class AntigravitySwarmTestCase(unittest.TestCase):
             self.assertEqual(resolve_antigravity_model(normalize_model(explicit)), explicit)
 
         # Invalid/unsafe strings rejected
-        for bad in ("", "   ", "gemini 4", "model;ls", "$(whoami)", "-leading-dash", "x" * 65):
+        for bad in ("", "   ", "gemini 4", "model;ls", "$(whoami)", "-leading-dash", "x" * 129, "a//b", "a/../b"):
             with self.assertRaises(ValueError):
                 normalize_model(bad)
+
+    def test_opencode_model_validation_and_resolution(self) -> None:
+        self.assertIsNone(resolve_opencode_model("inherit"))
+        self.assertEqual(
+            resolve_opencode_model("ollama/qwen3-coder:32b"),
+            {"providerID": "ollama", "modelID": "qwen3-coder:32b"},
+        )
+        self.assertEqual(
+            resolve_opencode_model("openrouter/qwen/qwen3-coder:free"),
+            {"providerID": "openrouter", "modelID": "qwen/qwen3-coder:free"},
+        )
+        self.assertEqual(
+            resolve_opencode_model("vllm/devstral@v2"),
+            {"providerID": "vllm", "modelID": "devstral@v2"},
+        )
+
+        # Unmapped generic tiers fail loud unless ULTRON_OPENCODE_MODEL_<TIER> is set
+        with mock.patch.dict(os.environ, {}, clear=False):
+            for k in ("ULTRON_OPENCODE_MODEL_SMALL", "ULTRON_OPENCODE_MODEL_MEDIUM", "ULTRON_OPENCODE_MODEL_LARGE"):
+                os.environ.pop(k, None)
+            with self.assertRaisesRegex(ValueError, "ULTRON_OPENCODE_MODEL_MEDIUM"):
+                resolve_opencode_model("medium")
+
+        # Tier resolves cleanly when env var is explicitly configured
+        with mock.patch.dict(os.environ, {
+            "ULTRON_OPENCODE_MODEL_LARGE": "vllm/deepseek-r1:32b",
+            "ULTRON_OPENCODE_MODEL_SMALL": "inherit",
+        }):
+            self.assertEqual(
+                resolve_opencode_model("large"),
+                {"providerID": "vllm", "modelID": "deepseek-r1:32b"},
+            )
+            self.assertIsNone(resolve_opencode_model("small"))
+
+        # Explicit model without provider/ prefix fails loud for OpenCode
+        with self.assertRaisesRegex(ValueError, "provider/model"):
+            resolve_opencode_model("gemini-4-argon-high")
 
     def test_antigravity_spawn_writes_role_context_and_keeps_brief_short(self) -> None:
         self.core.register_prime("prime-uuid", harness="antigravity")

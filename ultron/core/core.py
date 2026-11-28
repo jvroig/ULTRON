@@ -46,9 +46,14 @@ PLACEHOLDER_RE = re.compile(r"\{\{([A-Z0-9_]+)\}\}")
 MODEL_TIERS = ("small", "medium", "large")
 LEGACY_MODEL_ALIASES = {"flash_lite": "small", "flash": "medium", "pro": "large"}
 VALID_MODELS = {"inherit", *MODEL_TIERS}
-MODEL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}$")
+MODEL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._:/@-]{1,127}$")
 DEFAULT_MODEL_TIER = "medium"
 CLAUDE_MODEL_FOR_TIER = {"small": "haiku", "medium": "sonnet", "large": "opus"}
+OPENCODE_MODEL_TIER_ENVS = {
+    "small": "ULTRON_OPENCODE_MODEL_SMALL",
+    "medium": "ULTRON_OPENCODE_MODEL_MEDIUM",
+    "large": "ULTRON_OPENCODE_MODEL_LARGE",
+}
 # Antigravity native `swarm` supports the full model roster (`swarm(action="models", all=true)`).
 # Map portable tiers to balanced defaults while also allowing explicit model IDs via --model / set-model:
 # - small  -> gemini-4-hydrogen-medium
@@ -144,7 +149,12 @@ def render_template(template_text: str, values: Mapping[str, Any]) -> str:
 def normalize_model(value: str, source: str = "") -> str:
     cleaned = str(value).strip().lower()
     cleaned = LEGACY_MODEL_ALIASES.get(cleaned, cleaned)
-    if cleaned in VALID_MODELS or MODEL_ID_RE.match(cleaned):
+    if cleaned in VALID_MODELS or (
+        MODEL_ID_RE.match(cleaned)
+        and ".." not in cleaned
+        and "//" not in cleaned
+        and not cleaned.endswith("/")
+    ):
         return cleaned
     where = f" in {source}" if source else ""
     raise ValueError(
@@ -152,6 +162,48 @@ def normalize_model(value: str, source: str = "") -> str:
         f"(legacy aliases: {sorted(LEGACY_MODEL_ALIASES)}) or an explicit model ID "
         f"matching {MODEL_ID_RE.pattern}."
     )
+
+
+def resolve_opencode_model(model: str) -> Optional[Dict[str, str]]:
+    """Resolve a normalized ULTRON model string to an OpenCode {'providerID', 'modelID'} dict.
+
+    - 'inherit' returns None (omit model so OpenCode uses the server's opencode.json default).
+    - Generic tiers ('small', 'medium', 'large') resolve via ULTRON_OPENCODE_MODEL_<TIER> env var;
+      if unset, fail loud so local/BYOK models are never silently guessed.
+    - Explicit models must use 'provider/model' format (e.g. 'ollama/qwen3-coder:32b').
+    """
+    cleaned = normalize_model(model)
+    if cleaned == "inherit":
+        return None
+    if cleaned in MODEL_TIERS:
+        env_var = OPENCODE_MODEL_TIER_ENVS[cleaned]
+        override = os.environ.get(env_var, "").strip()
+        if not override:
+            raise ValueError(
+                f"OpenCode has no built-in default for tier '{cleaned}'. "
+                f"Set an explicit 'provider/model' (via --model or 'core.py set-model <team> <provider/model>'), "
+                f"use 'inherit' to follow opencode.json's default model, or export {env_var}=<provider/model>."
+            )
+        override_clean = normalize_model(override, source=env_var)
+        if override_clean == "inherit":
+            return None
+        if override_clean in MODEL_TIERS:
+            raise ValueError(
+                f"{env_var}='{override}' cannot point to another generic tier; use 'provider/model' or 'inherit'."
+            )
+        cleaned = override_clean
+
+    if "/" not in cleaned:
+        raise ValueError(
+            f"OpenCode explicit model '{cleaned}' must be in 'provider/model' format "
+            f"(e.g. 'ollama/qwen3-coder:32b' or 'vllm/deepseek-r1-32b'), or 'inherit'."
+        )
+    provider_id, model_id = cleaned.split("/", 1)
+    if not provider_id or not model_id:
+        raise ValueError(
+            f"OpenCode explicit model '{cleaned}' must have non-empty provider and model IDs ('provider/model')."
+        )
+    return {"providerID": provider_id, "modelID": model_id}
 
 
 def resolve_antigravity_model(model: str) -> Optional[str]:
