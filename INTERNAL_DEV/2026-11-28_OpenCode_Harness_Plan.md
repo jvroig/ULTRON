@@ -11,9 +11,15 @@
 1. **Daemon Management Mode (LOCKED — Option A: Connect-Only):**
    - `OpenCodeAdapter` is strictly **connect-only**: it connects to a running `opencode serve` at `ULTRON_OPENCODE_URL` (default `http://127.0.0.1:4096`) and **fails loud** with actionable start instructions if unreachable. It never spawns or manages background daemons itself.
    - Server/daemon provisioning (starting `opencode serve` with port/config/model setup) will live as a **separate, decoupled ULTRON capability** in the future — establishing a clean modular pattern reusable across future server-backed harnesses (e.g., Pi, DeepSeekHarness) and supporting native, Docker, and remote GPU hosts identically.
-2. **Portable Tier Defaults (`small` / `medium` / `large`) for OpenCode (OPEN — under discussion):**
-   - Unlike Claude Code (`haiku`/`sonnet`/`opus`) or Antigravity (`gemini-4-*`), OpenCode has no single universal default model because every user configures different local/BYOK providers.
-   - *Under discussion:* Explicit `provider/model` requirement + decoupled 3-layer stack (Inference Server → Harness Server Setup → Connect-Only Adapter).
+2. **Model Policy & 3-Layer Separation (LOCKED — Explicit Fail-Loud):**
+   - ULTRON cleanly decouples local/self-hosted model infrastructure into 3 independent layers:
+     1. **Inference Server Layer (separate future module):** Optional local `llama.cpp` / `vLLM` setup (with model choice) — or omitted entirely when using an external self-hosted endpoint.
+     2. **Harness Server Setup Layer (separate future module):** Optional `opencode serve` + `opencode.json` provisioning pointing at Layer 1 (local or external) — or omitted entirely when the user already has a running `opencode serve` hooked up to local or external endpoints.
+     3. **Connect-Only Harness Adapter (`OpenCodeAdapter`, this work):** Connects directly to `ULTRON_OPENCODE_URL` and orchestrates ULTRON teams on it.
+   - **Model resolution rules (fail loud, zero silent guessing):**
+     - **Explicit `provider/model` (primary contract):** `--model <provider/model>` or `set-model <team> [--role <role>] <provider/model>` passes `{"providerID": ..., "modelID": ...}` verbatim.
+     - **Explicit `inherit`:** Intentionally omits `model` on API calls so OpenCode uses the default model already configured in the target server's `opencode.json`.
+     - **Generic tiers (`small` / `medium` / `large`, e.g., from blueprints):** Resolved via explicit `ULTRON_OPENCODE_MODEL_{SMALL,MEDIUM,LARGE}` env vars if set; if unset, `spawn-team` **fails loud** instructing the operator to set an explicit `provider/model` (via `set-model` / `--model`), choose `inherit`, or export `ULTRON_OPENCODE_MODEL_<TIER>`.
 3. **OpenCode as ULTRON PRIME (OPEN — awaiting review):**
    - Should Phase 1 focus on **OpenCode as a worker/team harness** (`launches_from_cli = True`, spawned by Antigravity, Claude Code, or OpenCode Prime) + basic `register-prime --harness opencode`, or also include a dedicated `opencode` Prime boot wrapper/TUI attach helper?
    - *Recommendation:* Ship full `OpenCodeAdapter` (supports both OpenCode teams AND OpenCode as Prime via `register-prime --id <ses_id> --harness opencode`) in Phase 1; defer any custom TUI wrapper to Phase 2.
@@ -66,8 +72,8 @@ OpenCode models use `provider/model` syntax, often with tags (Ollama `:32b`, `:l
   - Proposed: `re.compile(r"^[a-z0-9][a-z0-9._:/@-]{1,127}$")` (with an explicit guard rejecting `".."` path-traversal sequences, consecutive slashes `"//"`, or trailing `"/"`).
   - Still strictly rejects whitespace, shell metacharacters (`;`, `$`, `` ` ``, `&`, `|`, quotes), and empty strings.
 - **Model resolution helper (`resolve_opencode_model(model: str) -> Optional[Dict[str, str]]`):**
-  - `"inherit"` → `None` (omit `model` key so OpenCode uses the server's configured default model in `opencode.json`).
-  - Canonical tiers (`small`, `medium`, `large`) → read `ULTRON_OPENCODE_MODEL_{SMALL,MEDIUM,LARGE}` env vars if set; otherwise fall back to `OPENCODE_MODEL_FOR_TIER` (default `"inherit"`).
+  - `"inherit"` → `None` (explicit opt-in: omit `model` key so OpenCode uses the server's configured default model in `opencode.json`).
+  - Canonical tiers (`small`, `medium`, `large`) → read `ULTRON_OPENCODE_MODEL_{SMALL,MEDIUM,LARGE}` env vars; if set, parse as `provider/model` (or `inherit`). If unset, **fail loud** at `spawn-team` with an actionable `ValueError` telling the operator to run `set-model <team> <provider/model>`, pass `--model`, set `inherit`, or export `ULTRON_OPENCODE_MODEL_<TIER>`.
   - Explicit `provider/model` string (e.g. `ollama/qwen3-coder:32b` or `vllm/qwen/qwen3-coder-30b`) → split on the **first** `/` into `{"providerID": provider, "modelID": model_id}`.
   - If an explicit non-tier model string lacks `/` when targeting OpenCode, fail loud with a clear `ValueError`: *"OpenCode explicit models must be in 'provider/model' format (e.g. 'ollama/qwen3-coder:32b')."*
 - **Note on `POST /session` vs `POST /session/{id}/prompt_async` schema difference (verified live!):**
