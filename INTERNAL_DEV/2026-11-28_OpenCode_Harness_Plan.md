@@ -7,12 +7,15 @@
 
 ---
 
-**Commander Decisions Needed Before Implementation:**
-1. **Daemon Management Mode:** Should `OpenCodeAdapter` **connect to an existing `opencode serve`** (`ULTRON_OPENCODE_URL`, default `http://127.0.0.1:4096`, failing loud with exact start instructions if unreachable), OR also **auto-start** a local `opencode serve` background process if `opencode` is on `PATH` and no server is running?
-   - *Recommendation:* Connect to `ULTRON_OPENCODE_URL` first (works seamlessly with both native `opencode serve` and Dockerized `ghcr.io/anomalyco/opencode`), with an optional `--auto-start` / `ULTRON_OPENCODE_AUTO_START=1` helper for local native setups.
-2. **Portable Tier Defaults (`small` / `medium` / `large`) for OpenCode:** Unlike Claude Code (`haiku`/`sonnet`/`opus`) or Antigravity (`gemini-4-*`), OpenCode has no single universal default model because every user configures different local/BYOK providers.
-   - *Recommendation:* Map `small` / `medium` / `large` via optional env vars (`ULTRON_OPENCODE_MODEL_SMALL`, `ULTRON_OPENCODE_MODEL_MEDIUM`, `ULTRON_OPENCODE_MODEL_LARGE`) defaulting to `"inherit"` (omit `model` on API calls so OpenCode uses the user's configured default model in `opencode.json`), while allowing any explicit `provider/model` ID (e.g., `ollama/qwen3-coder:32b`, `vllm/deepseek-r1-32b`) on `--model` and `set-model`.
-3. **OpenCode as ULTRON PRIME:** Should Phase 1 focus on **OpenCode as a worker/team harness** (`launches_from_cli = True`, spawned by Antigravity, Claude Code, or OpenCode Prime) + basic `register-prime --harness opencode`, or also include a dedicated `opencode` Prime boot wrapper/TUI attach helper?
+**Commander Decisions:**
+1. **Daemon Management Mode (LOCKED — Option A: Connect-Only):**
+   - `OpenCodeAdapter` is strictly **connect-only**: it connects to a running `opencode serve` at `ULTRON_OPENCODE_URL` (default `http://127.0.0.1:4096`) and **fails loud** with actionable start instructions if unreachable. It never spawns or manages background daemons itself.
+   - Server/daemon provisioning (starting `opencode serve` with port/config/model setup) will live as a **separate, decoupled ULTRON capability** in the future — establishing a clean modular pattern reusable across future server-backed harnesses (e.g., Pi, DeepSeekHarness) and supporting native, Docker, and remote GPU hosts identically.
+2. **Portable Tier Defaults (`small` / `medium` / `large`) for OpenCode (OPEN — under discussion):**
+   - Unlike Claude Code (`haiku`/`sonnet`/`opus`) or Antigravity (`gemini-4-*`), OpenCode has no single universal default model because every user configures different local/BYOK providers.
+   - *Under discussion:* Explicit `provider/model` requirement + decoupled 3-layer stack (Inference Server → Harness Server Setup → Connect-Only Adapter).
+3. **OpenCode as ULTRON PRIME (OPEN — awaiting review):**
+   - Should Phase 1 focus on **OpenCode as a worker/team harness** (`launches_from_cli = True`, spawned by Antigravity, Claude Code, or OpenCode Prime) + basic `register-prime --harness opencode`, or also include a dedicated `opencode` Prime boot wrapper/TUI attach helper?
    - *Recommendation:* Ship full `OpenCodeAdapter` (supports both OpenCode teams AND OpenCode as Prime via `register-prime --id <ses_id> --harness opencode`) in Phase 1; defer any custom TUI wrapper to Phase 2.
 
 ---
