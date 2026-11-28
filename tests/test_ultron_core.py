@@ -2604,5 +2604,287 @@ class AntigravitySwarmTestCase(unittest.TestCase):
         self.assertEqual(dev_entry["swarm_name"], "xcom-dev")
 
 
+class OpenCodeLifecycleTestCase(unittest.TestCase):
+    """Tests OpenCodeAdapter end-to-end against a stdlib ThreadingHTTPServer mock of `opencode serve`."""
+
+    def setUp(self) -> None:
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        import threading
+        import urllib.parse
+
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmpdir.name).resolve()
+        (self.root / "ultron" / "core" / "threads").mkdir(parents=True)
+        (self.root / "ultron" / "hive").mkdir(parents=True)
+        shutil.copytree(REPO_ROOT / "ultron" / "core" / "templates", self.root / "ultron" / "core" / "templates")
+        self.core = UltronCore(repo_root=self.root)
+
+        self.state = {
+            "sessions": {},
+            "statuses": {},
+            "requests": [],
+            "counter": 0,
+            "fail_prompt_on_call": None,
+            "prompt_calls": 0,
+            "required_auth": None,
+        }
+        state = self.state
+
+        class MockOpenCodeHandler(BaseHTTPRequestHandler):
+            def log_message(self, format: str, *args: object) -> None:
+                pass
+
+            def _send(self, code: int, payload: object = None) -> None:
+                raw = b"" if payload is None else json.dumps(payload).encode("utf-8")
+                self.send_response(code)
+                if raw:
+                    self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                if raw:
+                    self.wfile.write(raw)
+
+            def _check_auth(self) -> bool:
+                req_auth = state["required_auth"]
+                if req_auth and self.headers.get("Authorization") != req_auth:
+                    self._send(401, {"error": "unauthorized"})
+                    return False
+                return True
+
+            def _read_json(self) -> object:
+                length = int(self.headers.get("Content-Length") or "0")
+                if not length:
+                    return None
+                return json.loads(self.rfile.read(length).decode("utf-8"))
+
+            def do_GET(self) -> None:
+                if not self._check_auth():
+                    return
+                parsed = urllib.parse.urlparse(self.path)
+                qs = urllib.parse.parse_qs(parsed.query)
+                state["requests"].append(("GET", parsed.path, qs, None, self.headers.get("Authorization")))
+                if parsed.path == "/global/health":
+                    self._send(200, {"healthy": True, "version": "1.19.6-mock"})
+                elif parsed.path == "/experimental/session":
+                    self._send(200, list(state["sessions"].values()))
+                elif parsed.path == "/session/status":
+                    directory = (qs.get("directory") or [""])[0]
+                    out = {
+                        sid: {"type": state["statuses"].get(sid, "idle")}
+                        for sid, s in state["sessions"].items()
+                        if not directory or s.get("directory") == directory
+                    }
+                    self._send(200, out)
+                elif parsed.path.startswith("/session/"):
+                    sid = parsed.path.split("/", 2)[2]
+                    if sid in state["sessions"]:
+                        self._send(200, state["sessions"][sid])
+                    else:
+                        self._send(404, {"error": "not found"})
+                else:
+                    self._send(404, {"error": "unknown route"})
+
+            def do_POST(self) -> None:
+                if not self._check_auth():
+                    return
+                parsed = urllib.parse.urlparse(self.path)
+                qs = urllib.parse.parse_qs(parsed.query)
+                body = self._read_json()
+                state["requests"].append(("POST", parsed.path, qs, body, self.headers.get("Authorization")))
+                if parsed.path == "/session":
+                    state["counter"] += 1
+                    sid = f"ses_mock_{state['counter']:04d}"
+                    directory = (qs.get("directory") or [""])[0]
+                    sess = {
+                        "id": sid,
+                        "directory": directory,
+                        "title": (body or {}).get("title", ""),
+                        "permission": (body or {}).get("permission", []),
+                        "model": (body or {}).get("model"),
+                    }
+                    state["sessions"][sid] = sess
+                    state["statuses"][sid] = "idle"
+                    self._send(200, sess)
+                elif parsed.path.endswith("/prompt_async"):
+                    sid = parsed.path.split("/")[2]
+                    if sid not in state["sessions"]:
+                        self._send(404, {"error": "session not found"})
+                        return
+                    state["prompt_calls"] += 1
+                    if state["fail_prompt_on_call"] == state["prompt_calls"]:
+                        self._send(500, {"error": "simulated provider failure"})
+                        return
+                    self._send(204, None)
+                elif parsed.path.endswith("/abort"):
+                    sid = parsed.path.split("/")[2]
+                    if sid in state["sessions"]:
+                        self._send(200, True)
+                    else:
+                        self._send(404, {"error": "not found"})
+                else:
+                    self._send(404, {"error": "unknown route"})
+
+            def do_DELETE(self) -> None:
+                if not self._check_auth():
+                    return
+                parsed = urllib.parse.urlparse(self.path)
+                qs = urllib.parse.parse_qs(parsed.query)
+                state["requests"].append(("DELETE", parsed.path, qs, None, self.headers.get("Authorization")))
+                if parsed.path.startswith("/session/"):
+                    sid = parsed.path.split("/", 2)[2]
+                    if sid in state["sessions"]:
+                        del state["sessions"][sid]
+                        state["statuses"].pop(sid, None)
+                        self._send(200, True)
+                    else:
+                        self._send(404, {"error": "not found"})
+                else:
+                    self._send(404, {"error": "unknown route"})
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), MockOpenCodeHandler)
+        port = self._server.server_address[1]
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+        self.url = f"http://127.0.0.1:{port}"
+        self._env_patch = mock.patch.dict(os.environ, {"ULTRON_OPENCODE_URL": self.url}, clear=False)
+        self._env_patch.start()
+        os.environ.pop("OPENCODE_SERVER_PASSWORD", None)
+        os.environ.pop("OPENCODE_SERVER_USERNAME", None)
+
+    def tearDown(self) -> None:
+        self._env_patch.stop()
+        self._server.shutdown()
+        self._server.server_close()
+        self._thread.join(timeout=5)
+        self._tmpdir.cleanup()
+
+    def test_opencode_spawn_permissions_read_only_and_role_context(self) -> None:
+        self.core.register_prime("prime-uuid", harness="antigravity")
+        self.core.create_team(
+            slug="local-dev", name="Local Dev", mission="Local GPU coding",
+            default_model="ollama/qwen3-coder:32b", harness="opencode",
+        )
+        self.core.add_role("local-dev", "coder", "Coder", "Write code", model="inherit")
+        self.core.add_role("local-dev", "qa", "QA", "Audit", model="vllm/deepseek-r1:32b", write_tools=False)
+
+        res = self.core.spawn_team("local-dev", mission_brief="Verify local loop")
+        self.assertEqual(res["harness"], "opencode")
+        self.assertEqual(res["status"], "active")
+        self.assertEqual(len(res["sessions"]), 3)
+        self.assertEqual(len(self.state["sessions"]), 3)
+
+        # Verify POST /session payloads: model schema uses {"providerID", "id"} and omits on inherit
+        create_reqs = [r for r in self.state["requests"] if r[0] == "POST" and r[1] == "/session"]
+        by_title = {r[3]["title"]: r for r in create_reqs}
+        self.assertEqual(by_title["ultron--local-dev--lead"][3]["model"], {"providerID": "ollama", "id": "qwen3-coder:32b"})
+        self.assertNotIn("model", by_title["ultron--local-dev--coder"][3])
+        self.assertEqual(by_title["ultron--local-dev--qa"][3]["model"], {"providerID": "vllm", "id": "deepseek-r1:32b"})
+
+        # Hard permission rulesets: task & question denied for all; edit/write/apply_patch denied for read-only qa
+        qa_perms = {(p["permission"], p["action"]) for p in by_title["ultron--local-dev--qa"][3]["permission"]}
+        self.assertIn(("task", "deny"), qa_perms)
+        self.assertIn(("question", "deny"), qa_perms)
+        self.assertIn(("edit", "deny"), qa_perms)
+        self.assertIn(("write", "deny"), qa_perms)
+        self.assertIn(("apply_patch", "deny"), qa_perms)
+
+        # Verify POST /prompt_async uses {"providerID", "modelID"} + system prompt + role_context.generated.md on disk
+        prompt_reqs = [r for r in self.state["requests"] if r[0] == "POST" and r[1].endswith("/prompt_async")]
+        self.assertEqual(len(prompt_reqs), 3)
+        self.assertEqual(prompt_reqs[0][3]["model"], {"providerID": "ollama", "modelID": "qwen3-coder:32b"})
+        self.assertIn("ULTRON_ROLE_ASSIGNMENT", prompt_reqs[0][3]["system"])
+        lead_ctx = self.root / "ultron" / "hive" / "local-dev" / "roles" / "lead" / ROLE_CONTEXT_FILENAME
+        self.assertTrue(lead_ctx.is_file())
+
+    def test_opencode_spawn_rollback_on_partial_failure(self) -> None:
+        self.core.register_prime("prime-uuid", harness="antigravity")
+        self.core.create_team(
+            slug="rb-team", name="Rollback", mission="Test rollback",
+            default_model="ollama/qwen3-coder:32b", harness="opencode",
+        )
+        self.core.add_role("rb-team", "coder", "Coder", "Code", model="ollama/qwen3-coder:32b")
+        self.state["fail_prompt_on_call"] = 2
+
+        with self.assertRaisesRegex(RuntimeError, "simulated provider failure"):
+            self.core.spawn_team("rb-team")
+
+        # Already-created sessions were rolled back (aborted & deleted), team stayed disabled
+        self.assertEqual(self.state["sessions"], {})
+        self.assertEqual(self.core.get_team("rb-team")["status"], "disabled")
+
+    def test_opencode_liveness_stop_and_cross_harness_doorbell_with_basic_auth(self) -> None:
+        import base64
+
+        expected_auth = "Basic " + base64.b64encode(b"opencode:secret123").decode("ascii")
+        self.state["required_auth"] = expected_auth
+        with mock.patch.dict(os.environ, {"OPENCODE_SERVER_PASSWORD": "secret123"}):
+            self.core.register_prime("prime-uuid", harness="antigravity")
+            self.core.create_team(
+                slug="gpu-pod", name="GPU Pod", mission="Local inference",
+                default_model="vllm/devstral:24b", harness="opencode",
+            )
+            self.core.add_role("gpu-pod", "dev", "Dev", "Code", model="vllm/devstral:24b")
+
+            spawned = self.core.spawn_team("gpu-pod")
+            lead_sid = next(s["session_id"] for s in spawned["sessions"] if s["agent_id"] == "gpu-pod/lead")
+            dev_sid = next(s["session_id"] for s in spawned["sessions"] if s["agent_id"] == "gpu-pod/dev")
+            self.state["statuses"][dev_sid] = "busy"
+
+            # Liveness reports alive with idle/busy detail
+            live = self.core.probe_liveness("gpu-pod")
+            self.assertEqual(live["agents"]["gpu-pod/lead"]["state"], "alive")
+            self.assertEqual(live["agents"]["gpu-pod/lead"]["detail"], "idle")
+            self.assertEqual(live["agents"]["gpu-pod/dev"]["state"], "alive")
+            self.assertEqual(live["agents"]["gpu-pod/dev"]["detail"], "busy")
+
+            # Cross-harness doorbell (Antigravity Prime -> OpenCode role) with Basic Auth
+            db_res = self.core.doorbell("gpu-pod/dev", "Run benchmark suite", sender="ultron-prime")
+            self.assertEqual(db_res["harness"], "opencode")
+            db_req = self.state["requests"][-1]
+            self.assertEqual(db_req[0], "POST")
+            self.assertEqual(db_req[1], f"/session/{dev_sid}/prompt_async")
+            self.assertEqual(db_req[4], expected_auth)
+            self.assertIn("Doorbell from ultron-prime: Run benchmark suite", db_req[3]["parts"][0]["text"])
+
+            # Simulate vanished session -> liveness CLI exits 1 and flags 'gone'
+            del self.state["sessions"][dev_sid]
+            out, err = io.StringIO(), io.StringIO()
+            with redirect_stdout(out), redirect_stderr(err):
+                rc = ultron_main(["--root", str(self.root), "liveness", "gpu-pod"])
+            self.assertEqual(rc, 1)
+            self.assertIn("gone", out.getvalue())
+
+            # Stop team aborts & deletes remaining session and disables team
+            stopped = self.core.stop_team("gpu-pod")
+            self.assertEqual(stopped["status"], "disabled")
+            self.assertEqual(self.state["sessions"], {})
+            self.assertEqual(self.core.get_team("gpu-pod")["status"], "disabled")
+            self.assertTrue(any(r[0] == "POST" and r[1] == f"/session/{lead_sid}/abort" for r in self.state["requests"]))
+
+    def test_opencode_fail_loud_unreachable_server_unmapped_tier_and_branch_mode(self) -> None:
+        self.core.register_prime("prime-uuid", harness="antigravity")
+        self.core.create_team(slug="unmapped", name="Unmapped", mission="m", default_model="medium", harness="opencode")
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ULTRON_OPENCODE_MODEL_MEDIUM", None)
+            with self.assertRaisesRegex(ValueError, "ULTRON_OPENCODE_MODEL_MEDIUM"):
+                self.core.spawn_team("unmapped")
+        self.assertEqual(self.state["sessions"], {})
+
+        self.core.create_team(
+            slug="br-team", name="Branch", mission="m",
+            default_model="ollama/qwen3-coder:32b", workspace_mode="branch", harness="opencode",
+        )
+        with self.assertRaisesRegex(ValueError, "branch"):
+            self.core.spawn_team("br-team")
+
+        self.core.create_team(
+            slug="down-team", name="Down", mission="m",
+            default_model="ollama/qwen3-coder:32b", harness="opencode",
+        )
+        with mock.patch.dict(os.environ, {"ULTRON_OPENCODE_URL": "http://127.0.0.1:1"}):
+            with self.assertRaisesRegex(RuntimeError, "opencode serve"):
+                self.core.spawn_team("down-team")
+
+
 if __name__ == "__main__":
     unittest.main()
