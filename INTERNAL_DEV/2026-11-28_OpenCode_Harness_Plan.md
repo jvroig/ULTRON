@@ -1,7 +1,7 @@
 # Architecture & Implementation Plan: OpenCode Harness Support (`opencode`)
 
 - **Date:** 2026-11-28
-- **Status:** Draft Plan — awaiting Commander review & decisions
+- **Status:** Plan Finalized (All 3 Commander Decisions Locked) — ready for implementation on Commander go-ahead
 - **Target Harness:** `opencode` (OpenCode `1.19.6+`, third first-class `HarnessAdapter` alongside `antigravity` and `claude-code`)
 - **Goal:** Enable ULTRON Hive teams (and mixed hives) to run on **OpenCode**, unlocking local GPU / subscription-free models (vLLM, Ollama, llama.cpp, LM Studio, OpenAI-compatible endpoints) as well as BYOK providers — either mixed with paid Antigravity/Claude Code teams or as a 100% locally-hosted ULTRON Hive on multi-GPU servers.
 
@@ -20,9 +20,12 @@
      - **Explicit `provider/model` (primary contract):** `--model <provider/model>` or `set-model <team> [--role <role>] <provider/model>` passes `{"providerID": ..., "modelID": ...}` verbatim.
      - **Explicit `inherit`:** Intentionally omits `model` on API calls so OpenCode uses the default model already configured in the target server's `opencode.json`.
      - **Generic tiers (`small` / `medium` / `large`, e.g., from blueprints):** Resolved via explicit `ULTRON_OPENCODE_MODEL_{SMALL,MEDIUM,LARGE}` env vars if set; if unset, `spawn-team` **fails loud** instructing the operator to set an explicit `provider/model` (via `set-model` / `--model`), choose `inherit`, or export `ULTRON_OPENCODE_MODEL_<TIER>`.
-3. **OpenCode as ULTRON PRIME (OPEN — awaiting review):**
-   - Should Phase 1 focus on **OpenCode as a worker/team harness** (`launches_from_cli = True`, spawned by Antigravity, Claude Code, or OpenCode Prime) + basic `register-prime --harness opencode`, or also include a dedicated `opencode` Prime boot wrapper/TUI attach helper?
-   - *Recommendation:* Ship full `OpenCodeAdapter` (supports both OpenCode teams AND OpenCode as Prime via `register-prime --id <ses_id> --harness opencode`) in Phase 1; defer any custom TUI wrapper to Phase 2.
+3. **OpenCode as ULTRON PRIME (LOCKED — Full Any-Prime Support):**
+   - **Design goal:** Every supported harness must be usable as **ULTRON PRIME** (e.g., OpenCode Prime managing OpenCode + Claude Code teams, or a 100% locally-hosted OpenCode Prime + OpenCode teams on a multi-GPU server).
+   - **Phase 1 (this work):**
+     - `OpenCodeAdapter` supports both OpenCode worker teams (`launches_from_cli = True`) AND OpenCode as Prime via `core.py register-prime --id <ses_id> --harness opencode`.
+     - Document exact OpenCode Prime boot steps in `docs/HARNESSES.md` & `ultron/core/ULTRON_PRIME.md`: attaching TUI (`opencode attach <url>`), discovering own `ses_...` ID (`opencode session list --format json` or `GET /session`), and waking OpenCode Prime on a Safety Cron via host cron/timer calling `core.py doorbell ultron-prime "Safety Cron tick..."`.
+   - **Known cross-harness gap (tracked on Roadmap below):** Today `AntigravityAdapter.launches_from_cli = False` (pre-existing Antigravity constraint), so OpenCode/Claude Code Prime can doorbell existing Antigravity sessions via `agentapi send-message` but cannot CLI-spawn new Antigravity teams yet — tracked via `agentapi new-conversation` in Section 6.
 
 ---
 
@@ -194,3 +197,13 @@ When running ULTRON teams on local open-weights models via OpenCode:
 2. **CPU-Only Docker Integration Smoke Test (Post-Implementation, Zero GPU):**
    - Launch `ghcr.io/anomalyco/opencode:latest serve --hostname 0.0.0.0 --port 14096` with a temp ULTRON hive mounted at matching paths.
    - Verify `core.py spawn-team`, `core.py liveness`, `core.py doorbell`, and `core.py stop-team` against the real OpenCode `1.19.6` HTTP server (using a mock OpenAI-compatible stub endpoint on localhost if testing a full LLM turn without GPU).
+
+---
+
+## 6. Roadmap & Decoupled Follow-Up Modules
+
+Aligned with ULTRON's modular, harness-agnostic philosophy:
+1. **CLI-Launched Antigravity Teams (`agentapi new-conversation`):** Explore using Antigravity's `agentapi new-conversation [--model=<model_id>]` CLI command to enable `AntigravityAdapter.launches_from_cli = True`, completing the full **any-Prime × any-Team** matrix (so OpenCode Prime and Claude Code Prime can spawn Antigravity teams directly from the CLI).
+2. **Layer 1 — Inference Server Provisioning (separate module):** Optional ULTRON tooling to start/manage local `llama.cpp` or `vLLM` inference servers with explicit model selection (while keeping external/remote endpoints first-class).
+3. **Layer 2 — Harness Daemon Provisioning (separate module):** Optional ULTRON tooling to configure and launch `opencode serve` (port, auth, `opencode.json` provider wiring) and Prime TUI attach wrappers.
+4. **Additional Harnesses:** Extend the same connect-only server-adapter pattern to **Pi** and **DeepSeekHarness** when prioritized.
