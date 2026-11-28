@@ -1,7 +1,7 @@
 # Architecture & Implementation Plan: OpenCode Harness Support (`opencode`)
 
 - **Date:** 2026-11-28
-- **Status:** Plan Finalized (All 3 Commander Decisions Locked) — ready for implementation on Commander go-ahead
+- **Status:** Implemented (2026-11-28 — 99/99 unit tests passing with `-W error` + CPU-only Docker smoke test green against real OpenCode `1.19.6`)
 - **Target Harness:** `opencode` (OpenCode `1.19.6+`, third first-class `HarnessAdapter` alongside `antigravity` and `claude-code`)
 - **Goal:** Enable ULTRON Hive teams (and mixed hives) to run on **OpenCode**, unlocking local GPU / subscription-free models (vLLM, Ollama, llama.cpp, LM Studio, OpenAI-compatible endpoints) as well as BYOK providers — either mixed with paid Antigravity/Claude Code teams or as a 100% locally-hosted ULTRON Hive on multi-GPU servers.
 

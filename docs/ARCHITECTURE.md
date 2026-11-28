@@ -629,6 +629,7 @@ A harness's messaging tool reaches only its own sessions. `doorbell <agent_id> "
 |---|---|
 | `claude-code` | Headless `claude -p --tools SendMessage --model haiku`, run outside the hive with no Claude session env. Succeeds only if it replies `sent`. One small model call, a few seconds. |
 | `antigravity` | `agentapi send-message <uuid> <msg>`, no shell. Daemon address and token come from the environment or the newest `~/.gemini/antigravity/daemon/hub_*.json` whose `pid` is alive, and are passed in env, never argv. |
+| `opencode` | Pure stdlib HTTP `POST /session/{sid}/prompt_async` against `ULTRON_OPENCODE_URL` (default `http://127.0.0.1:4096`, optional Basic Auth). Sub-50ms, zero extra LLM call, works identically for intra-team and cross-harness wakes. |
 
 `--from` prefixes `Doorbell from <id>:` so the receiver knows the sender. Roles use their native tool inside their team and the shell doorbell for parent/child leads and `ultron-prime`, which may be on another harness. Both deliveries are machine-local.
 
@@ -637,7 +638,7 @@ A harness's messaging tool reaches only its own sessions. `doorbell <agent_id> "
 ## 8. Harness Layer
 
 ### 8.1 Harness Selection
-`render-spawn`, `register-prime` and `activate-team` resolve the harness from `--harness`, then `$ULTRON_HARNESS`, then auto-detection (`$ANTIGRAVITY_AGENT` / `$ANTIGRAVITY_CONVERSATION_ID` ⇒ `antigravity`; `$CLAUDE_CODE_SESSION_ID` ⇒ `claude-code`), then the harness Prime registered with. `spawn-team` uses the team's `harness` first. `stop-team`, `liveness` and `doorbell` use the harness recorded per agent in `.runtime/sessions.json`.
+`render-spawn`, `register-prime` and `activate-team` resolve the harness from `--harness`, then `$ULTRON_HARNESS`, then auto-detection (`$ANTIGRAVITY_AGENT` / `$ANTIGRAVITY_CONVERSATION_ID` ⇒ `antigravity`; `$CLAUDE_CODE_SESSION_ID` ⇒ `claude-code`; `$OPENCODE` / `$OPENCODE_SESSION_ID` ⇒ `opencode`), then the harness Prime registered with. `spawn-team` uses the team's `harness` first. `stop-team`, `liveness` and `doorbell` use the harness recorded per agent in `.runtime/sessions.json`.
 
 ### 8.2 Adapter Contract
 `HarnessAdapter` subclasses in `ultron/core/core.py`, registered in `HARNESS_ADAPTERS`, supply:
@@ -661,8 +662,8 @@ All harnesses render one template, `role_context.md.tmpl`, with harness placehol
 
 ### 8.4 Mixed Hives
 - Each team runs on one harness; teams under one Prime may differ (`create-team --harness`, `set-harness`).
-- Prime spawns a team on another harness only if that harness launches from the CLI (today: Claude Code).
-- Cross-team doorbells use the shell doorbell (§7.2), so all harnesses must run on one machine.
+- Prime spawns a team on another harness only if that harness launches from the CLI (today: `claude-code` and `opencode`).
+- Cross-team doorbells use the shell doorbell (§7.2); `opencode` can target either a local or remote `ULTRON_OPENCODE_URL` server.
 - `liveness` probes each harness separately; `stop-team --cascade` refuses a subtree spanning harnesses.
 
 ---
